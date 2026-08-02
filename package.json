@@ -9,6 +9,10 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.4",
+    "@supabase/supabase-js": "^2.111.0",
+    "heic-convert": "^2.1.0",
+    "heic2any": "^0.0.4",
     "jspdf": "^4.2.1",
     "leaflet": "^1.9.4",
     "next": "16.2.10",
