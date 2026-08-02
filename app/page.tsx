@@ -51,6 +51,7 @@ type AppTab =
   | 'home'
   | 'leads' // Jobs board
   | 'estimates'
+  | 'invoices'
   | 'calendar'
   | 'performance'
   | 'tools'
@@ -64,6 +65,7 @@ const APP_TABS: AppTab[] = [
   'home',
   'leads',
   'estimates',
+  'invoices',
   'calendar',
   'performance',
   'tools',
@@ -7039,13 +7041,23 @@ showToast(
     tab: AppTab;
     label: string;
     /** Simple geometric icon key */
-    icon: 'home' | 'jobs' | 'estimates' | 'calendar' | 'performance' | 'tools' | 'documents' | 'settings';
+    icon:
+      | 'home'
+      | 'jobs'
+      | 'estimates'
+      | 'invoices'
+      | 'calendar'
+      | 'performance'
+      | 'tools'
+      | 'documents'
+      | 'settings';
   };
 
   const sidebarPrimary: SidebarItem[] = [
     { tab: 'home', label: 'Home', icon: 'home' },
     { tab: 'leads', label: 'Pipeline', icon: 'jobs' },
     { tab: 'estimates', label: 'Estimates', icon: 'estimates' },
+    { tab: 'invoices', label: 'Invoices', icon: 'invoices' },
     { tab: 'calendar', label: 'Calendar', icon: 'calendar' },
     { tab: 'performance', label: 'Performance', icon: 'performance' },
     { tab: 'tools', label: 'Tools', icon: 'tools' },
@@ -7094,6 +7106,13 @@ showToast(
           <svg {...common}>
             <path d="M8 6h11M8 12h11M8 18h7" />
             <path d="M4 6h.01M4 12h.01M4 18h.01" />
+          </svg>
+        );
+      case 'invoices':
+        return (
+          <svg {...common}>
+            <path d="M6 3h9l3 3v15a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" />
+            <path d="M15 3v4h4M8 12h8M8 16h6M8 8h3" />
           </svg>
         );
       case 'calendar':
@@ -8138,6 +8157,18 @@ showToast(
                 </div>
 
                 <div
+                  onClick={() => handleTabChange('invoices')}
+                  className="group bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
+                >
+                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900 transition-colors">
+                    Invoices
+                  </div>
+                  <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
+                    Mitigation and job invoices
+                  </p>
+                </div>
+
+                <div
                   onClick={() => handleTabChange('leads')}
                   className="group bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
                 >
@@ -8151,22 +8182,26 @@ showToast(
 
                 <div
                   onClick={() => handleTabChange('documents')}
-                  className="group bg-white border border-zinc-200/80 hover:border-sky-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
+                  className="group bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
                 >
-                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1">
+                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900 transition-colors">
                     Documents
                   </div>
-                  <p className="text-sm text-zinc-500">Contracts and files</p>
+                  <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
+                    Contracts and files
+                  </p>
                 </div>
 
                 <div
                   onClick={() => handleTabChange('calendar')}
-                  className="group bg-white border border-zinc-200/80 hover:border-sky-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
+                  className="group bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
                 >
-                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1">
+                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900 transition-colors">
                     Calendar
                   </div>
-                  <p className="text-sm text-zinc-500">Schedule and follow-ups</p>
+                  <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
+                    Schedule and follow-ups
+                  </p>
                 </div>
 
                 <button
@@ -8177,7 +8212,7 @@ showToast(
                   <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900 transition-colors">
                     Tools
                   </div>
-                  <p className="text-sm text-zinc-500">
+                  <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
                     Weather, canvassing
                   </p>
                 </button>
@@ -8189,6 +8224,56 @@ showToast(
 
 
 
+
+        {activeTab === 'invoices' && (
+          <div className="pb-8 w-full">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+              <div>
+                <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
+                  Invoices
+                </h1>
+                <p className="text-zinc-500 mt-1">
+                  All job invoices. Create from a lead, or upload here.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="inline-flex items-center justify-center rounded-2xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-800 hover:border-sky-300 hover:text-sky-900 cursor-pointer transition">
+                  Upload invoice
+                  <input
+                    type="file"
+                    accept="application/pdf,image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) {
+                        showToast(
+                          'Invoice upload — wire to storage in phase 2'
+                        );
+                      }
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+              </div>
+            </div>
+            <div className="bg-white border border-zinc-200 rounded-3xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-zinc-100 text-xs font-semibold text-zinc-500 uppercase tracking-wide grid grid-cols-12 gap-2">
+                <div className="col-span-3">Date</div>
+                <div className="col-span-3">Lead / job</div>
+                <div className="col-span-2">Entity</div>
+                <div className="col-span-2">Total</div>
+                <div className="col-span-2 text-right">Actions</div>
+              </div>
+              <div className="p-8 text-center text-sm text-zinc-500">
+                No invoices yet. Create a mitigation invoice from a lead&apos;s
+                Documents, or upload a PDF above.
+              </div>
+            </div>
+            <p className="text-xs text-zinc-400 mt-3">
+              Delete moves to trash (recoverable). Download exports the file.
+            </p>
+          </div>
+        )}
 
         {activeTab === 'estimates' && (() => {
           const items = allEstimates();
