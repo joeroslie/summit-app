@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import jsPDF from 'jspdf';
 import {
@@ -17,6 +17,7 @@ import {
   type LatLngPoint,
   type RoofType,
 } from '@/lib/roof-geometry';
+import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 
 const PITCH_OPTIONS = [
   'Flat',
@@ -200,11 +201,247 @@ function readStoredLeadId(): number | null {
   }
 }
 
-type ShingleType = 'cambridge' | 'dynasty' | 'armourshake' | '';
+type RoofSystem = 'shingle' | 'tile' | 'flat';
+/** Top-level low slope roof system (estimator flat product tree). */
+type FlatSystem = 'mod_bit' | 'bur' | 'foam' | 'coating' | '';
+/** Coating chemistry when FlatSystem is coating. */
+type CoatingKind = 'elastomeric' | 'silicone' | 'urethane' | '';
+/** Foam install style when FlatSystem is foam. */
+type FoamKind = 'full' | 'overlay' | '';
+type ShingleType =
+  | 'cambridge'
+  | 'dynasty'
+  | 'armourshake'
+  | 'gaf_hdz'
+  | 'gaf_natural_shadow'
+  | 'owens_oakridge'
+  | 'owens_duration'
+  | 'tile_dr'
+  | 'tile_rr'
+  | 'sa_underlayment'
+  | 'coating'
+  | 'elastomeric'
+  | 'silicone'
+  | 'urethane'
+  | 'full_foam'
+  | 'foam_overlay'
+  | 'mod_bitumen'
+  | 'bur'
+  | '';
+
+const SHINGLE_PRODUCTS: {
+  key: ShingleType;
+  label: string;
+  description: string;
+  colors: string[];
+}[] = [
+  {
+    key: 'cambridge',
+    label: 'IKO Cambridge',
+    description:
+      'Architectural shingle with laminated two-piece design that creates depth and dimension. Fiberglass core, FastLock® bonding, Class 3 impact resistance, and built-in algae resistance.',
+    colors: [
+      'Dual Brown',
+      'Weatherwood',
+      'Driftwood',
+      'Charcoal Grey',
+      'Harvard Slate',
+      'Dual Black',
+      'Autumn Brown',
+      'Shadow Black',
+    ],
+  },
+  {
+    key: 'dynasty',
+    label: 'IKO Dynasty',
+    description:
+      'High-performance laminated shingle with ArmourZone® reinforced nailing surface for superior wind resistance. Class 3 impact rating and enhanced granule adhesion.',
+    colors: [
+      'Cornerstone',
+      'Shadow Brown',
+      'Driftwood',
+      'Charcoal Grey',
+      'Harvard Slate',
+      'Dual Black',
+      'Castle Grey',
+      'Summit Grey',
+    ],
+  },
+  {
+    key: 'armourshake',
+    label: 'IKO Armourshake',
+    description:
+      'Premium designer shingle with deep dimensional profile that mimics the look of hand-hewn cedar shakes. Heavyweight construction with Class 3 impact resistance.',
+    colors: [
+      'Weathered Summit',
+      'Shadow Black',
+      'Harvard Slate',
+      'Dual Brown',
+      'Charcoal Grey',
+    ],
+  },
+  {
+    key: 'gaf_hdz',
+    label: 'GAF Timberline HDZ',
+    description:
+      "GAF's #1-selling architectural shingle. Features LayerLock® Technology with the industry’s widest nailing area (StrikeZone®) and DuraGrip® adhesive.",
+    colors: [
+      'Charcoal',
+      'Barkwood',
+      'Pewter Gray',
+      'Shakewood',
+      'Slate',
+      'Hickory',
+      'Weathered Wood',
+    ],
+  },
+  {
+    key: 'gaf_natural_shadow',
+    label: 'GAF Natural Shadow',
+    description:
+      'Architectural shingle with a classic shadow effect for a subtle, even-toned wood-shake look. Practical performance with lifetime limited warranty eligibility.',
+    colors: [
+      'Charcoal',
+      'Weathered Wood',
+      'Barkwood',
+      'Pewter Gray',
+      'Shakewood',
+    ],
+  },
+  {
+    key: 'owens_oakridge',
+    label: 'Owens Corning Oakridge',
+    description:
+      'Laminated architectural shingle with a full double-layer nailing zone for better holding power. Warm, dimensional appearance in popular colors.',
+    colors: [
+      'Estate Gray',
+      'Brownwood',
+      'Driftwood',
+      'Onyx Black',
+      'Teak',
+      'Desert Tan',
+    ],
+  },
+  {
+    key: 'owens_duration',
+    label: 'Owens Corning Duration',
+    description:
+      'Premium architectural shingle with patented SureNail® Technology — a woven fabric strip in the nailing zone for outstanding gripping power and wind resistance.',
+    colors: [
+      'Estate Gray',
+      'Brownwood',
+      'Driftwood',
+      'Onyx Black',
+      'Teak',
+      'Desert Tan',
+      'Williamswood',
+    ],
+  },
+];
+
+const TILE_PRODUCTS: { key: string; label: string; description: string }[] = [
+  {
+    key: 'concrete',
+    label: 'Concrete Tile',
+    description:
+      'Durable concrete tile in common profiles. Strong wind and fire performance.',
+  },
+  {
+    key: 'clay',
+    label: 'Clay Tile',
+    description:
+      'Traditional clay tile with a premium look. Excellent longevity and curb appeal.',
+  },
+  {
+    key: 'concrete_s',
+    label: 'Concrete S-Tile',
+    description: 'S-profile concrete tile for a classic Mediterranean look.',
+  },
+  {
+    key: 'concrete_flat',
+    label: 'Concrete Flat / Shake',
+    description:
+      'Flat or shake-profile concrete tile for a more contemporary appearance.',
+  },
+];
+
+/** Brands per tile type — fill later from suppliers */
+const TILE_BRANDS: Record<string, { key: string; label: string }[]> = {
+  concrete: [],
+  clay: [],
+  concrete_s: [],
+  concrete_flat: [],
+};
+
+const LOW_SLOPE_TYPES: { key: string; label: string; description: string }[] = [
+  {
+    key: 'mod_bitumen',
+    label: 'Modified Bitumen',
+    description:
+      'Torch-down or cold-applied modified bitumen system with base and cap sheet.',
+  },
+  {
+    key: 'bur',
+    label: 'Built-Up Roof (BUR)',
+    description: 'Traditional multi-ply built-up roof system.',
+  },
+  {
+    key: 'full_foam',
+    label: 'Full Foam (SPF)',
+    description: 'Full spray polyurethane foam system with protective coating.',
+  },
+  {
+    key: 'foam_overlay',
+    label: 'Foam Overlay',
+    description: 'SPF overlay over an existing roof with protective coating.',
+  },
+  {
+    key: 'coating',
+    label: 'Roof Coating',
+    description:
+      'Elastomeric, silicone, or urethane coating system over existing roof.',
+  },
+];
+
+const COATING_TYPES: { key: string; label: string; description: string }[] = [
+  {
+    key: 'elastomeric',
+    label: 'Acrylic Elastomeric',
+    description:
+      'Water-based acrylic elastomeric coating. Cost-effective and reflective.',
+  },
+  {
+    key: 'silicone',
+    label: 'Silicone',
+    description:
+      'High-solids silicone coating. Excellent ponding-water resistance.',
+  },
+  {
+    key: 'urethane',
+    label: 'Urethane',
+    description:
+      'Durable urethane coating with strong adhesion and abrasion resistance.',
+  },
+];
+
+const MOD_BITUMEN_CAP_COLORS = [
+  'White',
+  'Black',
+  'Buff',
+  'Gray Slate',
+  'Weatherwood',
+  'Chestnut',
+  'Heather Blend',
+  'Oak',
+  'Red Blend',
+  'Pine Green',
+  'Other',
+];
+
 type FasciaMode = 'repair' | 'full' | '';
 type DeckingMode = 'repair' | 'full' | '';
 type FasciaType = '2x6' | '2x8' | '';
-type Underlayment = 'standard' | 'high-temp' | '';
+type Underlayment = 'standard' | 'high-temp' | 'sa-high-temp' | '';
 
 type Estimate = {
   id: number;
@@ -225,10 +462,14 @@ type Estimate = {
   stories: string;
   fasciaLF: string;
   deckingSheets: string;
+  deckingOsbSheets?: string;
+  deckingCdxSheets?: string;
   solarPanels: string;
   hvacUnits: string;
   skylights: string;
   ridgeVentLF: string;
+  gutterMode?: 'none' | 'dr' | 'rr';
+  gutterLF?: string;
   selectedShingle: ShingleType;
   cambridgeColor: string;
   dynastyColor: string;
@@ -245,6 +486,8 @@ type Estimate = {
   negotiatedPrice: number;
   originalTotalForBuffer: number;
   measurementId?: string;
+  /** Supabase `estimates.id` when synced to cloud */
+  supabaseId?: string;
 };
 
 type LeadNote = {
@@ -252,12 +495,442 @@ type LeadNote = {
   date: string;
 };
 
-/** Base64 data-URL previews for now; migrate to Supabase storage for 500+ photos later. */
+/** Field guide for Company pricing document (sell + known costs + crews/contacts). */
+const PRICING_GUIDE: {
+  title: string;
+  rows: {
+    label: string;
+    unit: string;
+    cost?: number;
+    sellPhx?: number;
+    sellTuc?: number;
+    key?: string;
+    note?: string;
+  }[];
+}[] = [
+  {
+    title: 'Shingle systems — sell',
+    rows: [
+      { key: 'cambridge', label: 'IKO Cambridge', unit: '/sq', cost: 89, sellPhx: 485, sellTuc: 485, note: '$29.67/bdl × 3' },
+      { key: 'dynasty', label: 'IKO Dynasty', unit: '/sq', cost: 94, sellPhx: 500, sellTuc: 500, note: '$31.33/bdl × 3' },
+      { key: 'armourshake', label: 'IKO Armourshake', unit: '/sq', cost: 240, sellPhx: 785, sellTuc: 785, note: '$48/bdl × 5' },
+      { key: 'gaf_hdz', label: 'GAF HDZ', unit: '/sq', sellPhx: 500, sellTuc: 525 },
+      { key: 'gaf_natural_shadow', label: 'GAF Natural Shadow', unit: '/sq', sellPhx: 475, sellTuc: 500 },
+      { key: 'owens_oakridge', label: 'Owens Oakridge', unit: '/sq', sellPhx: 500, sellTuc: 525 },
+      { key: 'owens_duration', label: 'Owens Duration', unit: '/sq', sellPhx: 525, sellTuc: 550 },
+    ],
+  },
+  {
+    title: 'Shingle adders — sell',
+    rows: [
+      { label: 'Remove additional layer', unit: '/sq', sellPhx: 20, sellTuc: 25 },
+      { label: 'R&R OSB', unit: '/sheet', cost: 0, sellPhx: 80, sellTuc: 90 },
+      { label: 'R&R Fascia 2x6', unit: '/LF', sellPhx: 15, sellTuc: 18 },
+      { label: 'R&R Fascia 2x8', unit: '/LF', sellPhx: 18, sellTuc: 18 },
+      { label: 'Install ridge vent', unit: '/LF', cost: 6, sellPhx: 13, sellTuc: 14 },
+      { label: 'HD Skylight', unit: '/each', sellPhx: 525, sellTuc: 550 },
+      { label: 'R&R Shingle mold', unit: '/LF', sellPhx: 5, sellTuc: 6 },
+      { label: 'D&R Gutters', unit: '/LF', sellPhx: 18, sellTuc: 20 },
+      { label: 'R&R Gutters', unit: '/LF', sellPhx: 25, sellTuc: 30 },
+      { label: 'Roof repairs minimum', unit: '/job', sellPhx: 1500, sellTuc: 1750 },
+      { label: 'Steep charge', unit: '/sq', note: 'Depends on pitch / crew · $100–250' },
+    ],
+  },
+  {
+    title: 'Tile — sell',
+    rows: [
+      { key: 'tile_dr', label: 'Detach & Reset', unit: '/sq', sellPhx: 525, sellTuc: 550 },
+      { key: 'tile_rr', label: 'Remove & Replace', unit: '/sq', sellPhx: 925, sellTuc: 950 },
+      { label: 'SA / upgraded underlayment', unit: '/sq', sellPhx: 85, sellTuc: 100 },
+    ],
+  },
+  {
+    title: 'Low slope / foam / coating — sell',
+    rows: [
+      { key: 'mod_bitumen', label: 'Modified bitumen', unit: '/sq', cost: 375, sellPhx: 600, sellTuc: 600, note: 'Cost ~cap+base ply' },
+      { key: 'elastomeric', label: 'Elastomeric coating', unit: '/sq', sellPhx: 275, sellTuc: 300 },
+      { key: 'silicone', label: 'Silicone coating', unit: '/sq', sellPhx: 325, sellTuc: 350 },
+      { key: 'urethane', label: 'Urethane coating', unit: '/sq', sellPhx: 350, sellTuc: 375 },
+      { key: 'coating', label: 'Coating (legacy)', unit: '/sq', sellPhx: 275, sellTuc: 300, note: 'Prefer kind keys' },
+      { key: 'full_foam', label: 'Full foam', unit: '/sq', sellPhx: 600, sellTuc: 650 },
+      { key: 'foam_overlay', label: 'Foam overlay', unit: '/sq', sellPhx: 575, sellTuc: 615 },
+      { key: 'bur', label: 'Built-up (BUR)', unit: '/sq', note: 'Set sell in price_sheet' },
+      { key: 'iso_board', label: 'ISO board (fallback)', unit: '/sheet', note: 'Prefer iso_4x8 / iso_4x4' },
+      { key: 'iso_4x8', label: 'ISO 4×8 sheet', unit: '/sheet', note: '32 sq ft' },
+      { key: 'iso_4x4', label: 'ISO 4×4 sheet', unit: '/sheet', note: '16 sq ft' },
+      { key: 'granules', label: 'Granules adder', unit: '/sq', note: 'Foam adder' },
+      { key: 'extra_spf', label: 'Extra inch SPF', unit: '/sq', note: 'Foam adder' },
+      { key: 'scarify', label: 'Scarify', unit: '/sq', note: 'Foam adder' },
+      { key: 'extra_pass', label: 'Additional coat', unit: '/sq', note: 'Coating adder' },
+      { key: 'pressure_wash', label: 'Pressure wash & clean', unit: '/sq', note: 'Coating adder' },
+    ],
+  },
+  {
+    title: 'HVAC — sell',
+    rows: [
+      { key: 'hvac', label: 'D&R HVAC unit', unit: '/each', sellPhx: 1500, sellTuc: 1600 },
+    ],
+  },
+  {
+    title: 'Known material / labor cost',
+    rows: [
+      { label: 'Dynasty material', unit: '/sq', cost: 94, note: '$31.33/bdl × 3' },
+      { label: 'Cambridge material', unit: '/sq', cost: 89, note: '$29.67/bdl × 3' },
+      { label: 'Armourshake material', unit: '/sq', cost: 240, note: '$48/bdl × 5' },
+      { label: 'Ridge vent material', unit: '/LF', cost: 6 },
+      { label: 'MB cap sheet', unit: '/sq', cost: 123 },
+      { label: 'MB base ply', unit: '/sq/ply', cost: 126 },
+      { label: 'Base labor (shingle)', unit: '/sq', cost: 100, note: 'Phoenix' },
+    ],
+  },
+  {
+    title: 'Sub labor — Phoenix',
+    rows: [
+      { label: 'Maldonado', unit: '/sq', cost: 100 },
+      { label: 'Delgado', unit: '/sq', cost: 110, note: '100–120' },
+      { label: 'Mile High', unit: '/sq', cost: 100, note: '95–110' },
+      { label: 'EZ', unit: '/sq', cost: 105, note: '100–110' },
+      { label: 'TRC', unit: '/sq', cost: 120, note: '110–130' },
+      { label: 'Crew', unit: '/sq', cost: 110, note: '105–120' },
+      { label: 'JJ', unit: '/sq', cost: 105, note: '100–115' },
+      { label: 'Blueprint', unit: '/sq', cost: 130 },
+      { label: 'G&M', unit: '/sq', cost: 120, note: '100–140' },
+      { label: 'Spearhead', unit: '/sq', cost: 110, note: '95–130' },
+      { label: 'My Way', unit: '/sq', cost: 100 },
+      { label: 'Gleason', unit: '/sq', cost: 110, note: '100–125' },
+      { label: 'Rosales', unit: '/sq', cost: 115, note: '110–120' },
+      { label: 'ACI', unit: '/sq', cost: 110, note: '105–120' },
+      { label: 'Nailed It', unit: '/sq', cost: 120, note: '110–130' },
+    ],
+  },
+  {
+    title: 'Crew contacts',
+    rows: [
+      { label: 'Manuel Maldonado', unit: '', note: '915-252-2646 · Maldonado' },
+      { label: 'Jesus Delgado', unit: '', note: '573-281-9441 · Delgado' },
+      { label: 'Pancho Raigoza', unit: '', note: '303-995-6983 · Mile High' },
+      { label: 'Sergio Quintanar', unit: '', note: '623-349-2515 · EZ' },
+      { label: 'Josue Mtz', unit: '', note: '520-313-1641 · TRC' },
+      { label: 'George Galvin', unit: '', note: '602-789-4358 · Crew' },
+      { label: 'Joell Jaquez', unit: '', note: '602-471-3715 · JJ' },
+      { label: 'Daniel Romero', unit: '', note: '520-548-9949 · Blueprint' },
+      { label: 'Gerry Busta', unit: '', note: '520-336-1261 · G&M' },
+      { label: 'Joe Jasso', unit: '', note: '480-979-2349 · Spearhead' },
+      { label: 'Jesus Lugo', unit: '', note: '520-260-3276 · My Way' },
+      { label: 'Joshua Hardin', unit: '', note: '336-306-3380 · Gleason' },
+      { label: 'Chris Rosales Jr', unit: '', note: '480-749-8089 · Rosales' },
+      { label: 'Hugo/Victor Rivera', unit: '', note: '928-310-1710 · Nailed It' },
+      { label: 'Hunter Mainville', unit: '', note: '480-761-5674 · EV Foam' },
+      { label: 'Fidel Cruz', unit: '', note: '480-352-6432 · Amber' },
+      { label: 'Rick Amaral', unit: '', note: '602-561-1325 · Superior Foam' },
+      { label: 'Travis Witt', unit: '', note: '602-908-6884 · Next Gen' },
+    ],
+  },
+];
+
+const SYSTEM_DOCUMENTS = [
+  {
+    id: 'takeoff',
+    name: 'Take-off / Inspection Sheet',
+    description: 'Roof accessories, vents, flashings, interior notes',
+  },
+  {
+    id: 'pricing',
+    name: 'Company pricing',
+    description: 'Sell rates and your costs for field reference',
+  },
+] as const;
+
+type TakeoffSheet = {
+  roofTypeLayers: string;
+  pipeJacks: string;
+  turtleVents: string;
+  powerAtticVents: string;
+  windTurbines: string;
+  ridgeVent: string;
+  roofExhaustCap: string;
+  hvacVent: string;
+  hvacMount: string;
+  chimneyFlashing: string;
+  soffitOverhang: string;
+  satelliteDish: string;
+  electricalMast: string;
+  skylights: string;
+  dripEdgeGutterApron: string;
+  iceAndWaterShield: string;
+  valleyLiner: string;
+  drywallSf: string;
+  paintingSf: string;
+  ceilingHeight: string;
+  ceilingFans: string;
+  notes: string;
+};
+
+const emptyTakeoff = (): TakeoffSheet => ({
+  roofTypeLayers: '',
+  pipeJacks: '',
+  turtleVents: '',
+  powerAtticVents: '',
+  windTurbines: '',
+  ridgeVent: '',
+  roofExhaustCap: '',
+  hvacVent: '',
+  hvacMount: '',
+  chimneyFlashing: '',
+  soffitOverhang: '',
+  satelliteDish: '',
+  electricalMast: '',
+  skylights: '',
+  dripEdgeGutterApron: '',
+  iceAndWaterShield: '',
+  valleyLiner: '',
+  drywallSf: '',
+  paintingSf: '',
+  ceilingHeight: '',
+  ceilingFans: '',
+  notes: '',
+});
+
+/** Lead photos: prefer Supabase Storage `url`; legacy `dataUrl` still displays. */
 type LeadPhoto = {
   id: string;
   name: string;
-  dataUrl: string;
+  /** Public URL from Supabase Storage bucket `lead-photos` */
+  url?: string;
+  /** Legacy base64 preview (local-only older data) */
+  dataUrl?: string;
   createdAt: string;
+};
+type PhotoReportItem = {
+  photoId: string;
+  caption: string;
+};
+type PhotoReport = {
+  id: string;
+  title: string;
+  createdAt: string;
+  items: PhotoReportItem[];
+};
+
+
+/** Lead documents: PDFs and files in Supabase Storage bucket `lead-docs`. */
+type LeadDocument = {
+  id: string;
+  name: string;
+  url: string;
+  size?: number;
+  mimeType?: string;
+  createdAt: string;
+};
+
+/** Soft-deleted lead media on a single lead (legacy; prefer AppTrashItem). */
+type LeadTrashItem = {
+  id: string;
+  kind: 'photo' | 'document' | 'measurement';
+  deletedAt: string;
+  photo?: LeadPhoto;
+  document?: LeadDocument;
+};
+
+/** App-wide trash: whole leads + media soft-deletes. */
+type AppTrashItem =
+  | {
+      id: string;
+      kind: 'lead';
+      deletedAt: string;
+      lead: Lead;
+    }
+  | {
+      id: string;
+      kind: 'photo';
+      deletedAt: string;
+      leadId: number;
+      leadLabel: string;
+      photo: LeadPhoto;
+    }
+  | {
+      id: string;
+      kind: 'document' | 'measurement';
+      deletedAt: string;
+      leadId: number;
+      leadLabel: string;
+      document: LeadDocument;
+    }
+  | {
+      id: string;
+      kind: 'roofMeasurement';
+      deletedAt: string;
+      leadId: number;
+      leadLabel: string;
+      measurement: RoofMeasurement;
+    }
+  | {
+      id: string;
+      kind: 'estimate';
+      deletedAt: string;
+      leadId: number;
+      leadLabel: string;
+      estimate: Estimate;
+    }
+  | {
+      id: string;
+      kind: 'note';
+      deletedAt: string;
+      leadId: number;
+      leadLabel: string;
+      note: LeadNote;
+    };
+
+/** Pricing region for multi-area sell rates (price_sheet.region). */
+type PricingRegion = 'central' | 'southern' | 'northern';
+
+const VALLEY_CITIES = [
+  'phoenix',
+  'mesa',
+  'chandler',
+  'gilbert',
+  'tempe',
+  'scottsdale',
+  'glendale',
+  'peoria',
+  'surprise',
+  'avondale',
+  'goodyear',
+  'buckeye',
+  'el mirage',
+  'litchfield park',
+  'tolleson',
+  'youngtown',
+  'sun city',
+  'sun city west',
+  'sun lakes',
+  'queen creek',
+  'san tan valley',
+  'apache junction',
+  'fountain hills',
+  'paradise valley',
+  'cave creek',
+  'carefree',
+  'anthem',
+  'new river',
+  'desert hills',
+  'rio verde',
+  'guadalupe',
+  'komatke',
+  'maricopa',
+  'casa grande',
+  'coolidge',
+  'florence',
+  'aj',
+  'ahwatukee',
+];
+
+const TUCSON_CITIES = [
+  'tucson',
+  'oro valley',
+  'marana',
+  'sahuarita',
+  'green valley',
+  'vail',
+  'catalina',
+  'flowing wells',
+  'south tucson',
+  'sierra vista',
+  'benson',
+  'willcox',
+  'douglas',
+  'nogales',
+  'rio rico',
+  'corona de tucson',
+  'picture rocks',
+  'valencia west',
+  'drexel heights',
+  'three points',
+];
+
+const NORTH_CITIES = [
+  'payson',
+  'cottonwood',
+  'camp verde',
+  'prescott',
+  'prescott valley',
+  'chino valley',
+  'sedona',
+  'jerome',
+  'flagstaff',
+  'williams',
+  'show low',
+  'pinetop',
+  'lakeside',
+  'springerville',
+  'eagar',
+  'holbrook',
+  'winslow',
+  'page',
+  'wickenburg',
+  'congress',
+  'yarnell',
+  'dewey',
+  'humboldt',
+  'mayer',
+  'crown king',
+  'pine',
+  'strawberry',
+  'star valley',
+  'christopher creek',
+  'heber',
+  'overgaard',
+  'snowflake',
+  'taylor',
+  'clarkdale',
+  'cornville',
+];
+
+/** Map DB / legacy region strings onto PricingRegion. */
+function normalizePricingRegion(raw?: string | null): PricingRegion {
+  const r = String(raw || 'central')
+    .toLowerCase()
+    .trim();
+  if (r === 'phx' || r === 'central' || r === 'valley' || r === 'phoenix') {
+    return 'central';
+  }
+  if (r === 'tuc' || r === 'southern' || r === 'tucson') return 'southern';
+  if (r === 'north' || r === 'northern') return 'northern';
+  return 'central';
+}
+
+function resolvePricingRegion(
+  city?: string,
+  state?: string,
+  zip?: string
+): PricingRegion {
+  const c = (city || '').trim().toLowerCase();
+  const st = (state || '').trim().toLowerCase();
+  if (st && st !== 'az' && st !== 'arizona') return 'central';
+  if (!c) {
+    const z = (zip || '').trim();
+    if (/^85[67]/.test(z)) return 'southern';
+    if (/^86[0-4]/.test(z)) return 'northern';
+    return 'central';
+  }
+  const cityHit = (list: string[]) =>
+    list.some((x) => c === x || c.includes(x) || x.includes(c));
+  if (cityHit(VALLEY_CITIES)) return 'central';
+  if (cityHit(TUCSON_CITIES)) return 'southern';
+  if (cityHit(NORTH_CITIES)) return 'northern';
+  const z = (zip || '').trim();
+  if (/^85[0-3]/.test(z) || /^852\d{2}$/.test(z) || /^853\d{2}$/.test(z)) {
+    return 'central';
+  }
+  if (/^85[6-7]/.test(z)) return 'southern';
+  if (/^86[0-4]/.test(z)) return 'northern';
+  return 'central';
+}
+
+const REGION_LABEL: Record<PricingRegion, string> = {
+  central: 'Central',
+  southern: 'Southern',
+  northern: 'Northern',
 };
 
 /** Single 6-stage pipeline used on home, kanban, and lead profile. */
@@ -323,7 +996,7 @@ const PIPELINE_STAGE_STYLES: Record<
     cardAccent: '',
   },
   Approved: {
-    card: 'bg-white border-zinc-200 hover:border-emerald-300/70 hover:shadow-sm transition-all',
+    card: 'bg-white border-zinc-200 hover:border-sky-300/70 hover:shadow-sm transition-all',
     count: 'text-zinc-900',
     label: 'text-zinc-500',
     column: 'bg-zinc-100/80 border-zinc-200',
@@ -359,7 +1032,7 @@ const PIPELINE_STAGE_STYLES: Record<
     cardAccent: '',
   },
   Closed: {
-    card: 'bg-white border-zinc-200 hover:border-emerald-400/60 hover:shadow-sm transition-all',
+    card: 'bg-white border-zinc-200 hover:border-sky-400/60 hover:shadow-sm transition-all',
     count: 'text-zinc-900',
     label: 'text-zinc-500',
     column: 'bg-zinc-100/80 border-zinc-300',
@@ -390,7 +1063,225 @@ type ProfileTab =
   | 'estimates'
   | 'estimator'
   | 'photos'
-  | 'documents';
+  | 'documents'
+  | 'takeoff'
+  | 'financial';
+
+/** Extra people on a job (spouse, co-owner, etc.) beyond primary client. */
+type AdditionalContact = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  /** spouse, other, … */
+  relationship?: string;
+  phone?: string;
+  email?: string;
+};
+
+const emptyAdditionalContact = (
+  overrides: Partial<AdditionalContact> = {}
+): AdditionalContact => ({
+  id:
+    overrides.id ||
+    `ac-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  firstName: overrides.firstName || '',
+  lastName: overrides.lastName || '',
+  relationship: overrides.relationship || '',
+  phone: overrides.phone || '',
+  email: overrides.email || '',
+});
+
+function normalizeAdditionalContacts(raw: unknown): AdditionalContact[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item, i) => {
+    const c = (item && typeof item === 'object' ? item : {}) as Record<
+      string,
+      unknown
+    >;
+    return emptyAdditionalContact({
+      id: String(c.id ?? `ac-${i}`),
+      firstName: String(c.firstName ?? c.first_name ?? ''),
+      lastName: String(c.lastName ?? c.last_name ?? ''),
+      relationship: String(c.relationship ?? ''),
+      phone: String(c.phone ?? ''),
+      email: String(c.email ?? ''),
+    });
+  });
+}
+
+/** Line item inside a job financial section (change order, upgrade, etc.). */
+type JobFinancialLine = {
+  id: string;
+  label: string;
+  amount: number;
+};
+
+/** Named group of financial lines on a lead. */
+type JobFinancialSection = {
+  id: string;
+  title: string;
+  lines: JobFinancialLine[];
+};
+
+const emptyJobFinancialLine = (
+  overrides: Partial<JobFinancialLine> = {}
+): JobFinancialLine => ({
+  id:
+    overrides.id ||
+    `jfl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  label: overrides.label || '',
+  amount: Number(overrides.amount) || 0,
+});
+
+const emptyJobFinancialSection = (
+  overrides: Partial<JobFinancialSection> = {}
+): JobFinancialSection => ({
+  id:
+    overrides.id ||
+    `jfs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  title: overrides.title || '',
+  lines: Array.isArray(overrides.lines)
+    ? overrides.lines.map((l) => emptyJobFinancialLine(l))
+    : [],
+});
+
+function normalizeJobFinancialSections(raw: unknown): JobFinancialSection[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item, i) => {
+    const s = (item && typeof item === 'object' ? item : {}) as Record<
+      string,
+      unknown
+    >;
+    const linesRaw = Array.isArray(s.lines) ? s.lines : [];
+    return emptyJobFinancialSection({
+      id: String(s.id ?? `jfs-${i}`),
+      title: String(s.title ?? ''),
+      lines: linesRaw.map((line, j) => {
+        const l = (line && typeof line === 'object' ? line : {}) as Record<
+          string,
+          unknown
+        >;
+        return emptyJobFinancialLine({
+          id: String(l.id ?? `jfl-${i}-${j}`),
+          label: String(l.label ?? ''),
+          amount: Number(l.amount) || 0,
+        });
+      }),
+    });
+  });
+}
+
+/** balanceDue = approvedJobValue − collected */
+function jobBalanceDue(lead: {
+  financialWorksheet?: unknown;
+  approvedJobValue?: number;
+  collected?: number;
+  sections?: unknown;
+}): number {
+  const fw = resolveFinancialWorksheet(lead);
+  return Math.max(0, (fw.approvedJobValue || 0) - (fw.collected || 0));
+}
+
+/** Sum of all section line amounts (optional cross-check vs approvedJobValue). */
+function jobSectionsTotal(sections?: JobFinancialSection[]): number {
+  if (!sections?.length) return 0;
+  return sections.reduce(
+    (sum, sec) =>
+      sum +
+      (sec.lines || []).reduce((s, line) => s + (Number(line.amount) || 0), 0),
+    0
+  );
+}
+
+const newFinId = () =>
+  `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+/** AccuLynx-style job financial worksheet (sections + approved / collected). */
+type FinancialWorksheet = {
+  sections: JobFinancialSection[];
+  approvedJobValue: number;
+  collected: number;
+  notes?: string;
+};
+
+function worksheetGrandTotal(w: FinancialWorksheet): number {
+  return jobSectionsTotal(w.sections);
+}
+
+/** Keep approved job value locked to worksheet grand total. */
+function withAutoApproved(w: FinancialWorksheet): FinancialWorksheet {
+  return {
+    ...w,
+    approvedJobValue: worksheetGrandTotal(w),
+  };
+}
+
+const emptyFinancialWorksheet = (): FinancialWorksheet => ({
+  sections: [],
+  approvedJobValue: 0,
+  collected: 0,
+  notes: '',
+});
+
+const normalizeFinancialWorksheet = (raw: unknown): FinancialWorksheet => {
+  if (!raw || typeof raw !== 'object') return emptyFinancialWorksheet();
+  const r = raw as Record<string, unknown>;
+
+  // Legacy flat lines → one section
+  if (Array.isArray(r.lines) && !Array.isArray(r.sections)) {
+    const lines = (r.lines as unknown[]).map((line, j) => {
+      const l = (line && typeof line === 'object' ? line : {}) as Record<
+        string,
+        unknown
+      >;
+      return emptyJobFinancialLine({
+        id: String(l.id ?? `jfl-legacy-${j}`),
+        label: String(l.label ?? ''),
+        amount: Number(l.amount) || 0,
+      });
+    });
+    return {
+      sections: lines.length
+        ? [{ id: newFinId(), title: 'Worksheet', lines }]
+        : [],
+      approvedJobValue: Number(r.jobValue ?? r.approvedJobValue) || 0,
+      collected: Number(r.collected) || 0,
+      notes: String(r.notes ?? ''),
+    };
+  }
+
+  return {
+    sections: normalizeJobFinancialSections(r.sections),
+    approvedJobValue: Number(r.approvedJobValue ?? r.jobValue) || 0,
+    collected: Number(r.collected) || 0,
+    notes: String(r.notes ?? ''),
+  };
+};
+
+/** Prefer worksheet.approvedJobValue; fall back to flat lead fields. */
+function resolveFinancialWorksheet(lead: {
+  financialWorksheet?: unknown;
+  sections?: unknown;
+  approvedJobValue?: number;
+  collected?: number;
+}): FinancialWorksheet {
+  if (lead.financialWorksheet != null) {
+    return normalizeFinancialWorksheet(lead.financialWorksheet);
+  }
+  // Migrate older flat fields on the lead
+  if (
+    Array.isArray(lead.sections) ||
+    lead.approvedJobValue != null ||
+    lead.collected != null
+  ) {
+    return normalizeFinancialWorksheet({
+      sections: lead.sections,
+      approvedJobValue: lead.approvedJobValue,
+      collected: lead.collected,
+    });
+  }
+  return emptyFinancialWorksheet();
+}
 
 type Lead = {
   id: number;
@@ -404,6 +1295,19 @@ type Lead = {
   clientPhone: string;
   clientEmail: string; // primary email
   additionalEmails?: string[];
+  /** Spouse / co-owner / other contacts on this job */
+  additionalContacts?: AdditionalContact[];
+  /**
+   * Job financials: sections/lines worksheet + approved value + collected.
+   * balanceDue = approvedJobValue − collected.
+   */
+  financialWorksheet?: FinancialWorksheet;
+  /** @deprecated prefer financialWorksheet — kept for localStorage migration */
+  sections?: JobFinancialSection[];
+  /** @deprecated prefer financialWorksheet */
+  approvedJobValue?: number;
+  /** @deprecated prefer financialWorksheet */
+  collected?: number;
   company?: string;
   jobNumber: string;
   mailingSameAsBilling: boolean;
@@ -431,6 +1335,14 @@ type Lead = {
   estimates: Estimate[];
   notes?: LeadNote[];
   photos?: LeadPhoto[];
+  photoReports?: PhotoReport[];
+  documents?: LeadDocument[];
+  /** EagleView / Roofr PDFs uploaded from Measurements */
+  measurementReports?: LeadDocument[];
+  /** Soft-deleted photos / documents / measurement reports */
+  trash?: LeadTrashItem[];
+  /** Site inspection take-off sheet */
+  takeoff?: TakeoffSheet | null;
   measurements?: RoofMeasurement[];
   /** Optional scheduled follow-up (YYYY-MM-DD) — used for Google Calendar sync */
   followUpDate?: string;
@@ -438,7 +1350,24 @@ type Lead = {
   calendarEventId?: string;
   calendarHtmlLink?: string;
   calendarSyncedAt?: string;
+  /** Supabase `leads.id` (uuid) when synced to cloud */
+  supabaseId?: string;
 };
+
+/**
+ * Pipeline / Home stage $ totals.
+ * Job value comes ONLY from the financial worksheet — never from estimates on file.
+ */
+function leadEstimateValue(lead: {
+  financialWorksheet?: { approvedJobValue?: number; jobValue?: number };
+  approvedJobValue?: number;
+  sections?: unknown;
+  collected?: number;
+}): number {
+  const w = resolveFinancialWorksheet(lead);
+  const v = Number(w.approvedJobValue ?? 0);
+  return v > 0 ? v : 0;
+}
 
 /** Map current + legacy kanban labels onto the 6-stage pipeline. */
 function normalizePipelineStage(raw: unknown): PipelineStage {
@@ -467,6 +1396,8 @@ function normalizeLead(raw: Partial<Lead> & { clientJobNumber?: string }): Lead 
     clientPhone: raw.clientPhone ?? '',
     clientEmail: raw.clientEmail ?? '',
     additionalEmails: raw.additionalEmails ?? [],
+    additionalContacts: normalizeAdditionalContacts(raw.additionalContacts),
+    financialWorksheet: resolveFinancialWorksheet(raw),
     company: raw.company ?? '',
     jobNumber: raw.jobNumber ?? raw.clientJobNumber ?? '',
     mailingSameAsBilling: raw.mailingSameAsBilling ?? true,
@@ -496,6 +1427,14 @@ function normalizeLead(raw: Partial<Lead> & { clientJobNumber?: string }): Lead 
     estimates: raw.estimates ?? [],
     notes: raw.notes ?? [],
     photos: raw.photos ?? [],
+    photoReports: raw.photoReports ?? [],
+    documents: raw.documents ?? [],
+    measurementReports: raw.measurementReports ?? [],
+    trash: Array.isArray(raw.trash) ? (raw.trash as LeadTrashItem[]) : [],
+    takeoff:
+      raw.takeoff && typeof raw.takeoff === 'object'
+        ? { ...emptyTakeoff(), ...raw.takeoff }
+        : null,
     measurements: Array.isArray(raw.measurements)
       ? (raw.measurements
           .map((m) => normalizeMeasurement(m as Partial<RoofMeasurement>))
@@ -505,6 +1444,7 @@ function normalizeLead(raw: Partial<Lead> & { clientJobNumber?: string }): Lead 
     calendarEventId: raw.calendarEventId,
     calendarHtmlLink: raw.calendarHtmlLink,
     calendarSyncedAt: raw.calendarSyncedAt,
+    supabaseId: raw.supabaseId,
   };
 }
 
@@ -522,17 +1462,296 @@ function createEmptyLead(overrides: Partial<Lead> = {}): Lead {
     estimates: [],
     notes: [],
     photos: [],
+    documents: [],
+    measurementReports: [],
+    trash: [],
     measurements: [],
+    photoReports: [],
     ...overrides,
   });
 }
 
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
+/** Convert app Lead → payload for Supabase `leads` table */
+function mapAppLeadToDb(lead: Lead) {
+  const name =
+    [lead.clientFirstName, lead.clientLastName].filter(Boolean).join(' ').trim() ||
+    'New Lead';
+  const addressParts = [
+    lead.clientAddress,
+    lead.clientCity,
+    lead.clientState,
+    lead.clientZip,
+  ].filter(Boolean);
+  const addressStr = addressParts.join(', ');
+
+  const notesText =
+    Array.isArray(lead.notes) && lead.notes.length > 0
+      ? lead.notes.map((n) => n.text || '').filter(Boolean).join('\n')
+      : '';
+
+  /** Extra profile fields stored as JSON (columns optional on server) */
+  const details = {
+    clientFirstName: lead.clientFirstName || '',
+    clientLastName: lead.clientLastName || '',
+    clientAddress: lead.clientAddress || '',
+    clientCity: lead.clientCity || '',
+    clientState: lead.clientState || '',
+    clientZip: lead.clientZip || '',
+    clientPhone: lead.clientPhone || '',
+    clientEmail: lead.clientEmail || '',
+    additionalEmails: lead.additionalEmails || [],
+    additionalContacts: lead.additionalContacts || [],
+    financialWorksheet: resolveFinancialWorksheet(lead),
+    mailingSameAsBilling: lead.mailingSameAsBilling ?? true,
+    billingAddress: lead.billingAddress || '',
+    billingCity: lead.billingCity || '',
+    billingState: lead.billingState || '',
+    billingZip: lead.billingZip || '',
+    jobCategory: lead.jobCategory || 'Residential',
+    hasHOA: !!lead.hasHOA,
+    hoaInfo: lead.hoaInfo || '',
+    leadSource: lead.leadSource || '',
+    referralName: lead.referralName || '',
+    insuranceCompany: lead.insuranceCompany || '',
+    damageLocation: lead.damageLocation || '',
+    dateOfLoss: lead.dateOfLoss || '',
+    claimFiled: !!lead.claimFiled,
+    adjusterName: lead.adjusterName || '',
+    adjusterPhone: lead.adjusterPhone || '',
+    adjusterEmail: lead.adjusterEmail || '',
+    metAdjuster: !!lead.metAdjuster,
+    claimNumber: lead.claimNumber || '',
+    policyNumber: lead.policyNumber || '',
+    photos: lead.photos,
+    photoReports: lead.photoReports || [],
+    documents: lead.documents,
+    measurementReports: lead.measurementReports || [],
+    trash: lead.trash || [],
+    takeoff: lead.takeoff || null,
+    followUpDate: lead.followUpDate || '',
+    calendarEventId: lead.calendarEventId || '',
+    calendarHtmlLink: lead.calendarHtmlLink || '',
+    calendarSyncedAt: lead.calendarSyncedAt || '',
+    // estimates live in `estimates` table; keep a denormalized copy in details if useful
+    estimates: lead.estimates || [],
+  };
+
+  return {
+    name,
+    company: lead.company || null,
+    phone: lead.clientPhone || null,
+    addresses: addressStr ? [addressStr] : [],
+    emails: lead.clientEmail ? [lead.clientEmail] : [],
+    stage: lead.category || 'Lead',
+    source: lead.leadSource || null,
+    hoa: lead.hasHOA ? lead.hoaInfo || 'Yes' : null,
+    notes: notesText || null,
+    measurements: lead.measurements || [],
+    job_number: lead.jobNumber || null,
+    details,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+/** Stable numeric id from Supabase UUID / number */
+function stableLeadIdFromDb(id: unknown): number {
+  if (typeof id === 'number' && Number.isFinite(id)) return id;
+  if (typeof id === 'string' && /^\d+$/.test(id)) return parseInt(id, 10);
+  const s = String(id ?? '');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h) || Date.now();
+}
+
+/**
+ * Map a row from the Supabase `leads` table into the app Lead shape.
+ * Expected columns (flexible): id, name, phone, emails, addresses, company,
+ * stage, notes, created_at — adjust if your schema differs.
+ */
+function mapDbLeadToApp(row: Record<string, unknown>): Lead {
+  const d =
+    row.details && typeof row.details === 'object'
+      ? (row.details as Record<string, unknown>)
+      : {};
+
+  const fullName = String(row.name ?? row.client_name ?? '').trim();
+  const nameParts = fullName ? fullName.split(/\s+/) : [];
+  const firstName =
+    String(
+      d.clientFirstName ??
+        row.client_first_name ??
+        row.first_name ??
+        nameParts[0] ??
+        ''
+    ) || 'Unknown';
+  const lastName = String(
+    d.clientLastName ??
+      row.client_last_name ??
+      row.last_name ??
+      (nameParts.length > 1 ? nameParts.slice(1).join(' ') : '')
+  );
+
+  let address = String(d.clientAddress ?? '');
+  let city = String(d.clientCity ?? '');
+  let state = String(d.clientState ?? '');
+  let zip = String(d.clientZip ?? '');
+  if (!address) {
+    const addresses = row.addresses;
+    if (typeof addresses === 'string') {
+      address = addresses;
+    } else if (Array.isArray(addresses) && addresses.length > 0) {
+      const first = addresses[0] as string | Record<string, unknown>;
+      if (typeof first === 'string') {
+        address = first;
+      } else if (first && typeof first === 'object') {
+        address = String(first.line1 ?? first.address ?? first.street ?? '');
+        city = city || String(first.city ?? '');
+        state = state || String(first.state ?? '');
+        zip = zip || String(first.zip ?? first.postal_code ?? '');
+      }
+    } else {
+      address = String(row.address ?? row.client_address ?? '');
+      city = city || String(row.city ?? row.client_city ?? '');
+      state = state || String(row.state ?? row.client_state ?? '');
+      zip = zip || String(row.zip ?? row.client_zip ?? '');
+    }
+  }
+
+  let email = String(d.clientEmail ?? '');
+  if (!email) {
+    const emails = row.emails;
+    if (typeof emails === 'string') {
+      email = emails;
+    } else if (Array.isArray(emails) && emails.length > 0) {
+      const first = emails[0] as string | Record<string, unknown>;
+      email =
+        typeof first === 'string'
+          ? first
+          : String((first as Record<string, unknown>)?.email ?? '');
+    } else {
+      email = String(row.email ?? row.client_email ?? '');
+    }
+  }
+
+  const stageRaw = String(row.stage ?? row.category ?? row.pipeline_stage ?? '');
+  const stageMap: Record<string, PipelineStage> = {
+    'New Lead': 'Lead',
+    Lead: 'Lead',
+    'Follow Up': 'Prospect',
+    Prospect: 'Prospect',
+    Quoted: 'Approved',
+    Approved: 'Approved',
+    Completed: 'Completed',
+    Invoiced: 'Invoiced',
+    Closed: 'Closed',
+  };
+  const category =
+    stageMap[stageRaw] || normalizePipelineStage(stageRaw) || 'Lead';
+
+  const createdAt = row.created_at ?? row.createdAt;
+  const noteText = row.notes;
+  let notes: LeadNote[] = [];
+  if (typeof noteText === 'string' && noteText.trim()) {
+    notes = [
+      {
+        text: noteText.trim(),
+        date: createdAt
+          ? new Date(String(createdAt)).toLocaleDateString()
+          : new Date().toLocaleDateString(),
+      },
+    ];
+  } else if (Array.isArray(d.notes)) {
+    notes = (d.notes as LeadNote[]).map((n) => ({
+      text: String(n?.text ?? ''),
+      date: String(n?.date ?? ''),
+    }));
+  }
+
+  const dbId = row.id != null ? String(row.id) : undefined;
+
+  return normalizeLead({
+    id: stableLeadIdFromDb(row.id),
+    clientFirstName: firstName,
+    clientLastName: lastName,
+    clientAddress: address,
+    clientCity: city,
+    clientState: state,
+    clientZip: zip,
+    clientPhone: String(d.clientPhone ?? row.phone ?? row.client_phone ?? ''),
+    clientEmail: email,
+    company: String(row.company ?? d.company ?? ''),
+    jobNumber: String(row.job_number ?? d.jobNumber ?? row.jobNumber ?? ''),
+    additionalEmails: Array.isArray(d.additionalEmails)
+      ? (d.additionalEmails as string[])
+      : [],
+    additionalContacts: normalizeAdditionalContacts(d.additionalContacts),
+    financialWorksheet: resolveFinancialWorksheet({
+      financialWorksheet: d.financialWorksheet,
+      sections: d.sections as JobFinancialSection[] | undefined,
+      approvedJobValue: Number(d.approvedJobValue) || 0,
+      collected: Number(d.collected) || 0,
+    }),
+    mailingSameAsBilling: d.mailingSameAsBilling !== false,
+    billingAddress: String(d.billingAddress ?? ''),
+    billingCity: String(d.billingCity ?? ''),
+    billingState: String(d.billingState ?? ''),
+    billingZip: String(d.billingZip ?? ''),
+    jobCategory: (d.jobCategory as JobCategory) || 'Residential',
+    hasHOA: Boolean(d.hasHOA ?? row.hoa),
+    hoaInfo: String(d.hoaInfo ?? row.hoa ?? ''),
+    leadSource: (d.leadSource as LeadSource) ||
+      (String(row.source || 'Self Generated') as LeadSource),
+    referralName: String(d.referralName ?? ''),
+    insuranceCompany: String(d.insuranceCompany ?? ''),
+    damageLocation: String(d.damageLocation ?? ''),
+    dateOfLoss: String(d.dateOfLoss ?? ''),
+    claimFiled: Boolean(d.claimFiled),
+    adjusterName: String(d.adjusterName ?? ''),
+    adjusterPhone: String(d.adjusterPhone ?? ''),
+    adjusterEmail: String(d.adjusterEmail ?? ''),
+    metAdjuster: Boolean(d.metAdjuster),
+    claimNumber: String(d.claimNumber ?? ''),
+    policyNumber: String(d.policyNumber ?? ''),
+    category,
+    notes,
+    photos: Array.isArray(d.photos) ? (d.photos as LeadPhoto[]) : [],
+    photoReports: Array.isArray((d as any).photoReports)
+      ? (d as any).photoReports
+      : [],
+    documents: Array.isArray(d.documents) ? (d.documents as LeadDocument[]) : [],
+    measurementReports: Array.isArray((d as any).measurementReports)
+      ? ((d as any).measurementReports as LeadDocument[])
+      : [],
+    trash: Array.isArray((d as any).trash)
+      ? ((d as any).trash as LeadTrashItem[])
+      : [],
+    takeoff:
+      d.takeoff && typeof d.takeoff === 'object'
+        ? { ...emptyTakeoff(), ...(d.takeoff as TakeoffSheet) }
+        : null,
+    measurements: Array.isArray(row.measurements)
+      ? (row.measurements as RoofMeasurement[])
+      : Array.isArray(d.measurements)
+        ? (d.measurements as RoofMeasurement[])
+        : [],
+    // Prefer estimates from estimates table (bootstrap attaches them); details is fallback
+    estimates: Array.isArray(d.estimates) ? (d.estimates as Estimate[]) : [],
+    followUpDate: String(d.followUpDate ?? ''),
+    calendarEventId: d.calendarEventId
+      ? String(d.calendarEventId)
+      : undefined,
+    calendarHtmlLink: d.calendarHtmlLink
+      ? String(d.calendarHtmlLink)
+      : undefined,
+    calendarSyncedAt: d.calendarSyncedAt
+      ? String(d.calendarSyncedAt)
+      : undefined,
+    date: createdAt
+      ? new Date(String(createdAt)).toLocaleDateString()
+      : new Date().toLocaleDateString(),
+    supabaseId: dbId,
   });
 }
 
@@ -552,6 +1771,16 @@ const PITCH_MULTIPLIERS: Record<string, number> = {
 };
 
 export default function SummitApp() {
+  /** Supabase client from env (NEXT_PUBLIC_SUPABASE_*). Null if not configured. */
+  const supabase = useMemo(() => getSupabase(), []);
+  const supabaseEnabled = isSupabaseConfigured() && supabase != null;
+
+  // TEMP TEST - remove later
+  useEffect(() => {
+    console.log('Supabase test - configured?', isSupabaseConfigured());
+    console.log('Supabase client?', getSupabase() ? 'yes' : 'no');
+  }, []);
+
   /** False until localStorage is read — keeps SSR and first client paint identical */
   const [sessionReady, setSessionReady] = useState(false);
   const [activeTab, setActiveTab] = useState<AppTab>('home');
@@ -576,11 +1805,41 @@ export default function SummitApp() {
     useState<EstimateWorkspace>('estimate');
   const [negotiatedPrice, setNegotiatedPrice] = useState(0);
   const [originalTotalForBuffer, setOriginalTotalForBuffer] = useState(0);
+  const [roofSystem, setRoofSystem] = useState<RoofSystem>('shingle');
+  const [flatSystem, setFlatSystem] = useState<FlatSystem>('');
+  const [coatingKind, setCoatingKind] = useState<CoatingKind>('');
+  const [foamKind, setFoamKind] = useState<FoamKind>('');
+
+  const [foamIso48, setFoamIso48] = useState(''); // 4x8 sheet count
+  const [foamIso44, setFoamIso44] = useState(''); // 4x4 sheet count
+  const [foamGranules, setFoamGranules] = useState(false);
+  const [foamExtraSpf, setFoamExtraSpf] = useState(false);
+  const [foamScarify, setFoamScarify] = useState(false);
+  const [coatingExtraPass, setCoatingExtraPass] = useState(false);
+  const [coatingPressureWash, setCoatingPressureWash] = useState(false);
+  const [estimateFlow, setEstimateFlow] = useState<'pick' | 'estimate'>('pick');
+  const [lowSlopeMode, setLowSlopeMode] = useState<
+    'none' | 'attached' | 'detached'
+  >('none');
+  const [lowSlopeType, setLowSlopeType] = useState<
+    | 'none'
+    | 'mod_bitumen'
+    | 'full_foam'
+    | 'coating'
+    | 'elastomeric'
+    | 'silicone'
+    | 'urethane'
+  >('none');
   const [selectedShingle, setSelectedShingle] = useState<ShingleType>('');
+  const [productColors, setProductColors] = useState<Record<string, string>>({});
   const [cambridgeColor, setCambridgeColor] = useState('');
   const [dynastyColor, setDynastyColor] = useState('');
   const [armourshakeColor, setArmourshakeColor] = useState('');
   const [selectedUnderlayment, setSelectedUnderlayment] = useState<Underlayment>('');
+  const [tileMode, setTileMode] = useState<'dr' | 'rr' | ''>('');
+  const [tileProduct, setTileProduct] = useState('');
+  const [tileBrand, setTileBrand] = useState('');
+  const [currentTile, setCurrentTile] = useState('');
   const [fasciaMode, setFasciaMode] = useState<FasciaMode>('');
   const [deckingMode, setDeckingMode] = useState<DeckingMode>('');
   const [fasciaType, setFasciaType] = useState<FasciaType>('');
@@ -591,21 +1850,44 @@ export default function SummitApp() {
   const [pitch, setPitch] = useState('');
   const [fasciaLF, setFasciaLF] = useState('');
   const [deckingSheets, setDeckingSheets] = useState('');
+  const [deckingOsbSheets, setDeckingOsbSheets] = useState('');
+  const [deckingCdxSheets, setDeckingCdxSheets] = useState('');
   const [solarPanels, setSolarPanels] = useState('');
   const [hvacUnits, setHvacUnits] = useState('');
   const [skylights, setSkylights] = useState('');
   const [ridgeVentLF, setRidgeVentLF] = useState('');
+  const [gutterMode, setGutterMode] = useState<'none' | 'dr' | 'rr'>('none');
+  const [gutterLF, setGutterLF] = useState('');
   const [notes, setNotes] = useState('');
   const [leadNoteDraft, setLeadNoteDraft] = useState('');
   const [isEditingLead, setIsEditingLead] = useState(false);
   const [profileTab, setProfileTab] = useState<ProfileTab>('overview');
+  const [takeoffForm, setTakeoffForm] = useState<TakeoffSheet>(emptyTakeoff());
   const [photoDragOver, setPhotoDragOver] = useState(false);
   const [photosUploading, setPhotosUploading] = useState(false);
+  const [docsUploading, setDocsUploading] = useState(false);
+  const [docAddMenuOpen, setDocAddMenuOpen] = useState(false);
+  const [systemDocPreview, setSystemDocPreview] = useState<string | null>(null);
+  const [systemDocWorkspace, setSystemDocWorkspace] = useState<
+    null | 'takeoff' | 'pricing'
+  >(null);
+  const [takeoffAssignOpen, setTakeoffAssignOpen] = useState(false);
+  const [takeoffAssignSearch, setTakeoffAssignSearch] = useState('');
   const [lightboxPhoto, setLightboxPhoto] = useState<LeadPhoto | null>(null);
+  const [measurementPdfUrl, setMeasurementPdfUrl] = useState<string | null>(null);
+  const [measurementPdfName, setMeasurementPdfName] = useState('');
+  const measurementFileRef = useRef<HTMLInputElement | null>(null);
+  const [photoReportOpen, setPhotoReportOpen] = useState(false);
+  const [photoReportTitle, setPhotoReportTitle] = useState('Photo Report');
+  const [photoReportSelected, setPhotoReportSelected] = useState<string[]>([]);
+  const [photoReportCaptions, setPhotoReportCaptions] = useState<Record<string, string>>({});
+  const [photoReportBusy, setPhotoReportBusy] = useState(false);
   const [dragLeadId, setDragLeadId] = useState<number | null>(null);
   const [dragOverStage, setDragOverStage] = useState<PipelineStage | null>(null);
   const suppressCardClickRef = useRef(false);
   const photoInputRef = useRef<HTMLInputElement>(null);
+  const photoCameraInputRef = useRef<HTMLInputElement>(null);
+  const docInputRef = useRef<HTMLInputElement>(null);
   /** Measurement tracer draft (profile tab) */
   const [tracePoints, setTracePoints] = useState<LatLngPoint[]>([]);
   const [measurePitch, setMeasurePitch] = useState('6/12');
@@ -650,6 +1932,13 @@ export default function SummitApp() {
   const [clientZip, setClientZip] = useState('');
   const [clientPhone, setClientPhone] = useState('');
   const [clientEmail, setClientEmail] = useState('');
+  const [additionalContacts, setAdditionalContacts] = useState<
+    AdditionalContact[]
+  >([]);
+  const [financialWorksheet, setFinancialWorksheet] = useState<FinancialWorksheet>(
+    emptyFinancialWorksheet()
+  );
+  const [finSectionMenuOpen, setFinSectionMenuOpen] = useState(false);
   const [clientJobNumber, setClientJobNumber] = useState('');
   const [leadCompany, setLeadCompany] = useState('');
   const [mailingSameAsBilling, setMailingSameAsBilling] = useState(true);
@@ -680,8 +1969,17 @@ export default function SummitApp() {
 
   // Leads management
   const [leads, setLeads] = useState<Lead[]>([]);
-  const [trash, setTrash] = useState<Lead[]>([]);
+  const [trash, setTrash] = useState<AppTrashItem[]>([]);
   const [leadsView, setLeadsView] = useState<'active' | 'trash'>('active');
+  /** Live sell rates from Supabase `price_sheet` (item_key → price, or item_key__region) */
+  const [priceSheet, setPriceSheet] = useState<Record<string, number>>({});
+  const [pricesReady, setPricesReady] = useState(false);
+  /** Live cost rates from Supabase `cost_sheet` (item_key → cost) */
+  const [costSheet, setCostSheet] = useState<Record<string, number>>({});
+  const [costsReady, setCostsReady] = useState(false);
+  /** Manual override for pricing region (null = derive from job address) */
+  const [pricingRegionOverride, setPricingRegionOverride] =
+    useState<PricingRegion | null>(null);
   /** When set, Jobs board shows only this pipeline stage (shared with Home cards). */
   const [pipelineFilter, setPipelineFilter] = useState<PipelineStage | null>(
     null
@@ -739,11 +2037,111 @@ export default function SummitApp() {
     useState<EstimateWorkspace>('estimate');
   const headerSearchRef = useRef<HTMLDivElement>(null);
 
-  const FLOOR_PRICES: Record<Exclude<ShingleType, ''>, number> = {
-    cambridge: 485,
-    dynasty: 500,
-    armourshake: 685,
+  // Pricing region from open lead address (or form fields / manual override)
+  const regionLeadId = currentLeadId ?? estimatorSourceLeadId;
+  const liveLeadForRegion =
+    regionLeadId != null ? leads.find((l) => l.id === regionLeadId) : null;
+  const addressPricingRegion = resolvePricingRegion(
+    (liveLeadForRegion?.clientCity || clientCity || '').trim(),
+    (liveLeadForRegion?.clientState || clientState || '').trim(),
+    (liveLeadForRegion?.clientZip || clientZip || '').trim()
+  );
+  const activePricingRegion: PricingRegion =
+    pricingRegionOverride || addressPricingRegion;
+
+  // Prices from Supabase `price_sheet` (cached; prefer item_key__region)
+  const getSellPrice = (
+    itemKey: string,
+    fallback = 0,
+    region?: PricingRegion
+  ) => {
+    if (!itemKey) return fallback;
+    const r: PricingRegion = region || activePricingRegion || 'central';
+    const kRegion = `${itemKey}__${r}`;
+    const kCentral = `${itemKey}__central`;
+    const vRegion = priceSheet[kRegion];
+    if (vRegion != null && Number(vRegion) > 0) return Number(vRegion);
+    const vCentral = priceSheet[kCentral];
+    if (vCentral != null && Number(vCentral) > 0) return Number(vCentral);
+    // Legacy phx alias
+    const vPhx = priceSheet[`${itemKey}__phx`];
+    if (vPhx != null && Number(vPhx) > 0) return Number(vPhx);
+    // Legacy single-region rows (plain key)
+    const vPlain = priceSheet[itemKey];
+    if (vPlain != null && Number(vPlain) > 0) return Number(vPlain);
+    return fallback;
   };
+
+  const getCost = (
+    itemKey: string,
+    fallback = 0,
+    region?: PricingRegion
+  ): number => {
+    if (!itemKey) return fallback;
+    const r: PricingRegion = region || activePricingRegion || 'central';
+    // Regional → central → all-market materials → plain key → fallback
+    // Treat missing/0 as unknown (do not pretend free)
+    const candidates = [
+      `${itemKey}__${r}`,
+      `${itemKey}__central`,
+      `${itemKey}__all`,
+      itemKey,
+    ];
+    for (const k of candidates) {
+      const v = costSheet[k];
+      if (v != null && Number.isFinite(Number(v)) && Number(v) > 0) {
+        return Number(v);
+      }
+    }
+    return fallback;
+  };
+
+  /**
+   * Default crew labor $/sq.
+   * Prefers cost_sheet base_shingle for active region; else 100 central / 110 southern+northern.
+   */
+  const defaultLaborPerSq = (): number => {
+    const r = activePricingRegion || 'central';
+    const fromSheet = getCost('base_shingle', 0, r);
+    if (fromSheet > 0) return fromSheet;
+    if (r === 'southern' || r === 'northern') return 110;
+    return 100;
+  };
+
+  // Dev: verify regional sell + labor (remove when stable)
+  useEffect(() => {
+    if (process.env.NODE_ENV !== 'development' || !pricesReady) return;
+    const r = activePricingRegion || 'central';
+    // eslint-disable-next-line no-console
+    console.log('[Summit price debug]', {
+      region: r,
+      city: liveLeadForRegion?.clientCity || clientCity || '',
+      state: liveLeadForRegion?.clientState || clientState || '',
+      zip: liveLeadForRegion?.clientZip || clientZip || '',
+      cambridge: getSellPrice('cambridge', 0),
+      dynasty: getSellPrice('dynasty', 0),
+      labor: defaultLaborPerSq(),
+      base_shingle: getCost('base_shingle', 0, r),
+      priceKeys: Object.keys(priceSheet).filter(
+        (k) => k.includes('dynasty') || k.includes('cambridge')
+      ),
+      costKeys: Object.keys(costSheet).filter(
+        (k) => k.includes('base_shingle') || k.includes('labor')
+      ),
+    });
+  }, [
+    pricesReady,
+    costsReady,
+    activePricingRegion,
+    liveLeadForRegion?.clientCity,
+    liveLeadForRegion?.clientState,
+    liveLeadForRegion?.clientZip,
+    clientCity,
+    clientState,
+    clientZip,
+    priceSheet,
+    costSheet,
+  ]);
 
   const getPitchMultiplier = (pitchValue: string) => {
     return PITCH_MULTIPLIERS[pitchValue] || 1.0;
@@ -764,56 +2162,170 @@ export default function SummitApp() {
     const pitchMultiplier = getPitchMultiplier(pt);
     const baseRoofArea = sq * (1 + ws);
     const roofAreaSqFt = sq * 100 * pitchMultiplier * (1 + ws);
-    const basePerSq = selectedShingle ? FLOOR_PRICES[selectedShingle] : 500;
-    let layerAdder = 0;
-    if (ly === 2) layerAdder = 15;
-    if (ly === 3) layerAdder = 30;
-    if (ly === 4) layerAdder = 45;
+    // Prefer price_sheet keys matching shingle type (cambridge / dynasty / armourshake)
+    const basePerSq = selectedShingle
+      ? getSellPrice(selectedShingle, getSellPrice('dynasty', 0))
+      : getSellPrice('dynasty', 0);
+    // Extra layer: central $20/sq · southern/northern $25/sq per layer above 1
+    const layerRate = getSellPrice(
+      'remove_layer',
+      activePricingRegion === 'central' ? 20 : 25
+    );
+    const layerAdder = ly > 1 ? (ly - 1) * layerRate : 0;
+    // Steep (all markets): 8-9 → $100 · 10-11 → $175 · 12 → $250 per sq
     let pitchAdder = 0;
-    if (['8/12','9/12','10/12','11/12','12/12'].includes(pt)) pitchAdder = 15;
+    if (pt === '8/12' || pt === '9/12') {
+      pitchAdder = getSellPrice('steep_8_9', 100);
+    } else if (pt === '10/12' || pt === '11/12') {
+      pitchAdder = getSellPrice('steep_9_11', 175);
+    } else if (pt === '12/12') {
+      pitchAdder = getSellPrice('steep_11_12', 250);
+    }
     let underlaymentAdder = 0;
     const isLowSlope = ['2/12', '3/12'].includes(pt);
-    if (selectedUnderlayment && (selectedUnderlayment === 'high-temp' || isLowSlope)) {
+    if (
+      selectedUnderlayment &&
+      (selectedUnderlayment === 'high-temp' ||
+        selectedUnderlayment === 'sa-high-temp' ||
+        isLowSlope)
+    ) {
       underlaymentAdder = sq * 8;
       if (isLowSlope) underlaymentAdder += sq * 8;
     }
     let fasciaAdder = 0;
-    if (flf > 10 && fasciaType) {
-      const rate = fasciaType === '2x8'
-        ? (fasciaMode === 'full' ? 15 : 17)
-        : (fasciaMode === 'full' ? 13.5 : 15.5);
-      fasciaAdder = (flf - 10) * rate;
+    let shingleMoldAdder = 0;
+    if (flf > 10 && (fasciaMode || fasciaType)) {
+      const fasciaRate = getSellPrice('fascia', activePricingRegion === 'central' ? 15 : 18);
+      const freeFasciaLF = flf - 10; // 10' free
+      fasciaAdder = freeFasciaLF * fasciaRate;
+      // Shingle mold tracks free LF after 10' (comes with fascia, extra sell)
+      const moldRate = getSellPrice('shingle_mold', activePricingRegion === 'central' ? 5 : 6);
+      shingleMoldAdder = freeFasciaLF * moldRate;
     }
     let deckingAdder = 0;
     let sheetsNeeded = 0;
+    const osbSheetRate = getSellPrice('osb', 80);
+    const cdxSheetRate = osbSheetRate; // OSB and CDX sell the same by market
     if (deckingMode === 'full') {
       sheetsNeeded = Math.ceil(roofAreaSqFt / 32);
-      deckingAdder = sheetsNeeded * 60;
-    } else if (deckingMode === 'repair' && dsh > 2) {
-      deckingAdder = (dsh - 2) * 75;
+      deckingAdder = sheetsNeeded * osbSheetRate;
+    } else if (deckingMode === 'repair') {
+      const osbN = parseFloat(deckingOsbSheets) || 0;
+      const cdxN = parseFloat(deckingCdxSheets) || 0;
+      // 2 sheets included free on repairs (prefer OSB free first)
+      let freeLeft = 2;
+      const osbBill = Math.max(0, osbN - freeLeft);
+      freeLeft = Math.max(0, freeLeft - osbN);
+      const cdxBill = Math.max(0, cdxN - freeLeft);
+      deckingAdder = osbBill * osbSheetRate + cdxBill * cdxSheetRate;
     }
-    const solarAdder = panels * 250;
-    const hvacAdder = hvac * 1500;
-    const skylightAdder = sky * 575;
-    const ridgeAdder = ridge * 16;
-    const mbAdder = mbSq * 600;
+    
+    // Flat system adders (per sq of main flat area)
+    const flatSq = mbSq > 0 ? mbSq : sq;
+    let flatExtraAdder = 0;
+    if (flatSystem === 'foam' || selectedShingle === 'full_foam' || selectedShingle === 'foam_overlay') {
+      const iso48 = parseFloat(foamIso48) || 0;
+      const iso44 = parseFloat(foamIso44) || 0;
+      const iso48Rate = getSellPrice('iso_4x8', getSellPrice('iso_board', 0));
+      const iso44Rate = getSellPrice('iso_4x4', getSellPrice('iso_board', 0) * 0.5);
+      if (iso48 > 0) flatExtraAdder += iso48 * iso48Rate;
+      if (iso44 > 0) flatExtraAdder += iso44 * iso44Rate;
+      if (foamGranules) flatExtraAdder += flatSq * getSellPrice('granules', 0);
+      if (foamExtraSpf) flatExtraAdder += flatSq * getSellPrice('extra_spf', 0);
+      if (foamScarify) flatExtraAdder += flatSq * getSellPrice('scarify', 0);
+    }
+    // Additional coat: coating, foam overlay, BUR, full foam
+    const additionalCoatApply =
+      flatSystem === 'coating' ||
+      flatSystem === 'bur' ||
+      flatSystem === 'foam' ||
+      selectedShingle === 'elastomeric' ||
+      selectedShingle === 'silicone' ||
+      selectedShingle === 'urethane' ||
+      selectedShingle === 'bur' ||
+      selectedShingle === 'full_foam' ||
+      selectedShingle === 'foam_overlay';
+    // Pressure wash: coating + foam overlay only
+    const pressureWashApply =
+      flatSystem === 'coating' ||
+      (flatSystem === 'foam' && foamKind === 'overlay') ||
+      selectedShingle === 'elastomeric' ||
+      selectedShingle === 'silicone' ||
+      selectedShingle === 'urethane' ||
+      selectedShingle === 'foam_overlay';
+    if (additionalCoatApply && coatingExtraPass) {
+      flatExtraAdder += flatSq * getSellPrice('extra_pass', 0);
+    }
+    if (pressureWashApply && coatingPressureWash) {
+      flatExtraAdder += flatSq * getSellPrice('pressure_wash', 0);
+    }
 
-    const baseRoofPrice = Math.round(baseRoofArea * (basePerSq + layerAdder + pitchAdder) + underlaymentAdder);
-    const internalCost = baseRoofPrice + fasciaAdder + deckingAdder + solarAdder + hvacAdder + skylightAdder + ridgeAdder + mbAdder;
-    const hasRealData = sq > 0 && selectedShingle !== '';
+    const solarAdder = panels * 250;
+    const hvacAdder = hvac * getSellPrice('hvac', activePricingRegion === 'central' ? 1250 : 1600);
+    const skylightAdder = sky * getSellPrice('skylight', activePricingRegion === 'central' ? 500 : 550);
+    const ridgeAdder = ridge * getSellPrice('ridge_vent', 12);
+    const gLF = parseFloat(gutterLF) || 0;
+    let gutterAdder = 0;
+    if (gutterMode === 'dr' && gLF > 0) {
+      gutterAdder = gLF * getSellPrice('gutters_dr', activePricingRegion === 'central' ? 15 : 20);
+    } else if (gutterMode === 'rr' && gLF > 0) {
+      gutterAdder = gLF * getSellPrice('gutters_rr', activePricingRegion === 'central' ? 20 : 30);
+    }
+
+    // Low-slope / flat MB sell: price_sheet key, fallback $600/sq
+    const mbSellKey =
+      lowSlopeMode !== 'none' && lowSlopeType !== 'none'
+        ? lowSlopeType
+        : selectedShingle === 'mod_bitumen' ||
+            selectedShingle === 'full_foam' ||
+            selectedShingle === 'coating' ||
+            selectedShingle === 'elastomeric' ||
+            selectedShingle === 'silicone' ||
+            selectedShingle === 'urethane' ||
+            selectedShingle === 'foam_overlay' ||
+            selectedShingle === 'bur'
+          ? selectedShingle
+          : 'mod_bitumen';
+    const mbSellRate = getSellPrice(mbSellKey, getSellPrice('mod_bitumen', 600));
+    const mbAdder = mbSq > 0 ? Math.round(mbSq * mbSellRate) : 0;
+
+    const baseRoofPrice = Math.round(
+      baseRoofArea * (basePerSq + layerAdder + pitchAdder) + underlaymentAdder
+    );
+    const internalCost =
+      baseRoofPrice +
+      fasciaAdder +
+      shingleMoldAdder +
+      deckingAdder +
+      solarAdder +
+      hvacAdder +
+      skylightAdder +
+      ridgeAdder +
+      gutterAdder +
+      flatExtraAdder +
+      mbAdder;
+    // Wait for price_sheet (or cache) before treating estimate as
+    const hasRealData =
+      (sq > 0 || mbSq > 0) &&
+      selectedShingle !== '' &&
+      pricesReady &&
+      (basePerSq > 0 || mbSq > 0);
     const total = hasRealData ? Math.round(internalCost + 3500) : 0;
 
-    return { 
-      total, 
-      baseRoofPrice, 
-      fasciaCost: fasciaAdder, 
+    return {
+      total,
+      baseRoofPrice,
+      fasciaCost: fasciaAdder,
+      shingleMoldCost: shingleMoldAdder,
       deckingCost: deckingAdder,
       solarCost: solarAdder,
       hvacCost: hvacAdder,
       skylightCost: skylightAdder,
       ridgeCost: ridgeAdder,
+      gutterCost: gutterAdder,
+      flatExtraCost: flatExtraAdder,
       mbCost: mbAdder,
-      sheetsNeeded 
+      sheetsNeeded,
     };
   };
 
@@ -905,17 +2417,456 @@ export default function SummitApp() {
 
       const savedLeads = localStorage.getItem('summitLeads');
       const savedTrash = localStorage.getItem('summitTrash');
-      if (savedLeads) {
-        const parsed = JSON.parse(savedLeads) as Array<
-          Partial<Lead> & { clientJobNumber?: string }
-        >;
-        setLeads(parsed.map(normalizeLead));
+      // Cloud is source of truth when Supabase is configured — skip stale local leads
+      if (!supabaseEnabled) {
+        if (savedLeads) {
+          try {
+            const parsed = JSON.parse(savedLeads) as Array<
+              Partial<Lead> & { clientJobNumber?: string }
+            >;
+            setLeads(parsed.map(normalizeLead));
+          } catch {
+            /* ignore */
+          }
+        }
       }
+
+      // App trash is always local (leads + media soft-deletes)
       if (savedTrash) {
-        const parsed = JSON.parse(savedTrash) as Array<
-          Partial<Lead> & { clientJobNumber?: string }
-        >;
-        setTrash(parsed.map(normalizeLead));
+        try {
+          const parsed = JSON.parse(savedTrash);
+          const migrated: AppTrashItem[] = (Array.isArray(parsed) ? parsed : [])
+            .map((item: unknown): AppTrashItem | null => {
+              if (!item || typeof item !== 'object') return null;
+              const r = item as Record<string, unknown>;
+
+              if (r.kind === 'lead' && r.lead) {
+                return {
+                  id: String(
+                    r.id ||
+                      `lead-${(r.lead as Lead).id}-${r.deletedAt || Date.now()}`
+                  ),
+                  kind: 'lead' as const,
+                  deletedAt: String(
+                    r.deletedAt || new Date().toLocaleString()
+                  ),
+                  lead: normalizeLead(
+                    r.lead as Partial<Lead> & { clientJobNumber?: string }
+                  ),
+                };
+              }
+
+              if (r.kind === 'photo' && r.photo) {
+                return {
+                  id: String(
+                    r.id ||
+                      `photo-${(r.photo as LeadPhoto).id}-${r.deletedAt || Date.now()}`
+                  ),
+                  kind: 'photo' as const,
+                  deletedAt: String(
+                    r.deletedAt || new Date().toLocaleString()
+                  ),
+                  leadId: Number(r.leadId) || 0,
+                  leadLabel: String(r.leadLabel || 'Lead'),
+                  photo: r.photo as LeadPhoto,
+                };
+              }
+
+              if (
+                (r.kind === 'document' || r.kind === 'measurement') &&
+                r.document
+              ) {
+                return {
+                  id: String(
+                    r.id ||
+                      `doc-${(r.document as LeadDocument).id}-${r.deletedAt || Date.now()}`
+                  ),
+                  kind: r.kind as 'document' | 'measurement',
+                  deletedAt: String(
+                    r.deletedAt || new Date().toLocaleString()
+                  ),
+                  leadId: Number(r.leadId) || 0,
+                  leadLabel: String(r.leadLabel || 'Lead'),
+                  document: r.document as LeadDocument,
+                };
+              }
+
+              if (r.kind === 'roofMeasurement' && r.measurement) {
+                return {
+                  id: String(
+                    r.id ||
+                      `roof-${(r.measurement as RoofMeasurement).id}-${r.deletedAt || Date.now()}`
+                  ),
+                  kind: 'roofMeasurement' as const,
+                  deletedAt: String(
+                    r.deletedAt || new Date().toLocaleString()
+                  ),
+                  leadId: Number(r.leadId) || 0,
+                  leadLabel: String(r.leadLabel || 'Lead'),
+                  measurement: r.measurement as RoofMeasurement,
+                };
+              }
+
+              if (r.kind === 'estimate' && r.estimate) {
+                return {
+                  id: String(
+                    r.id ||
+                      `est-${(r.estimate as Estimate).id}-${r.deletedAt || Date.now()}`
+                  ),
+                  kind: 'estimate' as const,
+                  deletedAt: String(
+                    r.deletedAt || new Date().toLocaleString()
+                  ),
+                  leadId: Number(r.leadId) || 0,
+                  leadLabel: String(r.leadLabel || 'Lead'),
+                  estimate: r.estimate as Estimate,
+                };
+              }
+
+              if (r.kind === 'note' && r.note) {
+                return {
+                  id: String(r.id || `note-${r.deletedAt || Date.now()}`),
+                  kind: 'note' as const,
+                  deletedAt: String(
+                    r.deletedAt || new Date().toLocaleString()
+                  ),
+                  leadId: Number(r.leadId) || 0,
+                  leadLabel: String(r.leadLabel || 'Lead'),
+                  note: r.note as LeadNote,
+                };
+              }
+
+              // Legacy bare lead object
+              if (
+                r.id != null &&
+                (r.clientFirstName != null ||
+                  r.jobNumber != null ||
+                  r.category != null) &&
+                !r.kind
+              ) {
+                return {
+                  id: String(`lead-${r.id}-${Date.now()}`),
+                  kind: 'lead' as const,
+                  deletedAt: String(
+                    r.deletedAt || new Date().toLocaleString()
+                  ),
+                  lead: normalizeLead(
+                    r as Partial<Lead> & { clientJobNumber?: string }
+                  ),
+                };
+              }
+
+              return null; // drop garbage instead of crashing
+            })
+            .filter(Boolean) as AppTrashItem[];
+
+          setTrash(migrated);
+        } catch (e) {
+          console.error(
+            'Failed to load summitTrash — keeping current trash',
+            e
+          );
+          // Do NOT setTrash([]) here — that would wipe everything
+        }
+      }
+
+      // Supabase is source of truth when configured (leads + estimates)
+      if (supabaseEnabled && supabase) {
+        void (async () => {
+          try {
+            const { data: leadRows, error: leadErr } = await supabase
+              .from('leads')
+              .select('*')
+              .order('created_at', { ascending: false });
+
+            if (leadErr) {
+              console.error('Supabase leads fetch error:', leadErr);
+              // Offline fallback: use local cache only if cloud fetch fails
+              if (savedLeads) {
+                try {
+                  const parsed = JSON.parse(savedLeads) as Array<
+                    Partial<Lead> & { clientJobNumber?: string }
+                  >;
+                  setLeads(parsed.map(normalizeLead));
+                } catch {
+                  /* ignore */
+                }
+              }
+              return;
+            }
+            if (!leadRows || leadRows.length === 0) {
+              setLeads([]);
+              try {
+                localStorage.setItem('summitLeads', JSON.stringify([]));
+              } catch {
+                /* ignore */
+              }
+              return;
+            }
+
+            const fromDb = leadRows.map((row) =>
+              mapDbLeadToApp(row as Record<string, unknown>)
+            );
+
+            const { data: estRows, error: estErr } = await supabase
+              .from('estimates')
+              .select('*')
+              .order('created_at', { ascending: false });
+
+            if (estErr) {
+              console.error('Supabase estimates fetch error:', estErr);
+            } else if (estRows && estRows.length > 0) {
+              const byLead: Record<string, Estimate[]> = {};
+              for (const row of estRows) {
+                const r = row as Record<string, unknown>;
+                const leadKey = r.lead_id != null ? String(r.lead_id) : '';
+                if (!leadKey) continue;
+                const rawData = (r.data && typeof r.data === 'object'
+                  ? r.data
+                  : r) as Partial<Estimate> & { selectedShingle?: string };
+                const est: Estimate = {
+                  id:
+                    typeof rawData.id === 'number'
+                      ? rawData.id
+                      : stableLeadIdFromDb(r.id),
+                  date: String(rawData.date || ''),
+                  clientFirstName: String(rawData.clientFirstName || ''),
+                  clientLastName: String(rawData.clientLastName || ''),
+                  clientAddress: String(rawData.clientAddress || ''),
+                  clientCity: String(rawData.clientCity || ''),
+                  clientState: String(rawData.clientState || ''),
+                  clientZip: String(rawData.clientZip || ''),
+                  clientPhone: String(rawData.clientPhone || ''),
+                  clientEmail: String(rawData.clientEmail || ''),
+                  clientJobNumber: String(rawData.clientJobNumber || ''),
+                  squares: String(rawData.squares || ''),
+                  layers: String(rawData.layers || ''),
+                  waste: String(rawData.waste || ''),
+                  pitch: String(rawData.pitch || ''),
+                  stories: String(rawData.stories || ''),
+                  fasciaLF: String(rawData.fasciaLF || ''),
+                  deckingSheets: String(rawData.deckingSheets || ''),
+                  deckingOsbSheets: String(rawData.deckingOsbSheets || ''),
+                  deckingCdxSheets: String(rawData.deckingCdxSheets || ''),
+                  solarPanels: String(rawData.solarPanels || ''),
+                  hvacUnits: String(rawData.hvacUnits || ''),
+                  skylights: String(rawData.skylights || ''),
+                  ridgeVentLF: String(rawData.ridgeVentLF || ''),
+                  gutterMode:
+                    rawData.gutterMode === 'dr' || rawData.gutterMode === 'rr'
+                      ? rawData.gutterMode
+                      : 'none',
+                  gutterLF: String(rawData.gutterLF || ''),
+                  selectedShingle:
+                    (rawData.selectedShingle as ShingleType) ||
+                    (String(r.material || '') as ShingleType) ||
+                    '',
+                  cambridgeColor: String(rawData.cambridgeColor || ''),
+                  dynastyColor: String(rawData.dynastyColor || ''),
+                  armourshakeColor: String(rawData.armourshakeColor || ''),
+                  selectedUnderlayment:
+                    (rawData.selectedUnderlayment as Underlayment) || '',
+                  fasciaMode: (rawData.fasciaMode as FasciaMode) || '',
+                  deckingMode: (rawData.deckingMode as DeckingMode) || '',
+                  fasciaType: (rawData.fasciaType as FasciaType) || '',
+                  modifiedBitumenSquares: String(
+                    rawData.modifiedBitumenSquares || ''
+                  ),
+                  modifiedBitumenColor: String(
+                    rawData.modifiedBitumenColor || ''
+                  ),
+                  dripEdgeColor: String(rawData.dripEdgeColor || ''),
+                  notes: String(rawData.notes || ''),
+                  total: Number(rawData.total) || 0,
+                  negotiatedPrice: Number(rawData.negotiatedPrice) || 0,
+                  originalTotalForBuffer:
+                    Number(rawData.originalTotalForBuffer) || 0,
+                  measurementId: rawData.measurementId,
+                  supabaseId: r.id != null ? String(r.id) : undefined,
+                };
+                if (!byLead[leadKey]) byLead[leadKey] = [];
+                byLead[leadKey].push(est);
+              }
+              for (const lead of fromDb) {
+                const key = lead.supabaseId || String(lead.id);
+                if (byLead[key]?.length) {
+                  lead.estimates = byLead[key];
+                }
+              }
+            }
+
+            setLeads(fromDb);
+            try {
+              localStorage.setItem('summitLeads', JSON.stringify(fromDb));
+            } catch {
+              /* ignore quota */
+            }
+            console.log(
+              'Loaded',
+              fromDb.length,
+              'leads and estimates from Supabase'
+            );
+          } catch (err) {
+            console.error('Supabase bootstrap error:', err);
+          }
+        })();
+      }
+
+      // --- price_sheet + cost_sheet: Supabase is source of truth ---
+      try {
+        const cached = localStorage.getItem('summitPriceSheet');
+        if (cached) {
+          const parsed = JSON.parse(cached) as Record<string, number>;
+          if (parsed && typeof parsed === 'object') {
+            setPriceSheet(parsed);
+            setPricesReady(true);
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+      try {
+        const cachedCost = localStorage.getItem('summitCostSheet');
+        if (cachedCost) {
+          const parsed = JSON.parse(cachedCost) as Record<string, number>;
+          if (parsed && typeof parsed === 'object') {
+            setCostSheet(parsed);
+            setCostsReady(true);
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+
+      if (supabaseEnabled && supabase) {
+        void supabase
+          .from('price_sheet')
+          .select('item_key, price, region, active')
+          .then(({ data, error }) => {
+            if (error) {
+              console.error(
+                'price_sheet fetch error:',
+                JSON.stringify(error, null, 2)
+              );
+              setPricesReady(true);
+              return;
+            }
+            // Filter active in JS (column type / RLS can be picky with .eq)
+            const rows = (data || []).filter(
+              (row: { active?: boolean | null }) => row.active !== false
+            );
+            if (rows.length > 0) {
+              const map: Record<string, number> = {};
+              rows.forEach(
+                (row: {
+                  item_key?: string;
+                  price?: number;
+                  region?: string;
+                }) => {
+                  if (row.item_key == null || row.price == null) return;
+                  const price = Number(row.price) || 0;
+                  const reg = normalizePricingRegion(row.region);
+                  const key = String(row.item_key);
+                  map[`${key}__${reg}`] = price;
+                  // Also store legacy aliases so older DB values (phx/tuc/north) still resolve
+                  const rawReg = String(row.region || 'central')
+                    .toLowerCase()
+                    .trim();
+                  if (rawReg && rawReg !== reg) {
+                    map[`${key}__${rawReg}`] = price;
+                  }
+                  // Plain key = Central (or first-seen) for legacy getSellPrice callers
+                  if (reg === 'central' || map[key] == null) {
+                    map[key] = price;
+                  }
+                }
+              );
+              setPriceSheet(map);
+              try {
+                localStorage.setItem('summitPriceSheet', JSON.stringify(map));
+              } catch {
+                /* ignore */
+              }
+              setPricesReady(true);
+              console.log(
+                'Loaded',
+                rows.length,
+                'prices from Supabase price_sheet (regional)'
+              );
+            } else {
+              setPricesReady(true);
+            }
+          });
+
+        void supabase
+          .from('cost_sheet')
+          .select('item_key, cost, region, active')
+          .then(({ data, error }) => {
+            if (error) {
+              console.error(
+                'cost_sheet fetch error:',
+                JSON.stringify(error, null, 2)
+              );
+              setCostsReady(true);
+              return;
+            }
+            const rows = (data || []).filter(
+              (row: { active?: boolean | null }) => row.active !== false
+            );
+            const map: Record<string, number> = {};
+            rows.forEach(
+              (row: {
+                item_key?: string;
+                cost?: number;
+                region?: string;
+              }) => {
+                if (row.item_key == null || row.cost == null) return;
+                const cost = Number(row.cost);
+                if (!Number.isFinite(cost)) return;
+                const key = String(row.item_key);
+                const rawReg = String(row.region ?? 'all')
+                  .toLowerCase()
+                  .trim();
+                // region all / blank → plain key (shared materials) + __all
+                if (!rawReg || rawReg === 'all' || rawReg === '*') {
+                  map[key] = cost;
+                  map[`${key}__all`] = cost;
+                  return;
+                }
+                const reg = normalizePricingRegion(rawReg);
+                map[`${key}__${reg}`] = cost;
+                if (rawReg && rawReg !== reg) {
+                  map[`${key}__${rawReg}`] = cost;
+                }
+                // Prefer central as plain key; else first-seen only
+                if (reg === 'central' || map[key] == null) {
+                  map[key] = cost;
+                }
+              }
+            );
+            // Ensure __all materials always available as plain keys
+            Object.keys(map).forEach((k) => {
+              if (k.endsWith('__all')) {
+                const plain = k.slice(0, -5);
+                if (map[plain] == null) map[plain] = map[k];
+              }
+            });
+            setCostSheet(map);
+            try {
+              localStorage.setItem('summitCostSheet', JSON.stringify(map));
+            } catch {
+              /* ignore */
+            }
+            setCostsReady(true);
+            console.log(
+              'Loaded',
+              rows.length,
+              'costs from Supabase cost_sheet (regional + all)'
+            );
+          });
+      } else {
+        setPricesReady(true);
+        setCostsReady(true);
       }
 
       setEstimateDate(
@@ -930,7 +2881,7 @@ export default function SummitApp() {
     } finally {
       setSessionReady(true);
     }
-  }, []);
+  }, [supabase, supabaseEnabled]);
 
   // Persist navigation only after bootstrap (don't overwrite stored tab with default)
   useEffect(() => {
@@ -1145,17 +3096,36 @@ export default function SummitApp() {
   const solarCount = parseFloat(solarPanels) || 0;
   const isTwoStory = stories === '2';
 
-  // Material (includes MB adders)
+  /** Mod-bit is on THIS estimate (main flat product or optional low-slope type). */
+  const summitIsModBit =
+    flatSystem === 'mod_bit' ||
+    selectedShingle === 'mod_bitumen' ||
+    (lowSlopeMode !== 'none' && lowSlopeType === 'mod_bitumen');
+  // Main mod-bit job may use squares; optional low-slope uses modifiedBitumenSquares only
+  const mbMaterialSq = summitIsModBit
+    ? mbSq > 0
+      ? mbSq
+      : flatSystem === 'mod_bit' || selectedShingle === 'mod_bitumen'
+        ? sq
+        : 0
+    : 0;
+
+  // Material (includes MB: 1 base ply + SA cap only when mod-bit is on THIS estimate)
   let realMaterial = 0;
   if (selectedShingle === 'dynasty') realMaterial += sq * 31.33 * 3;
   if (selectedShingle === 'cambridge') realMaterial += sq * 29.67 * 3;
   if (selectedShingle === 'armourshake') realMaterial += sq * 48 * 5;
   realMaterial += ridge * 6;
-  realMaterial += mbSq * 123;
-  realMaterial += (mbSq * 2) * 126;
+  if (mbMaterialSq > 0) {
+    const capCost = getCost('mb_cap_sheet', 123);
+    const baseCost = getCost('mb_base_ply', 126);
+    realMaterial += mbMaterialSq * capCost;
+    realMaterial += mbMaterialSq * baseCost; // 1 base ply (not 2)
+  }
 
   // Labor (includes HVAC / solar adders)
-  let realLabor = sq * 100;
+  const laborPerSq = defaultLaborPerSq();
+  let realLabor = sq * laborPerSq;
   if (ly > 1) realLabor += sq * 10 * (ly - 1);
   if (['8/12', '9/12', '10/12', '11/12', '12/12'].includes(pt)) realLabor += sq * 10;
   if (isTwoStory) realLabor += sq * 10;
@@ -1169,8 +3139,12 @@ export default function SummitApp() {
     const sheetsNeededCalc = Math.ceil(roofAreaSqFt / 32);
     const extra = Math.max(0, sheetsNeededCalc - 2);
     realLabor += extra * 20;
-  } else if (deckingMode === 'repair' && dsh > 2) {
-    realLabor += (dsh - 2) * 20;
+  } else if (deckingMode === 'repair') {
+    const osbN = parseFloat(deckingOsbSheets || '0') || 0;
+    const cdxN = parseFloat(deckingCdxSheets || '0') || 0;
+    const totalSheets = osbN + cdxN;
+    const extraSheets = Math.max(0, totalSheets - 2);
+    realLabor += extraSheets * 20;
   }
   realLabor += ridge * 2;
   realLabor += hvacCount * 1500;
@@ -1185,8 +3159,11 @@ export default function SummitApp() {
         : selectedShingle === 'armourshake'
           ? sq * 48 * 5
           : 0;
-  const mbCapMaterial = mbSq * 123;
-  const mbBasePlyMaterial = (mbSq * 2) * 126;
+  const mbCapMaterial =
+    mbMaterialSq > 0 ? mbMaterialSq * getCost('mb_cap_sheet', 123) : 0;
+  // One base ply only (never 2 layers)
+  const mbBasePlyMaterial =
+    mbMaterialSq > 0 ? mbMaterialSq * getCost('mb_base_ply', 126) : 0;
   const ridgeMaterial = ridge * 6;
   const hvacLaborCost = hvacCount * 1500;
   const solarLaborCost = solarCount * 100;
@@ -1275,10 +3252,14 @@ export default function SummitApp() {
       stories,
       fasciaLF,
       deckingSheets,
+      deckingOsbSheets,
+      deckingCdxSheets,
       solarPanels,
       hvacUnits,
       skylights,
       ridgeVentLF,
+      gutterMode,
+      gutterLF,
       selectedShingle,
       cambridgeColor,
       dynastyColor,
@@ -1324,8 +3305,7 @@ export default function SummitApp() {
       setCurrentLeadId(newLead.id);
       setEstimatorSourceLeadId(newLead.id);
     }
-    setLeads(updatedLeads);
-    localStorage.setItem('summitLeads', JSON.stringify(updatedLeads));
+    persistLeads(updatedLeads);
     setHasUnsavedChanges(false);
     showToast('Estimate saved to lead');
   };
@@ -1350,12 +3330,27 @@ export default function SummitApp() {
     setStories('');
     setFasciaLF('');
     setDeckingSheets('');
+    setDeckingOsbSheets('');
+    setDeckingCdxSheets('');
     setSolarPanels('');
     setHvacUnits('');
     setSkylights('');
     setRidgeVentLF('');
+    setGutterMode('none');
+    setGutterLF('');
     setNotes('');
     setSelectedShingle('');
+    setFlatSystem('');
+    setCoatingKind('');
+    setFoamKind('');
+    setFoamIso48('');
+    setFoamIso44('');
+    setFoamGranules(false);
+    setFoamExtraSpf(false);
+    setFoamScarify(false);
+    setCoatingExtraPass(false);
+    setCoatingPressureWash(false);
+    setProductColors({});
     setCambridgeColor('');
     setDynastyColor('');
     setArmourshakeColor('');
@@ -1897,25 +3892,104 @@ export default function SummitApp() {
 
   const deleteRoofMeasurement = (measurementId: string) => {
     if (!currentLeadId) return;
-    if (!confirm('Delete this measurement?')) return;
-    const updated = leads.map((lead) =>
-      lead.id === currentLeadId
+    if (!confirm('Move this measurement to trash?')) return;
+    const lead = leads.find((l) => l.id === currentLeadId);
+    const measurement = lead?.measurements?.find((m) => m.id === measurementId);
+    if (!lead || !measurement) return;
+    const updated = leads.map((l) =>
+      l.id === currentLeadId
         ? {
-            ...lead,
-            measurements: (lead.measurements || []).filter((m) => m.id !== measurementId),
+            ...l,
+            measurements: (l.measurements || []).filter(
+              (m) => m.id !== measurementId
+            ),
           }
-        : lead
+        : l
     );
     persistLeads(updated);
+    persistTrash([
+      {
+        id: `${Date.now()}-roof-${measurementId}`,
+        kind: 'roofMeasurement',
+        deletedAt: new Date().toLocaleString(),
+        leadId: currentLeadId,
+        leadLabel: leadLabelFor(lead),
+        measurement,
+      },
+      ...trash,
+    ]);
     if (selectedMeasurementId === measurementId) setSelectedMeasurementId(null);
     if (activeMeasurementId === measurementId) setActiveMeasurementId(null);
-    showToast('Measurement deleted');
+    
+  showToast('Moved to trash');
+  };
+
+  /** Soft-delete a single estimate → app trash */
+  const removeLeadEstimate = (estimateId: number) => {
+    if (!currentLeadId) return;
+    if (!confirm('Move this estimate to trash?')) return;
+    const lead = leads.find((l) => l.id === currentLeadId);
+    if (!lead) return;
+    const estimate = (lead.estimates || []).find((e) => e.id === estimateId);
+    if (!estimate) return;
+
+    const updated = leads.map((l) =>
+      l.id === currentLeadId
+        ? { ...l, estimates: (l.estimates || []).filter((e) => e.id !== estimateId) }
+        : l
+    );
+    persistLeads(updated);
+
+    persistTrash([
+      {
+        id: `${Date.now()}-est`,
+        kind: 'estimate',
+        deletedAt: new Date().toLocaleString(),
+        leadId: currentLeadId,
+        leadLabel: leadLabelFor(lead),
+        estimate,
+      },
+      ...trash,
+    ]);
+    showToast('Estimate moved to trash');
+  };
+
+  /** Soft-delete a single note by index → app trash (LeadNote has no stable id). */
+  const removeLeadNote = (noteIndex: number) => {
+    if (!currentLeadId) return;
+    if (!confirm('Move this note to trash?')) return;
+    const lead = leads.find((l) => l.id === currentLeadId);
+    if (!lead) return;
+    const notes = lead.notes || [];
+    if (noteIndex < 0 || noteIndex >= notes.length) return;
+    const note = notes[noteIndex];
+
+    const updated = leads.map((l) =>
+      l.id === currentLeadId
+        ? { ...l, notes: notes.filter((_, i) => i !== noteIndex) }
+        : l
+    );
+    persistLeads(updated);
+
+    persistTrash([
+      {
+        id: `${Date.now()}-note`,
+        kind: 'note',
+        deletedAt: new Date().toLocaleString(),
+        leadId: currentLeadId,
+        leadLabel: leadLabelFor(lead),
+        note,
+      },
+      ...trash,
+    ]);
+    showToast('Note moved to trash');
   };
 
   /** Open estimate (or internal) workspace inside a lead profile. */
   const enterLeadEstimator = (
     leadId: number,
-    workspace: EstimateWorkspace = 'estimate'
+    workspace: EstimateWorkspace = 'estimate',
+    opts?: { flow?: 'pick' | 'estimate' }
   ) => {
     setShowEstimatePicker(false);
     setShowProfessionalEstimate(false);
@@ -1925,6 +3999,7 @@ export default function SummitApp() {
     setCurrentLeadId(leadId);
     setIsEditingLead(true);
     setActiveTab('leads');
+    setEstimateFlow(opts?.flow ?? 'pick');
     setProfileTab('estimator');
     setEstimateWorkspace(workspace);
   };
@@ -2078,11 +4153,77 @@ export default function SummitApp() {
     setStories((estimate.stories as '1' | '2' | '') || '');
     setFasciaLF(estimate.fasciaLF || '');
     setDeckingSheets(estimate.deckingSheets || '');
+    setDeckingOsbSheets(estimate.deckingOsbSheets || '');
+    setDeckingCdxSheets(estimate.deckingCdxSheets || '');
     setSolarPanels(estimate.solarPanels || '');
     setHvacUnits(estimate.hvacUnits || '');
     setSkylights(estimate.skylights || '');
     setRidgeVentLF(estimate.ridgeVentLF || '');
-    setSelectedShingle(estimate.selectedShingle || '');
+    setGutterMode(
+      estimate.gutterMode === 'dr' || estimate.gutterMode === 'rr'
+        ? estimate.gutterMode
+        : 'none'
+    );
+    setGutterLF(estimate.gutterLF || '');
+    const product = String(estimate.selectedShingle || '');
+    setSelectedShingle((product as ShingleType) || '');
+    // Infer roof system + flat tree from saved product
+    if (
+      product.startsWith('tile') ||
+      product === 'sa_underlayment' ||
+      product === 'sa-high-temp'
+    ) {
+      setRoofSystem('tile');
+      setFlatSystem('');
+      setCoatingKind('');
+      setFoamKind('');
+    } else if (
+      [
+        'coating',
+        'elastomeric',
+        'silicone',
+        'urethane',
+        'full_foam',
+        'foam_overlay',
+        'mod_bitumen',
+        'bur',
+      ].includes(product)
+    ) {
+      setRoofSystem('flat');
+      if (product === 'mod_bitumen') {
+        setFlatSystem('mod_bit');
+        setCoatingKind('');
+        setFoamKind('');
+      } else if (product === 'bur') {
+        setFlatSystem('bur');
+        setCoatingKind('');
+        setFoamKind('');
+      } else if (product === 'full_foam') {
+        setFlatSystem('foam');
+        setFoamKind('full');
+        setCoatingKind('');
+      } else if (product === 'foam_overlay') {
+        setFlatSystem('foam');
+        setFoamKind('overlay');
+        setCoatingKind('');
+      } else if (
+        product === 'elastomeric' ||
+        product === 'silicone' ||
+        product === 'urethane' ||
+        product === 'coating'
+      ) {
+        setFlatSystem('coating');
+        setCoatingKind(
+          product === 'coating' ? 'elastomeric' : (product as CoatingKind)
+        );
+        setFoamKind('');
+      }
+    } else {
+      setRoofSystem('shingle');
+      setFlatSystem('');
+      setCoatingKind('');
+      setFoamKind('');
+    }
     setCambridgeColor(estimate.cambridgeColor || '');
     setDynastyColor(estimate.dynastyColor || '');
     setArmourshakeColor(estimate.armourshakeColor || '');
@@ -2104,7 +4245,7 @@ export default function SummitApp() {
     if (linkId != null) {
       const lead = leads.find((l) => l.id === linkId);
       if (lead) applyLeadFields(lead);
-      enterLeadEstimator(linkId, 'estimate');
+      enterLeadEstimator(linkId, 'estimate', { flow: 'estimate' });
     } else {
       // Unlinked legacy estimate — show snapshot only as last resort
       setClientFirstName(estimate.clientFirstName || '');
@@ -2117,6 +4258,7 @@ export default function SummitApp() {
       setClientEmail(estimate.clientEmail || '');
       setClientJobNumber(estimate.clientJobNumber || '');
       setIsEditingLead(true);
+      setEstimateFlow('estimate');
       setProfileTab('estimator');
       setEstimateWorkspace('estimate');
     }
@@ -2180,12 +4322,26 @@ export default function SummitApp() {
     stories,
     fasciaLF,
     deckingSheets,
+    deckingOsbSheets,
+    deckingCdxSheets,
     solarPanels,
     hvacUnits,
     skylights,
     ridgeVentLF,
+    gutterMode,
+    gutterLF,
     notes,
     selectedShingle,
+    flatSystem,
+    coatingKind,
+    foamKind,
+    foamIso48,
+    foamIso44,
+    foamGranules,
+    foamExtraSpf,
+    foamScarify,
+    coatingExtraPass,
+    coatingPressureWash,
     cambridgeColor,
     dynastyColor,
     armourshakeColor,
@@ -2206,7 +4362,112 @@ export default function SummitApp() {
 
   const persistLeads = (updated: Lead[]) => {
     setLeads(updated);
-    localStorage.setItem('summitLeads', JSON.stringify(updated));
+    try {
+      localStorage.setItem('summitLeads', JSON.stringify(updated));
+    } catch {
+      /* ignore quota */
+    }
+
+    // Best-effort cloud write: leads (+ new estimates only)
+    if (supabaseEnabled && supabase) {
+      void (async () => {
+        for (const lead of updated) {
+          try {
+            const payload = mapAppLeadToDb(lead);
+            let cloudLeadId = lead.supabaseId?.trim() || '';
+
+            if (cloudLeadId) {
+              const { error } = await supabase
+                .from('leads')
+                .update(payload)
+                .eq('id', cloudLeadId);
+              if (error) console.error('Supabase lead update error:', error);
+            } else {
+              const { data, error } = await supabase
+                .from('leads')
+                .insert(payload)
+                .select('id')
+                .single();
+              if (error) {
+                console.error('Supabase lead insert error:', error);
+                continue;
+              }
+              if (data?.id) {
+                cloudLeadId = String(data.id);
+                setLeads((prev) => {
+                  const next = prev.map((l) =>
+                    l.id === lead.id && !l.supabaseId
+                      ? { ...l, supabaseId: cloudLeadId }
+                      : l
+                  );
+                  try {
+                    localStorage.setItem('summitLeads', JSON.stringify(next));
+                  } catch {
+                    /* ignore */
+                  }
+                  return next;
+                });
+              }
+            }
+
+            if (!cloudLeadId || !Array.isArray(lead.estimates)) continue;
+
+            // Only insert estimates that have not been synced yet
+            for (const est of lead.estimates) {
+              if (est.supabaseId) continue;
+              try {
+                const estPayload = {
+                  lead_id: cloudLeadId,
+                  type: 'roof',
+                  material: est.selectedShingle || null,
+                  rate: null as number | null,
+                  labor: null as number | null,
+                  status: 'saved',
+                  data: est,
+                  updated_at: new Date().toISOString(),
+                };
+                const { data: estRow, error: estErr } = await supabase
+                  .from('estimates')
+                  .insert(estPayload)
+                  .select('id')
+                  .single();
+                if (estErr) {
+                  console.error('Supabase estimate insert error:', estErr);
+                  continue;
+                }
+                if (estRow?.id) {
+                  const estCloudId = String(estRow.id);
+                  setLeads((prev) => {
+                    const next = prev.map((l) => {
+                      if (l.id !== lead.id) return l;
+                      return {
+                        ...l,
+                        supabaseId: l.supabaseId || cloudLeadId,
+                        estimates: (l.estimates || []).map((e) =>
+                          e.id === est.id && !e.supabaseId
+                            ? { ...e, supabaseId: estCloudId }
+                            : e
+                        ),
+                      };
+                    });
+                    try {
+                      localStorage.setItem('summitLeads', JSON.stringify(next));
+                    } catch {
+                      /* ignore */
+                    }
+                    return next;
+                  });
+                }
+              } catch (e) {
+                console.error('Estimate sync error:', e);
+              }
+            }
+          } catch (err) {
+            console.error('Supabase persist error:', err);
+          }
+        }
+      })();
+    }
   };
 
   const refreshGcalStatus = async () => {
@@ -2506,6 +4767,13 @@ export default function SummitApp() {
     setClientZip(lead.clientZip || '');
     setClientPhone(displayPhoneUS(lead.clientPhone || ''));
     setClientEmail(lead.clientEmail || '');
+    setAdditionalContacts(
+      normalizeAdditionalContacts(lead.additionalContacts).map((c) => ({
+        ...c,
+        phone: c.phone ? displayPhoneUS(c.phone) || c.phone : '',
+      }))
+    );
+    setFinancialWorksheet(resolveFinancialWorksheet(lead));
     setClientJobNumber(lead.jobNumber || '');
     setLeadCompany(lead.company || '');
     setMailingSameAsBilling(lead.mailingSameAsBilling ?? true);
@@ -2530,6 +4798,11 @@ export default function SummitApp() {
     setPolicyNumber(lead.policyNumber || '');
     setFollowUpDate(lead.followUpDate || '');
     setLeadCategory(normalizePipelineStage(lead.category));
+    setTakeoffForm(
+      lead.takeoff && typeof lead.takeoff === 'object'
+        ? { ...emptyTakeoff(), ...lead.takeoff }
+        : emptyTakeoff()
+    );
     setLeadNoteDraft('');
     setCurrentLeadId(lead.id);
     setLightboxPhoto(null);
@@ -2575,75 +4848,402 @@ export default function SummitApp() {
     setProfileTab('overview');
   };
 
+  /** Next job number: PREFIX-YEAR#### e.g. S-20260001 (prefix from app_settings) */
+  const generateJobNumber = async (): Promise<string> => {
+    const year = new Date().getFullYear();
+    let prefix = 'S';
+    try {
+      if (supabaseEnabled && supabase) {
+        const { data: pref } = await supabase
+          .from('app_settings')
+          .select('value')
+          .eq('key', 'job_number_prefix')
+          .maybeSingle();
+        if (pref?.value != null) {
+          const v = pref.value;
+          prefix =
+            typeof v === 'string'
+              ? v.replace(/"/g, '').trim() || 'S'
+              : String(v);
+        }
+      }
+    } catch {
+      /* ignore — use default prefix */
+    }
+
+    // Match S-20260001 or legacy S-2026-0001
+    const seqFromJob = (job: string) => {
+      const compact = job.match(
+        new RegExp(`^${prefix}-${year}(\\d+)$`)
+      );
+      if (compact) return parseInt(compact[1], 10);
+      const legacy = job.match(
+        new RegExp(`^${prefix}-${year}-(\\d+)$`)
+      );
+      if (legacy) return parseInt(legacy[1], 10);
+      return 0;
+    };
+
+    let seq = 1;
+    try {
+      if (supabaseEnabled && supabase) {
+        const { data: rows } = await supabase
+          .from('leads')
+          .select('job_number')
+          .like('job_number', `${prefix}-${year}%`);
+        if (rows && rows.length > 0) {
+          const nums = rows
+            .map((r: { job_number?: string }) =>
+              seqFromJob(String(r.job_number || ''))
+            )
+            .filter((n: number) => n > 0);
+          if (nums.length) seq = Math.max(...nums) + 1;
+        }
+      } else {
+        // Offline: derive from local leads
+        const nums = leads
+          .map((l) => seqFromJob(String(l.jobNumber || '')))
+          .filter((n) => n > 0);
+        if (nums.length) seq = Math.max(...nums) + 1;
+      }
+    } catch {
+      /* ignore */
+    }
+
+    return `${prefix}-${year}${String(seq).padStart(4, '0')}`;
+  };
+
   const addNewLead = () => {
-    const newLead = createEmptyLead({
-      category: 'Lead',
-      clientFirstName: '',
-      clientLastName: '',
-    });
-    const updated = [newLead, ...leads];
-    persistLeads(updated);
-    showToast('New lead created — opening profile');
-    setLeadsView('active');
-    setLeadsSearch('');
-    window.setTimeout(() => {
-      openLeadProfile(newLead.id, newLead);
-    }, 80);
+    void (async () => {
+      const jobNumber = await generateJobNumber();
+      const newLead = createEmptyLead({
+        category: 'Lead',
+        clientFirstName: '',
+        clientLastName: '',
+        jobNumber,
+      });
+      const updated = [newLead, ...leads];
+      persistLeads(updated);
+      showToast(`New lead ${jobNumber} — opening profile`);
+      setLeadsView('active');
+      setLeadsSearch('');
+      window.setTimeout(() => {
+        openLeadProfile(newLead.id, newLead);
+      }, 80);
+    })();
   };
 
   const createNewLead = addNewLead;
 
+  const persistTrash = (next: AppTrashItem[]) => {
+    // Never accidentally wipe on bad data
+    const safe = Array.isArray(next) ? next.filter(Boolean) : [];
+    setTrash(safe);
+    try {
+      localStorage.setItem('summitTrash', JSON.stringify(safe));
+    } catch (e) {
+      console.error('persistTrash failed', e);
+    }
+  };
+
   const moveToTrash = (leadId: number) => {
     const leadToMove = leads.find((l) => l.id === leadId);
     if (!leadToMove) return;
-    if (
-      !confirm(
-        `Move “${[leadToMove.clientFirstName, leadToMove.clientLastName].filter(Boolean).join(' ') || 'this lead'}” to trash?`
-      )
-    ) {
+    const label =
+      [leadToMove.clientFirstName, leadToMove.clientLastName]
+        .filter(Boolean)
+        .join(' ') || 'this lead';
+    if (!confirm(`Move “${label}” to trash?`)) {
       return;
     }
     const newLeads = leads.filter((l) => l.id !== leadId);
-    const newTrash = [...trash, leadToMove];
+    const item: AppTrashItem = {
+      id: `lead-${leadId}-${Date.now()}`,
+      kind: 'lead',
+      deletedAt: new Date().toLocaleString(),
+      lead: leadToMove,
+    };
+    const newTrash = [item, ...trash];
     setLeads(newLeads);
-    setTrash(newTrash);
-    localStorage.setItem('summitLeads', JSON.stringify(newLeads));
-    localStorage.setItem('summitTrash', JSON.stringify(newTrash));
+    persistTrash(newTrash);
+    try {
+      localStorage.setItem('summitLeads', JSON.stringify(newLeads));
+    } catch {
+      /* ignore */
+    }
     if (currentLeadId === leadId) {
       setIsEditingLead(false);
       setCurrentLeadId(null);
       setLightboxPhoto(null);
     }
+
+    if (supabaseEnabled && supabase) {
+      const cloudId = leadToMove.supabaseId?.trim();
+      if (cloudId) {
+        void (async () => {
+          try {
+            const { error: estErr } = await supabase
+              .from('estimates')
+              .delete()
+              .eq('lead_id', cloudId);
+            if (estErr) console.error('Supabase estimates delete error:', estErr);
+            const { error } = await supabase
+              .from('leads')
+              .delete()
+              .eq('id', cloudId);
+            if (error) console.error('Supabase lead delete error:', error);
+          } catch (err) {
+            console.error('Supabase trash error:', err);
+          }
+        })();
+      }
+    }
+
     showToast('Lead moved to trash');
   };
 
-  const restoreFromTrash = (leadId: number) => {
-    const leadToRestore = trash.find((l) => l.id === leadId);
-    if (!leadToRestore) return;
-    const newTrash = trash.filter((l) => l.id !== leadId);
-    const newLeads = [...leads, leadToRestore];
-    setTrash(newTrash);
+  const restoreFromTrash = (trashId: string) => {
+    const item = trash.find((t) => t.id === trashId);
+    if (!item) return;
+    const newTrash = trash.filter((t) => t.id !== trashId);
+
+    if (item.kind === 'lead') {
+      const leadId = item.lead.id;
+      const restored: Lead = {
+        ...item.lead,
+        supabaseId: undefined,
+        estimates: (item.lead.estimates || []).map((e) => ({
+          ...e,
+          supabaseId: undefined,
+        })),
+      };
+      const newLeads = [...leads, restored];
+      persistTrash(newTrash);
+      setLeads(newLeads);
+      try {
+        localStorage.setItem('summitLeads', JSON.stringify(newLeads));
+      } catch {
+        /* ignore */
+      }
+
+      if (supabaseEnabled && supabase) {
+        void (async () => {
+          try {
+            const payload = mapAppLeadToDb(restored);
+            const { data, error } = await supabase
+              .from('leads')
+              .insert(payload)
+              .select('id')
+              .single();
+            if (error) {
+              console.error('Supabase restore error:', error);
+              return;
+            }
+            if (!data?.id) return;
+            const cloudLeadId = String(data.id);
+            const estList = restored.estimates || [];
+            const estIdMap = new Map<number, string>();
+            for (const est of estList) {
+              const estPayload = {
+                lead_id: cloudLeadId,
+                type: 'roof',
+                material: est.selectedShingle || null,
+                rate: null as number | null,
+                labor: null as number | null,
+                status: 'saved',
+                data: est,
+                updated_at: new Date().toISOString(),
+              };
+              const { data: estRow, error: estErr } = await supabase
+                .from('estimates')
+                .insert(estPayload)
+                .select('id')
+                .single();
+              if (estErr) {
+                console.error('Supabase estimate restore error:', estErr);
+              } else if (estRow?.id) {
+                estIdMap.set(est.id, String(estRow.id));
+              }
+            }
+            setLeads((prev) => {
+              const next = prev.map((l) => {
+                if (l.id !== leadId) return l;
+                return {
+                  ...l,
+                  supabaseId: cloudLeadId,
+                  estimates: (l.estimates || []).map((e) =>
+                    estIdMap.has(e.id)
+                      ? { ...e, supabaseId: estIdMap.get(e.id) }
+                      : e
+                  ),
+                };
+              });
+              try {
+                localStorage.setItem('summitLeads', JSON.stringify(next));
+              } catch {
+                /* ignore */
+              }
+              return next;
+            });
+          } catch (err) {
+            console.error('Supabase restore error:', err);
+          }
+        })();
+      }
+      showToast('Lead restored');
+      return;
+    }
+
+    // Media / map measurement restore onto lead
+    const leadId = item.leadId;
+    const lead = leads.find((l) => l.id === leadId);
+    if (!lead) {
+      showToast('Original lead not found — restore failed');
+      return;
+    }
+    let nextLead: Lead = lead;
+    if (item.kind === 'photo') {
+      nextLead = {
+        ...lead,
+        photos: [...(lead.photos || []), item.photo],
+      };
+    } else if (item.kind === 'roofMeasurement') {
+      nextLead = {
+        ...lead,
+        measurements: [...(lead.measurements || []), item.measurement],
+      };
+    } else if (item.kind === 'estimate') {
+      nextLead = {
+        ...lead,
+        estimates: [...(lead.estimates || []), item.estimate],
+      };
+    } else if (item.kind === 'note') {
+      nextLead = {
+        ...lead,
+        notes: [...(lead.notes || []), item.note],
+      };
+    } else {
+      nextLead = {
+        ...lead,
+        documents: [...(lead.documents || []), item.document],
+      };
+      if (item.kind === 'measurement') {
+        nextLead = {
+          ...nextLead,
+          measurementReports: [
+            ...(lead.measurementReports || []),
+            item.document,
+          ],
+        };
+      }
+    }
+    const newLeads = leads.map((l) => (l.id === leadId ? nextLead : l));
     setLeads(newLeads);
-    localStorage.setItem('summitLeads', JSON.stringify(newLeads));
-    localStorage.setItem('summitTrash', JSON.stringify(newTrash));
-    showToast('Lead restored');
+    persistTrash(newTrash);
+    try {
+      localStorage.setItem('summitLeads', JSON.stringify(newLeads));
+    } catch {
+      /* ignore */
+    }
+    showToast('Restored');
   };
 
-  const permanentlyDelete = (leadId: number) => {
-    if (!confirm('Permanently delete this lead? This cannot be undone.')) return;
-    const newTrash = trash.filter((l) => l.id !== leadId);
-    setTrash(newTrash);
-    localStorage.setItem('summitTrash', JSON.stringify(newTrash));
-    showToast('Lead permanently deleted');
+  const permanentlyDelete = (trashId: string) => {
+    if (!confirm('Permanently delete? This cannot be undone.')) return;
+    const doomed = trash.find((t) => t.id === trashId);
+    const newTrash = trash.filter((t) => t.id !== trashId);
+    persistTrash(newTrash);
+
+    if (doomed?.kind === 'lead') {
+      const cloudId = doomed.lead.supabaseId?.trim();
+      if (supabaseEnabled && supabase && cloudId) {
+        void (async () => {
+          try {
+            await supabase.from('estimates').delete().eq('lead_id', cloudId);
+            await supabase.from('leads').delete().eq('id', cloudId);
+          } catch (err) {
+            console.error('Supabase permanent delete error:', err);
+          }
+        })();
+      }
+      showToast('Lead permanently deleted');
+      return;
+    }
+
+    if (supabaseEnabled && supabase && doomed) {
+      try {
+        if (doomed.kind === 'photo' && doomed.photo.url) {
+          const marker = '/lead-photos/';
+          const idx = doomed.photo.url.indexOf(marker);
+          if (idx >= 0) {
+            const objectPath = decodeURIComponent(
+              doomed.photo.url.slice(idx + marker.length).split('?')[0]
+            );
+            void supabase.storage.from('lead-photos').remove([objectPath]);
+          }
+        } else if (
+          (doomed.kind === 'document' || doomed.kind === 'measurement') &&
+          doomed.document.url
+        ) {
+          const marker = '/lead-docs/';
+          const idx = doomed.document.url.indexOf(marker);
+          if (idx >= 0) {
+            const objectPath = decodeURIComponent(
+              doomed.document.url.slice(idx + marker.length).split('?')[0]
+            );
+            void supabase.storage.from('lead-docs').remove([objectPath]);
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    showToast('Permanently deleted');
   };
 
   const emptyTrash = () => {
     if (trash.length === 0) return;
-    if (!confirm(`Permanently empty trash (${trash.length} lead${trash.length === 1 ? '' : 's'})?`)) {
-      return;
+    // Confirm is handled by the Trash UI call site
+    const doomed = [...trash];
+    persistTrash([]);
+    if (supabaseEnabled && supabase) {
+      void (async () => {
+        for (const item of doomed) {
+          try {
+            if (item.kind === 'lead') {
+              const cloudId = item.lead.supabaseId?.trim();
+              if (cloudId) {
+                await supabase.from('estimates').delete().eq('lead_id', cloudId);
+                await supabase.from('leads').delete().eq('id', cloudId);
+              }
+            } else if (item.kind === 'photo' && item.photo.url) {
+              const marker = '/lead-photos/';
+              const idx = item.photo.url.indexOf(marker);
+              if (idx >= 0) {
+                const objectPath = decodeURIComponent(
+                  item.photo.url.slice(idx + marker.length).split('?')[0]
+                );
+                await supabase.storage.from('lead-photos').remove([objectPath]);
+              }
+            } else if (
+              (item.kind === 'document' || item.kind === 'measurement') &&
+              item.document.url
+            ) {
+              const marker = '/lead-docs/';
+              const idx = item.document.url.indexOf(marker);
+              if (idx >= 0) {
+                const objectPath = decodeURIComponent(
+                  item.document.url.slice(idx + marker.length).split('?')[0]
+                );
+                await supabase.storage.from('lead-docs').remove([objectPath]);
+              }
+            }
+          } catch (err) {
+            console.error('Empty trash purge error:', err);
+          }
+        }
+      })();
     }
-    setTrash([]);
-    localStorage.setItem('summitTrash', JSON.stringify([]));
     showToast('Trash emptied');
   };
   
@@ -2667,17 +5267,78 @@ export default function SummitApp() {
     showToast('Note added');
   };
 
+  /** Resize long edge + JPEG encode for smaller Storage uploads (browser canvas). */
+  const compressImageForUpload = async (
+    file: Blob,
+    maxEdge = 1920,
+    quality = 0.72
+  ): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        try {
+          let w = img.naturalWidth;
+          let h = img.naturalHeight;
+          if (w > maxEdge || h > maxEdge) {
+            const s = maxEdge / Math.max(w, h);
+            w = Math.round(w * s);
+            h = Math.round(h * s);
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            URL.revokeObjectURL(url);
+            reject(new Error('canvas'));
+            return;
+          }
+          ctx.drawImage(img, 0, 0, w, h);
+          canvas.toBlob(
+            (b) => {
+              URL.revokeObjectURL(url);
+              if (b) resolve(b);
+              else reject(new Error('toBlob'));
+            },
+            'image/jpeg',
+            quality
+          );
+        } catch (e) {
+          URL.revokeObjectURL(url);
+          reject(e);
+        }
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error('img'));
+      };
+      img.src = url;
+    });
+  };
+
   const handlePhotoFiles = async (fileList: FileList | File[]) => {
     if (!currentLeadId || photosUploading) return;
-    const imageFiles = Array.from(fileList).filter((f) => f.type.startsWith('image/'));
+    const imageFiles = Array.from(fileList).filter(
+      (f) =>
+        f.type.startsWith('image/') ||
+        /\.(heic|heif|jpg|jpeg|png|webp|gif)$/i.test(f.name)
+    );
     if (imageFiles.length === 0) {
       showToast('Please select image files');
       return;
     }
+    if (!supabaseEnabled || !supabase) {
+      showToast('Cloud storage not available — check Supabase config');
+      return;
+    }
+
+    const currentLead = leads.find((l) => l.id === currentLeadId);
+    const folderKey =
+      currentLead?.supabaseId?.trim() || String(currentLeadId);
+
     setPhotosUploading(true);
     try {
-      // Sequential read keeps memory calmer for large multi-select batches
-      const newPhotos: LeadPhoto[] = [];
       const stamp =
         new Date().toLocaleDateString('en-US', {
           month: 'short',
@@ -2685,16 +5346,115 @@ export default function SummitApp() {
           year: 'numeric',
         }) +
         ' ' +
-        new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-      for (let i = 0; i < imageFiles.length; i++) {
-        const file = imageFiles[i];
-        newPhotos.push({
-          id: `${Date.now()}-${i}-${Math.random().toString(36).slice(2, 9)}`,
-          name: file.name,
-          dataUrl: await readFileAsDataUrl(file),
-          createdAt: stamp,
+        new Date().toLocaleTimeString([], {
+          hour: 'numeric',
+          minute: '2-digit',
         });
+
+      // Parallel convert/compress/upload (cap concurrency for mobile CPU + network)
+      const concurrency = 3;
+      const slots: (LeadPhoto | null)[] = new Array(imageFiles.length).fill(null);
+      let cursor = 0;
+
+      const runOne = async (i: number) => {
+        let file = imageFiles[i];
+        const originalName = file.name;
+        const id = `${Date.now()}-${i}-${Math.random().toString(36).slice(2, 9)}`;
+        try {
+          // HEIC/HEIF → JPEG on the server (heic-convert / nodejs runtime)
+          const isHeic =
+            /image\/hei[cf]/i.test(file.type) ||
+            /\.(heic|heif)$/i.test(file.name);
+          if (isHeic) {
+            const body = new FormData();
+            body.append('file', file, originalName);
+            const res = await fetch('/api/convert-heic', {
+              method: 'POST',
+              body,
+            });
+            if (!res.ok) throw new Error(await res.text());
+            const jpegBlob = await res.blob();
+            file = new File(
+              [jpegBlob],
+              originalName.replace(/\.(heic|heif)$/i, '.jpg'),
+              { type: 'image/jpeg' }
+            );
+          }
+
+          let uploadBody: Blob = file;
+          let uploadName = file.name || originalName;
+          let contentType = file.type || 'image/jpeg';
+          const isGif =
+            /image\/gif/i.test(file.type) || /\.gif$/i.test(originalName);
+          if (!isGif) {
+            try {
+              uploadBody = await compressImageForUpload(file, 1600, 0.65);
+              uploadName = originalName.replace(
+                /\.(heic|heif|png|webp|jpe?g)$/i,
+                '.jpg'
+              );
+              if (!/\.jpe?g$/i.test(uploadName)) {
+                uploadName = `${uploadName.replace(/\.[^.]+$/, '') || 'photo'}.jpg`;
+              }
+              contentType = 'image/jpeg';
+            } catch (compErr) {
+              console.error('Compress failed, uploading original:', compErr);
+              uploadBody = file;
+              contentType = file.type || 'image/jpeg';
+              uploadName = file.name || originalName;
+            }
+          }
+
+          const ext = (uploadName.split('.').pop() || 'jpg')
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, '');
+          const storagePath = `${folderKey}/${id}.${ext || 'jpg'}`;
+
+          const { error: upErr } = await supabase.storage
+            .from('lead-photos')
+            .upload(storagePath, uploadBody, {
+              cacheControl: '3600',
+              upsert: false,
+              contentType,
+            });
+          if (upErr) {
+            console.error('Photo upload error:', upErr);
+            return;
+          }
+
+          const { data: pub } = supabase.storage
+            .from('lead-photos')
+            .getPublicUrl(storagePath);
+
+          slots[i] = {
+            id,
+            name: uploadName || originalName,
+            url: pub.publicUrl,
+            createdAt: stamp,
+          };
+        } catch (e) {
+          console.error('Photo failed:', originalName, e);
+        }
+      };
+
+      const workers = Array.from(
+        { length: Math.min(concurrency, imageFiles.length) },
+        async () => {
+          while (true) {
+            const i = cursor++;
+            if (i >= imageFiles.length) break;
+            await runOne(i);
+          }
+        }
+      );
+      await Promise.all(workers);
+      const newPhotos = slots.filter(Boolean) as LeadPhoto[];
+
+      if (newPhotos.length === 0) {
+        showToast('No photos uploaded');
+        return;
       }
+
       const updatedLeads = leads.map((lead) =>
         lead.id === currentLeadId
           ? { ...lead, photos: [...(lead.photos || []), ...newPhotos] }
@@ -2702,25 +5462,529 @@ export default function SummitApp() {
       );
       persistLeads(updatedLeads);
       showToast(
-        newPhotos.length === 1 ? '1 photo added' : `${newPhotos.length} photos added`
+        newPhotos.length === 1
+          ? 'Photo uploaded'
+          : `${newPhotos.length} photos uploaded`
       );
-    } catch {
-      showToast('Failed to read photo(s)');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to upload photo(s)');
     } finally {
       setPhotosUploading(false);
     }
   };
 
+  
+  const openPhotoReportBuilder = () => {
+    if (!currentLeadId) return;
+    const lead = leads.find((l) => l.id === currentLeadId);
+    const photos = lead?.photos || [];
+    if (photos.length === 0) {
+      showToast('Upload photos first');
+      return;
+    }
+    setPhotoReportTitle('Photo Report');
+    setPhotoReportSelected(photos.map((p) => p.id));
+    setPhotoReportCaptions({});
+    setPhotoReportOpen(true);
+  };
+
+  const togglePhotoInReport = (photoId: string) => {
+    setPhotoReportSelected((prev) =>
+      prev.includes(photoId) ? prev.filter((id) => id !== photoId) : [...prev, photoId]
+    );
+  };
+
+  const generatePhotoReportPdf = async () => {
+    if (!currentLeadId || photoReportBusy) return;
+    const lead = leads.find((l) => l.id === currentLeadId);
+    if (!lead) return;
+    const photos = lead.photos || [];
+    const chosen = photoReportSelected
+      .map((id) => photos.find((p) => p.id === id))
+      .filter(Boolean) as LeadPhoto[];
+    if (chosen.length === 0) {
+      showToast('Select at least one photo');
+      return;
+    }
+    setPhotoReportBusy(true);
+    try {
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'letter' });
+      const pageW = doc.internal.pageSize.getWidth();
+      const pageH = doc.internal.pageSize.getHeight();
+      const margin = 14;
+      const leadName =
+        [lead.clientFirstName, lead.clientLastName].filter(Boolean).join(' ') ||
+        'Lead';
+      const addr = [lead.clientAddress, lead.clientCity, lead.clientState, lead.clientZip]
+        .filter(Boolean)
+        .join(', ');
+      const brand =
+        (typeof userCompany === 'string' && userCompany.trim()) || 'Summit';
+      const title = (photoReportTitle || 'Photo Report').trim();
+      const dateStr = new Date().toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+
+      const loadImg = (src: string) =>
+        new Promise<{ data: string; w: number; h: number }>((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => {
+            try {
+              const canvas = document.createElement('canvas');
+              const max = 1200;
+              let w = img.naturalWidth;
+              let h = img.naturalHeight;
+              if (w > max || h > max) {
+                const s = max / Math.max(w, h);
+                w = Math.round(w * s);
+                h = Math.round(h * s);
+              }
+              canvas.width = w;
+              canvas.height = h;
+              const ctx = canvas.getContext('2d');
+              if (!ctx) {
+                reject(new Error('canvas'));
+                return;
+              }
+              ctx.drawImage(img, 0, 0, w, h);
+              resolve({ data: canvas.toDataURL('image/jpeg', 0.82), w, h });
+            } catch (e) {
+              reject(e);
+            }
+          };
+          img.onerror = () => reject(new Error('img load'));
+          img.src = src;
+        });
+
+      // Cover page
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(11);
+      doc.setTextColor(60);
+      doc.text(`${dateStr}  |  ${chosen.length} Photo${chosen.length === 1 ? '' : 's'}`, pageW / 2, pageH * 0.38, {
+        align: 'center',
+      });
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(28);
+      doc.setTextColor(15, 23, 42);
+      doc.text(title, pageW / 2, pageH * 0.48, { align: 'center' });
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(11);
+      doc.setTextColor(100);
+      doc.text(leadName, pageW / 2, pageH * 0.56, { align: 'center' });
+      if (addr) doc.text(addr, pageW / 2, pageH * 0.56 + 6, { align: 'center' });
+      if (lead.jobNumber) {
+        doc.text(String(lead.jobNumber), pageW / 2, pageH * 0.56 + 12, { align: 'center' });
+      }
+      doc.setFontSize(9);
+      doc.text(brand, pageW / 2, pageH - 16, { align: 'center' });
+
+      // Photo pages — 2 per page
+      const slotH = (pageH - 36) / 2;
+      for (let i = 0; i < chosen.length; i += 2) {
+        doc.addPage();
+        const pair = [chosen[i], chosen[i + 1]].filter(Boolean) as LeadPhoto[];
+        for (let s = 0; s < pair.length; s++) {
+          const photo = pair[s];
+          const top = 12 + s * slotH;
+          const src = photo.url || photo.dataUrl || '';
+          const cap = (photoReportCaptions[photo.id] || '').trim();
+          const boxW = pageW - margin * 2;
+          const imgMaxH = slotH - 22;
+          if (src) {
+            try {
+              const { data, w, h } = await loadImg(src);
+              const ratio = Math.min(boxW / w, imgMaxH / h);
+              const dw = w * ratio;
+              const dh = h * ratio;
+              const x = margin + (boxW - dw) / 2;
+              doc.addImage(data, 'JPEG', x, top, dw, dh);
+              let cy = top + dh + 5;
+              doc.setFontSize(9);
+              doc.setTextColor(40);
+              if (cap) {
+                const lines = doc.splitTextToSize(cap, boxW);
+                doc.text(lines, margin, cy);
+              } else {
+                doc.setTextColor(140);
+                doc.text(photo.name || 'Photo', margin, cy);
+              }
+            } catch (e) {
+              console.error(e);
+              doc.setTextColor(180, 50, 50);
+              doc.text('(Image could not be embedded)', margin, top + 20);
+            }
+          }
+        }
+        // footer
+        doc.setFontSize(8);
+        doc.setTextColor(160);
+        doc.text(
+          `${Math.floor(i / 2) + 2} / ${Math.ceil(chosen.length / 2) + 1}`,
+          pageW / 2,
+          pageH - 8,
+          { align: 'center' }
+        );
+      }
+
+      const blob = doc.output('blob');
+      const safe = title.replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 40) || 'Photo_Report';
+      const job = String(lead.jobNumber || currentLeadId).replace(/[^a-zA-Z0-9-]+/g, '_');
+      const fileName = `${safe}_${job}.pdf`;
+
+      // Save to lead documents (Storage)
+      if (supabaseEnabled && supabase) {
+        const folderKey = lead.supabaseId?.trim() || String(currentLeadId);
+        const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const storagePath = `${folderKey}/reports/${id}-${fileName}`;
+        const { error: upErr } = await supabase.storage
+          .from('lead-docs')
+          .upload(storagePath, blob, {
+            cacheControl: '3600',
+            upsert: false,
+            contentType: 'application/pdf',
+          });
+        if (upErr) {
+          console.error('Report upload error', upErr);
+          showToast('PDF built but cloud save failed — downloading');
+          doc.save(fileName);
+        } else {
+          const { data: pub } = supabase.storage
+            .from('lead-docs')
+            .getPublicUrl(storagePath);
+          const stamp = new Date().toLocaleString();
+          const newDoc: LeadDocument = {
+            id,
+            name: fileName,
+            url: pub.publicUrl,
+            size: blob.size,
+            mimeType: 'application/pdf',
+            createdAt: stamp,
+          };
+          const report: PhotoReport = {
+            id: `${Date.now()}-r`,
+            title,
+            createdAt: stamp,
+            items: chosen.map((p) => ({
+              photoId: p.id,
+              caption: photoReportCaptions[p.id] || '',
+            })),
+          };
+          const updated = leads.map((l) =>
+            l.id === currentLeadId
+              ? {
+                  ...l,
+                  documents: [...(l.documents || []), newDoc],
+                  photoReports: [...(l.photoReports || []), report],
+                }
+              : l
+          );
+          persistLeads(updated);
+          showToast('Report saved to Documents');
+        }
+      } else {
+        doc.save(fileName);
+        showToast('Report downloaded (cloud off)');
+      }
+      setPhotoReportOpen(false);
+    } catch (err) {
+      console.error(err);
+      showToast('Could not build photo report');
+    } finally {
+      setPhotoReportBusy(false);
+    }
+  };
+
+  const leadLabelFor = (lead: Lead) =>
+    [lead.clientFirstName, lead.clientLastName].filter(Boolean).join(' ') ||
+    lead.jobNumber ||
+    'Lead';
+
+  /** Soft-delete photo → app trash (Storage kept until permanent purge). */
   const removeLeadPhoto = (photoId: string) => {
     if (!currentLeadId) return;
-    const updatedLeads = leads.map((lead) =>
-      lead.id === currentLeadId
-        ? { ...lead, photos: (lead.photos || []).filter((p) => p.id !== photoId) }
-        : lead
+    if (!confirm('Move this photo to trash?')) return;
+    const lead = leads.find((l) => l.id === currentLeadId);
+    const photo = lead?.photos?.find((p) => p.id === photoId);
+    if (!photo || !lead) return;
+    const updated = leads.map((l) =>
+      l.id === currentLeadId
+        ? { ...l, photos: (l.photos || []).filter((p) => p.id !== photoId) }
+        : l
     );
-    persistLeads(updatedLeads);
+    persistLeads(updated);
+    persistTrash([
+      {
+        id: `${Date.now()}-photo`,
+        kind: 'photo',
+        deletedAt: new Date().toLocaleString(),
+        leadId: currentLeadId,
+        leadLabel: leadLabelFor(lead),
+        photo,
+      },
+      ...trash,
+    ]);
     if (lightboxPhoto?.id === photoId) setLightboxPhoto(null);
-    showToast('Photo removed');
+    showToast('Moved to trash');
+  };
+
+  /** Soft-delete measurement report (+ matching document entry) → app trash. */
+  const removeMeasurementReport = (docId: string) => {
+    if (!currentLeadId) return;
+    if (!confirm('Move this measurement to trash?')) return;
+    const lead = leads.find((l) => l.id === currentLeadId);
+    const doc =
+      lead?.measurementReports?.find((d) => d.id === docId) ||
+      lead?.documents?.find((d) => d.id === docId);
+    if (!doc || !lead) return;
+    const updated = leads.map((l) =>
+      l.id === currentLeadId
+        ? {
+            ...l,
+            measurementReports: (l.measurementReports || []).filter(
+              (d) => d.id !== docId
+            ),
+            documents: (l.documents || []).filter((d) => d.id !== docId),
+          }
+        : l
+    );
+    persistLeads(updated);
+    persistTrash([
+      {
+        id: `${Date.now()}-meas`,
+        kind: 'measurement',
+        deletedAt: new Date().toLocaleString(),
+        leadId: currentLeadId,
+        leadLabel: leadLabelFor(lead),
+        document: doc,
+      },
+      ...trash,
+    ]);
+    if (measurementPdfUrl && doc.url === measurementPdfUrl) {
+      setMeasurementPdfUrl(null);
+      setMeasurementPdfName('');
+    }
+    showToast('Moved to trash');
+  };
+
+  const uploadMeasurementReport = async (fileList: FileList | File[] | null) => {
+    if (!fileList || !currentLeadId) return;
+    const files = Array.from(fileList).filter(
+      (f) =>
+        f.type === 'application/pdf' ||
+        f.type.startsWith('image/') ||
+        /\.(pdf|png|jpe?g|heic)$/i.test(f.name)
+    );
+    if (files.length === 0) {
+      showToast('Upload a PDF or image report');
+      return;
+    }
+    if (!supabaseEnabled || !supabase) {
+      showToast('Cloud storage not available');
+      return;
+    }
+    const currentLead = leads.find((l) => l.id === currentLeadId);
+    const folderKey = currentLead?.supabaseId?.trim() || String(currentLeadId);
+    setDocsUploading(true);
+    try {
+      const newDocs: LeadDocument[] = [];
+      const stamp =
+        new Date().toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        }) +
+        ' ' +
+        new Date().toLocaleTimeString([], {
+          hour: 'numeric',
+          minute: '2-digit',
+        });
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const id = `${Date.now()}-${i}-${Math.random().toString(36).slice(2, 9)}`;
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const storagePath = `${folderKey}/measurements/${id}-${safeName}`;
+        const { error: upErr } = await supabase.storage
+          .from('lead-docs')
+          .upload(storagePath, file, {
+            cacheControl: '3600',
+            upsert: false,
+            contentType: file.type || 'application/pdf',
+          });
+        if (upErr) {
+          console.error(upErr);
+          showToast(`Failed: ${file.name}`);
+          continue;
+        }
+        const { data: pub } = supabase.storage
+          .from('lead-docs')
+          .getPublicUrl(storagePath);
+        newDocs.push({
+          id,
+          name: file.name,
+          url: pub.publicUrl,
+          size: file.size,
+          mimeType: file.type || 'application/pdf',
+          createdAt: stamp,
+        });
+      }
+      if (newDocs.length === 0) {
+        showToast('No files uploaded');
+        return;
+      }
+      const updated = leads.map((lead) =>
+        lead.id === currentLeadId
+          ? {
+              ...lead,
+              documents: [...(lead.documents || []), ...newDocs],
+              measurementReports: [
+                ...(lead.measurementReports || []),
+                ...newDocs,
+              ],
+            }
+          : lead
+      );
+      persistLeads(updated);
+showToast(
+        newDocs.length === 1
+          ? 'Measurement saved'
+          : `${newDocs.length} measurements saved`
+      );
+    } catch (e) {
+      console.error(e);
+      showToast('Upload failed');
+    } finally {
+      setDocsUploading(false);
+    }
+  };
+
+  const handleDocFiles = async (fileList: FileList | File[]) => {
+    if (!currentLeadId || docsUploading) return;
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+    if (!supabaseEnabled || !supabase) {
+      showToast('Cloud storage not available — check Supabase config');
+      return;
+    }
+
+    const currentLead = leads.find((l) => l.id === currentLeadId);
+    const folderKey =
+      currentLead?.supabaseId?.trim() || String(currentLeadId);
+
+    setDocsUploading(true);
+    try {
+      const newDocs: LeadDocument[] = [];
+      const stamp =
+        new Date().toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        }) +
+        ' ' +
+        new Date().toLocaleTimeString([], {
+          hour: 'numeric',
+          minute: '2-digit',
+        });
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const id = `${Date.now()}-${i}-${Math.random().toString(36).slice(2, 9)}`;
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const storagePath = `${folderKey}/${id}-${safeName}`;
+
+        const { error: upErr } = await supabase.storage
+          .from('lead-docs')
+          .upload(storagePath, file, {
+            cacheControl: '3600',
+            upsert: false,
+            contentType: file.type || 'application/octet-stream',
+          });
+
+        if (upErr) {
+          console.error('Doc upload error:', upErr);
+          showToast(`Failed to upload ${file.name}`);
+          continue;
+        }
+
+        const { data: pub } = supabase.storage
+          .from('lead-docs')
+          .getPublicUrl(storagePath);
+
+        newDocs.push({
+          id,
+          name: file.name,
+          url: pub.publicUrl,
+          size: file.size,
+          mimeType: file.type || undefined,
+          createdAt: stamp,
+        });
+      }
+
+      if (newDocs.length === 0) {
+        showToast('No documents uploaded');
+        return;
+      }
+
+      const updatedLeads = leads.map((lead) =>
+        lead.id === currentLeadId
+          ? { ...lead, documents: [...(lead.documents || []), ...newDocs] }
+          : lead
+      );
+      persistLeads(updatedLeads);
+      showToast(
+        newDocs.length === 1
+          ? 'Document uploaded'
+          : `${newDocs.length} documents uploaded`
+      );
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to upload document(s)');
+    } finally {
+      setDocsUploading(false);
+    }
+  };
+
+  /** Soft-delete document (and measurement twin if present) → app trash. */
+  const removeLeadDocument = (docId: string) => {
+    if (!currentLeadId) return;
+    if (!confirm('Move this document to trash?')) return;
+    const lead = leads.find((l) => l.id === currentLeadId);
+    const doc = lead?.documents?.find((d) => d.id === docId);
+    if (!doc || !lead) return;
+    const wasMeasurement = (lead.measurementReports || []).some(
+      (d) => d.id === docId
+    );
+    const updated = leads.map((l) =>
+      l.id === currentLeadId
+        ? {
+            ...l,
+            documents: (l.documents || []).filter((d) => d.id !== docId),
+            measurementReports: (l.measurementReports || []).filter(
+              (d) => d.id !== docId
+            ),
+          }
+        : l
+    );
+    persistLeads(updated);
+    persistTrash([
+      {
+        id: `${Date.now()}-doc`,
+        kind: wasMeasurement ? 'measurement' : 'document',
+        deletedAt: new Date().toLocaleString(),
+        leadId: currentLeadId,
+        leadLabel: leadLabelFor(lead),
+        document: doc,
+      },
+      ...trash,
+    ]);
+    if (measurementPdfUrl && doc.url === measurementPdfUrl) {
+      setMeasurementPdfUrl(null);
+      setMeasurementPdfName('');
+    }
+    showToast('Moved to trash');
   };
 
   const moveLeadToStage = (
@@ -2765,6 +6029,19 @@ export default function SummitApp() {
     clientZip,
     clientPhone,
     clientEmail,
+    additionalContacts: additionalContacts.map((c) =>
+      emptyAdditionalContact({
+        ...c,
+        phone: c.phone || '',
+        email: c.email || '',
+      })
+    ),
+    financialWorksheet: withAutoApproved({
+      ...financialWorksheet,
+      sections: normalizeJobFinancialSections(financialWorksheet.sections),
+      collected: Number(financialWorksheet.collected) || 0,
+      notes: financialWorksheet.notes || '',
+    }),
     company: leadCompany,
     jobNumber: clientJobNumber,
     mailingSameAsBilling,
@@ -2809,12 +6086,132 @@ export default function SummitApp() {
     return true;
   };
 
+  // Approved job value always follows worksheet line grand total
+  useEffect(() => {
+    if (!isEditingLead) return;
+    setFinancialWorksheet((w) => {
+      const grand = worksheetGrandTotal(w);
+      if (grand === w.approvedJobValue) return w;
+      return { ...w, approvedJobValue: grand };
+    });
+  }, [financialWorksheet.sections, isEditingLead]);
+
+  const switchProfileTab = (tab: ProfileTab) => {
+    if (currentLeadId != null && isEditingLead) {
+      saveLeadDraft({ silent: true });
+    }
+    setProfileTab(tab);
+  };
+
   const saveLeadProfile = () => {
     if (!saveLeadDraft({ silent: true })) return;
     // Stay on dedicated full-screen profile after save (AccuLynx-style)
     setIsEditingLead(true);
     setActiveTab('leads');
     showToast('Lead profile saved');
+  };
+
+  const TAKEOFF_FIELD_LABELS: { key: keyof TakeoffSheet; label: string }[] = [
+    { key: 'roofTypeLayers', label: 'Roof type & layers' },
+    { key: 'pipeJacks', label: 'Pipe jacks — neoprene or lead / qty & sizes' },
+    { key: 'turtleVents', label: 'Turtle type vents' },
+    { key: 'powerAtticVents', label: 'Power attic vents' },
+    { key: 'windTurbines', label: 'Wind turbines' },
+    { key: 'ridgeVent', label: 'Ridge vent — aluminum or shingle-over' },
+    { key: 'roofExhaustCap', label: 'Roof exhaust cap (e.g. goose-neck)' },
+    { key: 'hvacVent', label: 'HVAC vent — size and/or model #' },
+    { key: 'hvacMount', label: 'HVAC mount — curb or elbow' },
+    { key: 'chimneyFlashing', label: 'Chimney flashing & size' },
+    { key: 'soffitOverhang', label: 'Soffit overhang measurement' },
+    { key: 'satelliteDish', label: 'Satellite dish' },
+    { key: 'electricalMast', label: 'Electrical mast — split boot or DNR' },
+    { key: 'skylights', label: 'Skylights — type & quantity/sizes' },
+    { key: 'dripEdgeGutterApron', label: 'Drip edge / gutter apron' },
+    { key: 'iceAndWaterShield', label: 'Ice & water shield' },
+    { key: 'valleyLiner', label: 'Valley liner' },
+    { key: 'drywallSf', label: 'Interior — drywall SF' },
+    { key: 'paintingSf', label: 'Interior — painting SF / coats' },
+    { key: 'ceilingHeight', label: 'Ceiling height' },
+    { key: 'ceilingFans', label: 'Ceiling fans' },
+    { key: 'notes', label: 'Notes' },
+  ];
+
+  const saveTakeoff = (alsoDocument = false) => {
+    if (!currentLeadId) return;
+    const snapshot = { ...takeoffForm };
+    const updatedLeads = leads.map((lead) =>
+      lead.id === currentLeadId ? { ...lead, takeoff: snapshot } : lead
+    );
+    persistLeads(updatedLeads);
+
+    if (alsoDocument) {
+      const lead = updatedLeads.find((l) => l.id === currentLeadId);
+      const clientName = lead
+        ? [lead.clientFirstName, lead.clientLastName].filter(Boolean).join(' ')
+        : '';
+      const lines = [
+        'TAKE-OFF / INSPECTION SHEET',
+        `Job: ${lead?.jobNumber || ''}`,
+        `Client: ${clientName}`,
+        `Address: ${
+          lead
+            ? [lead.clientAddress, lead.clientCity, lead.clientState, lead.clientZip]
+                .filter(Boolean)
+                .join(', ')
+            : ''
+        }`,
+        `Date: ${new Date().toLocaleString()}`,
+        '',
+        ...TAKEOFF_FIELD_LABELS.map(
+          ({ key, label }) => `${label}: ${snapshot[key] || '—'}`
+        ),
+      ];
+      const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+      const safeName = (clientName || 'Lead').replace(/[^\w.-]+/g, '_');
+      const file = new File([blob], `Takeoff-${safeName}-${Date.now()}.txt`, {
+        type: 'text/plain',
+      });
+      void handleDocFiles([file]);
+      showToast('Take-off saved + added to Documents');
+    } else {
+      showToast('Take-off saved');
+    }
+  };
+
+  const assignTakeoffToLead = (leadId: number) => {
+    const snapshot = { ...takeoffForm };
+    const updatedLeads = leads.map((lead) =>
+      lead.id === leadId ? { ...lead, takeoff: snapshot } : lead
+    );
+    persistLeads(updatedLeads);
+    setSystemDocWorkspace(null);
+    setTakeoffAssignOpen(false);
+    setTakeoffAssignSearch('');
+    const lead = updatedLeads.find((l) => l.id === leadId);
+    if (lead) {
+      applyLeadFields(lead);
+      setIsEditingLead(true);
+      setActiveTab('leads');
+      setProfileTab('takeoff');
+    }
+    showToast('Take-off assigned to lead');
+  };
+
+  const assignTakeoffToNewLead = async () => {
+    const jobNumber = await generateJobNumber();
+    const newLead = createEmptyLead({
+      jobNumber,
+      takeoff: { ...takeoffForm },
+    });
+    persistLeads([...leads, newLead]);
+    setSystemDocWorkspace(null);
+    setTakeoffAssignOpen(false);
+    setTakeoffAssignSearch('');
+    applyLeadFields(newLead);
+    setIsEditingLead(true);
+    setActiveTab('leads');
+    setProfileTab('overview');
+    showToast('New lead created with take-off');
   };
 
   /** Leave estimator; keep unsaved estimate guard. Optionally return to source lead. */
@@ -2868,89 +6265,348 @@ export default function SummitApp() {
     setNegotiatedPrice(newPrice);
   };
 
-  const toggleShingle = (type: Exclude<ShingleType, ''>) => {
-    setSelectedShingle(selectedShingle === type ? '' : type);
+  const selectRoofSystem = (system: RoofSystem) => {
+    setRoofSystem(system);
+    setSelectedShingle('');
+    setFlatSystem('');
+    setCoatingKind('');
+    setFoamKind('');
+    setFoamIso48('');
+    setFoamIso44('');
+    setFoamGranules(false);
+    setFoamExtraSpf(false);
+    setFoamScarify(false);
+    setCoatingExtraPass(false);
+    setCoatingPressureWash(false);
+    setProductColors({});
+    setLowSlopeMode('none');
+    setLowSlopeType('none');
+    setTileMode('');
+    setTileProduct('');
+    setTileBrand('');
+    setCurrentTile('');
+    setEstimateFlow('estimate');
+    setHasUnsavedChanges(true);
   };
 
-  const toggleFascia = (mode: Exclude<FasciaMode, ''>) => setFasciaMode(fasciaMode === mode ? '' : mode);
-  const toggleDecking = (mode: Exclude<DeckingMode, ''>) => setDeckingMode(deckingMode === mode ? '' : mode);
+  const selectShingleProduct = (type: ShingleType) => {
+    setSelectedShingle(type);
+    // Keep legacy color fields in sync when switching products
+    if (type !== 'cambridge') setCambridgeColor('');
+    if (type !== 'dynasty') setDynastyColor('');
+    if (type !== 'armourshake') setArmourshakeColor('');
+  };
+
+  const setProductColor = (product: string, color: string) => {
+    setProductColors((prev) => ({ ...prev, [product]: color }));
+    if (product === 'cambridge') setCambridgeColor(color);
+    if (product === 'dynasty') setDynastyColor(color);
+    if (product === 'armourshake') setArmourshakeColor(color);
+  };
+
+  /** Map flat system tree → sell key on selectedShingle. */
+  const applyFlatSelection = (
+    system: FlatSystem,
+    kind: CoatingKind = '',
+    foam: FoamKind = ''
+  ) => {
+    setFlatSystem(system);
+    if (system === 'coating') {
+      setCoatingKind(kind);
+    } else if (system !== 'foam') {
+      // Foam may keep optional top-coating via coatingKind
+      setCoatingKind('');
+      setCoatingExtraPass(false);
+      setCoatingPressureWash(false);
+    } else {
+      // Entering foam: clear coating adders, keep/reset kind for top coat pick
+      setCoatingExtraPass(false);
+      setCoatingPressureWash(false);
+      if (!kind) setCoatingKind('');
+    }
+    if (system !== 'foam') {
+      setFoamKind('');
+      setFoamIso48('');
+      setFoamIso44('');
+      setFoamGranules(false);
+      setFoamExtraSpf(false);
+      setFoamScarify(false);
+    } else {
+      setFoamKind(foam);
+    }
+
+    let product: ShingleType = '';
+    if (system === 'mod_bit') product = 'mod_bitumen';
+    else if (system === 'bur') product = 'bur';
+    else if (system === 'foam') {
+      product = foam === 'overlay' ? 'foam_overlay' : foam === 'full' ? 'full_foam' : '';
+    } else if (system === 'coating') {
+      if (kind === 'elastomeric') product = 'elastomeric';
+      else if (kind === 'silicone') product = 'silicone';
+      else if (kind === 'urethane') product = 'urethane';
+      else product = '';
+    }
+    setSelectedShingle(product);
+    setHasUnsavedChanges(true);
+  };
+
+  const toggleFascia = (mode: Exclude<FasciaMode, ''>) => {
+    setFasciaMode(fasciaMode === mode ? '' : mode);
+    setHasUnsavedChanges(true);
+  };
+  const toggleDecking = (mode: Exclude<DeckingMode, ''>) => {
+    setDeckingMode(deckingMode === mode ? '' : mode);
+    setHasUnsavedChanges(true);
+  };
 
   // Live lead contact for estimate UI + PDF (never typed on the estimate form)
   const estimatorClient = resolveEstimatorClient();
 
   const getShingleDisplayName = () => {
-    if (selectedShingle === 'cambridge') return 'Cambridge';
-    if (selectedShingle === 'dynasty') return 'Dynasty';
-    if (selectedShingle === 'armourshake') return 'Armourshake';
-    return '';
+    const names: Record<string, string> = {
+      cambridge: 'Cambridge',
+      dynasty: 'Dynasty',
+      armourshake: 'Armourshake',
+      gaf_hdz: 'GAF HDZ',
+      gaf_natural_shadow: 'GAF Natural Shadow',
+      owens_oakridge: 'Owens Oakridge',
+      owens_duration: 'Owens Duration',
+      tile_dr: 'Detach & Reset',
+      tile_rr: 'Remove & Replace',
+      sa_underlayment: 'SA High-Temp Underlayment',
+      coating: 'Roof Coating',
+      elastomeric: 'Elastomeric Coating',
+      silicone: 'Silicone Coating',
+      urethane: 'Urethane Coating',
+      full_foam: 'Full Foam',
+      foam_overlay: 'Foam Overlay',
+      mod_bitumen: 'Modified Bitumen',
+      bur: 'Built-Up Roof (BUR)',
+    };
+    return names[selectedShingle] || '';
   };
 
   const getShingleColor = () => {
     if (selectedShingle === 'dynasty') return dynastyColor || 'Color Selected';
     if (selectedShingle === 'cambridge') return cambridgeColor || 'Color Selected';
     if (selectedShingle === 'armourshake') return armourshakeColor || 'Color Selected';
+    if (selectedShingle && productColors[selectedShingle]) {
+      return productColors[selectedShingle];
+    }
     return 'Color Selected';
   };
 
   const getUnderlaymentLabel = () => {
+    if (selectedUnderlayment === 'sa-high-temp') {
+      return 'Install SA High-Temp Underlayment';
+    }
     if (selectedUnderlayment === 'high-temp') {
       return 'Install TopShield Bigfoot 30 High-Temp Synthetic Underlayment';
     }
     return 'Install TopShield Securegrip 30 Full Synthetic Underlayment';
   };
 
-  const buildScopeOfWork = () => {
-    const mbSq = parseFloat(modifiedBitumenSquares) || 0;
-    const ridgeLf = parseFloat(ridgeVentLF) || 0;
-    const items: string[] = [
-      'Tear off, Haul & Dispose Shingles',
-      'Check decking for non-nailable surfaces (Dry rot, broken, soft areas)',
-      'Install IKO Stormshield Ice & Water',
-      getUnderlaymentLabel(),
-      `Install 2x2 Drip Edge on rakes and eaves (${dripEdgeColor || 'Color Selected'})`,
-      'Install IKO Leading Edge Starter Plus',
-      'Remove and Replace all roof to wall flashings (step flashing, counter flashing)',
-      'Remove and Replace all Pipe Jacks & T-Top Vents',
-    ];
+  const buildScopeOfWork = (): { text: string; amount?: number }[] => {
+    const items: { text: string; amount?: number }[] = [];
+    const flf = parseFloat(fasciaLF) || 0;
+    const billableFascia = Math.max(0, flf - 10);
+    const osbN = parseFloat(deckingOsbSheets) || 0;
+    const cdxN = parseFloat(deckingCdxSheets) || 0;
+    const gLF = parseFloat(gutterLF) || 0;
+    const sky = parseFloat(skylights) || 0;
+    const hvac = parseFloat(hvacUnits) || 0;
+    const panels = parseFloat(solarPanels) || 0;
+    const ridge = parseFloat(ridgeVentLF) || 0;
+    const sq = parseFloat(squares) || 0;
+    const ly = parseInt(layers) || 1;
+    const pt = pitch || '4/12';
 
-    if (selectedShingle) {
-      items.push(`Install IKO ${getShingleDisplayName()} AR Shingles (${getShingleColor()})`);
+    const push = (text: string, amount?: number) => {
+      items.push(amount != null && amount > 0 ? { text, amount } : { text });
+    };
+
+    push('Tear off, haul, and dispose of existing roofing materials');
+    push('Inspect decking for non-nailable surfaces (dry rot, broken, or soft areas)');
+
+    if (selectedUnderlayment) {
+      push(getUnderlaymentLabel());
+    } else {
+      push('Install ice & water shield at eaves and valleys as required');
+      push('Install synthetic underlayment over the entire roof deck');
     }
-    if (ridgeLf > 0) {
-      items.push(`Install IKO Hip and Ridge (${ridgeLf} LF)`);
+
+    const drip = (dripEdgeColor || '').trim();
+    push(
+      drip
+        ? `Install drip edge on rakes and eaves (${drip})`
+        : 'Install drip edge on rakes and eaves'
+    );
+
+    if (selectedShingle && (roofSystem === 'shingle' || !roofSystem)) {
+      push('Install starter course at all eaves & rakes');
+      push('Remove and replace roof-to-wall flashings (step and counter flashing)');
+      push('Remove and replace pipe jacks and roof vents');
+      const name = getShingleDisplayName();
+      const color = getShingleColor();
+      if (name) {
+        push(
+          color && color !== 'Color Selected'
+            ? `Install ${name} shingles (${color})`
+            : `Install ${name} shingles`
+        );
+      }
     }
-    if (mbSq > 0) {
-      items.push(
-        `Install TopShield PRO SA Cap Modified Bitumen (${modifiedBitumenColor || 'Color Selected'}) - ${mbSq} squares`
+
+    // --- Priced adders only below ---
+    if (ly > 1) {
+      const layerRate = getSellPrice(
+        'remove_layer',
+        activePricingRegion === 'central' ? 20 : 25
+      );
+      push(
+        `Remove additional layer${ly > 2 ? 's' : ''} — ${ly - 1} layer${ly > 2 ? 's' : ''}`,
+        (ly - 1) * layerRate * sq
       );
     }
-    if (fasciaMode) {
-      const fasciaLabel = fasciaType ? `${fasciaType} ` : '';
-      items.push(
-        `${fasciaMode === 'full' ? 'Full fascia replacement' : 'Fascia repair'} (${fasciaLabel}${fasciaLF || 0} LF)`
-      );
+
+    let steepAmt = 0;
+    if (pt === '8/12' || pt === '9/12') steepAmt = getSellPrice('steep_8_9', 100) * sq;
+    else if (pt === '10/12' || pt === '11/12') steepAmt = getSellPrice('steep_9_11', 175) * sq;
+    else if (pt === '12/12') steepAmt = getSellPrice('steep_11_12', 250) * sq;
+    if (steepAmt > 0) {
+      push(`Steep slope charge — ${pt}`, steepAmt);
     }
+
+    if (ridge > 0) {
+      const ridgeAmt = ridge * getSellPrice('ridge_vent', 12);
+      push(`Install ridge vent — ${ridge} LF`, ridgeAmt);
+    }
+
+    if (fasciaMode && flf > 0) {
+      const fType = fasciaType === '2x8' ? '2×8' : fasciaType === '2x6' ? '2×6' : '';
+      const kind = fasciaMode === 'full' ? 'Full fascia replacement' : 'Fascia repair';
+      const fasciaRate = getSellPrice(
+        'fascia',
+        activePricingRegion === 'central' ? 15 : 18
+      );
+      const fasciaAmt = billableFascia * fasciaRate;
+      push(
+        fType
+          ? `${kind} — primed ${fType}, ${flf} LF`
+          : `${kind} — primed fascia, ${flf} LF`,
+        fasciaAmt
+      );
+      if (billableFascia > 0) {
+        const moldRate = getSellPrice(
+          'shingle_mold',
+          activePricingRegion === 'central' ? 5 : 6
+        );
+        push(`Install shingle mold — ${billableFascia} LF`, billableFascia * moldRate);
+      }
+    }
+
+    const osbRate = getSellPrice('osb', 80);
     if (deckingMode === 'full') {
-      items.push(`Full re-deck (${sheetsNeeded} sheets estimated)`);
-    } else if (deckingMode === 'repair' && parseFloat(deckingSheets) > 0) {
-      items.push(`Decking repair (${deckingSheets} sheets)`);
-    }
-    if (parseFloat(solarPanels) > 0) {
-      items.push(`Solar Panels detach/reset (${solarPanels})`);
-    }
-    if (parseFloat(hvacUnits) > 0) {
-      items.push(`HVAC Detach and Reset (${hvacUnits})`);
-    }
-    if (parseFloat(skylights) > 0) {
-      items.push(`Skylights detach/reset (${skylights})`);
+      const sheets =
+        typeof sheetsNeeded === 'number' && sheetsNeeded > 0
+          ? sheetsNeeded
+          : Math.ceil((sq * 100) / 32);
+      push(
+        `Full re-deck — ${sheets} sheets (OSB at non-visible areas; CDX at exposed eaves, soffits, and similar)`,
+        sheets * osbRate
+      );
+    } else if (deckingMode === 'repair' && (osbN > 0 || cdxN > 0)) {
+      let freeLeft = 2;
+      const osbBill = Math.max(0, osbN - freeLeft);
+      freeLeft = Math.max(0, freeLeft - osbN);
+      const cdxBill = Math.max(0, cdxN - freeLeft);
+      if (osbN > 0) {
+        push(
+          `Replace decking — ${osbN} sheet${osbN === 1 ? '' : 's'} OSB`,
+          osbBill * osbRate
+        );
+      }
+      if (cdxN > 0) {
+        push(
+          `Replace decking — ${cdxN} sheet${cdxN === 1 ? '' : 's'} CDX`,
+          cdxBill * osbRate
+        );
+      }
     }
 
-    items.push('Clean up and Dispose of all debris on jobsite');
-
-    if (notes.trim()) {
-      items.push(`Additional Notes: ${notes.trim()}`);
+    if (panels > 0) {
+      push(
+        `Detach, reset, and clean solar panels — ${panels} panel${panels === 1 ? '' : 's'}`,
+        panels * 250
+      );
+    }
+    if (hvac > 0) {
+      const hvacRate = getSellPrice(
+        'hvac',
+        activePricingRegion === 'central' ? 1250 : 1600
+      );
+      push(
+        `Detach and reset HVAC — ${hvac} unit${hvac === 1 ? '' : 's'}`,
+        hvac * hvacRate
+      );
+    }
+    if (sky > 0) {
+      const skyRate = getSellPrice(
+        'skylight',
+        activePricingRegion === 'central' ? 500 : 550
+      );
+      push(`Detach and reset skylights — ${sky}`, sky * skyRate);
+    }
+    if (gutterMode === 'dr' && gLF > 0) {
+      const rate = getSellPrice(
+        'gutters_dr',
+        activePricingRegion === 'central' ? 15 : 20
+      );
+      push(`Detach and reset gutters — ${gLF} LF`, gLF * rate);
+    } else if (gutterMode === 'rr' && gLF > 0) {
+      const rate = getSellPrice(
+        'gutters_rr',
+        activePricingRegion === 'central' ? 20 : 30
+      );
+      push(`Remove and replace gutters — ${gLF} LF`, gLF * rate);
     }
 
+    const mbSqScope = parseFloat(modifiedBitumenSquares) || 0;
+    const isModBitScope =
+      flatSystem === 'mod_bit' ||
+      selectedShingle === 'mod_bitumen' ||
+      (lowSlopeMode !== 'none' && lowSlopeType === 'mod_bitumen');
+    const mbScopeSq =
+      isModBitScope
+        ? mbSqScope > 0
+          ? mbSqScope
+          : flatSystem === 'mod_bit' || selectedShingle === 'mod_bitumen'
+            ? sq
+            : 0
+        : 0;
+    if (isModBitScope && mbScopeSq > 0) {
+      // 1 base ply + SA cap only (never 2 base layers)
+      push(
+        `Install modified bitumen — ${mbScopeSq} SQ (1 base ply + SA cap sheet${
+          modifiedBitumenColor ? `, ${modifiedBitumenColor}` : ''
+        })`
+      );
+    }
+
+    const iso48n = parseFloat(foamIso48) || 0;
+    const iso44n = parseFloat(foamIso44) || 0;
+    if (iso48n > 0 || iso44n > 0) {
+      const parts: string[] = [];
+      if (iso48n > 0) parts.push(`${iso48n} sheet${iso48n === 1 ? '' : 's'} 4×8`);
+      if (iso44n > 0) parts.push(`${iso44n} sheet${iso44n === 1 ? '' : 's'} 4×4`);
+      const iso48Rate = getSellPrice('iso_4x8', getSellPrice('iso_board', 0));
+      const iso44Rate = getSellPrice('iso_4x4', getSellPrice('iso_board', 0) * 0.5);
+      push(
+        `Install ISO board — ${parts.join(', ')}`,
+        iso48n * iso48Rate + iso44n * iso44Rate
+      );
+    }
+    push('Clean jobsite and dispose of all related debris');
     return items;
   };
 
@@ -2960,7 +6616,7 @@ export default function SummitApp() {
   const generatePDF = () => {
     const client = resolveEstimatorClient();
     const doc = new jsPDF();
-    const scopeItems = buildScopeOfWork().filter((item) => !item.startsWith('Additional Notes:'));
+    const scopeItems = buildScopeOfWork();
     const pageWidth = doc.internal.pageSize.getWidth();
     const maxWidth = pageWidth - 40;
     const pmPhone = displayPhoneUS(userPhone) || userPhone;
@@ -3000,12 +6656,24 @@ export default function SummitApp() {
     doc.setFontSize(10);
 
     scopeItems.forEach((item) => {
-      const lines = doc.splitTextToSize(`• ${item}`, maxWidth);
-      if (y + lines.length * 5 > 270) {
+      if (y > 270) {
         doc.addPage();
         y = 20;
       }
+      const line = typeof item === 'string' ? item : item.text;
+      const amount =
+        typeof item === 'object' && item && item.amount != null && item.amount > 0
+          ? Math.round(item.amount)
+          : null;
+      doc.setFontSize(10);
+      doc.setTextColor(30);
+      const maxW = amount != null ? 140 : 170;
+      const lines = doc.splitTextToSize(`•  ${line}`, maxW);
       doc.text(lines, 20, y);
+      if (amount != null) {
+        doc.setFont('helvetica', 'normal');
+        doc.text(`$${amount.toLocaleString()}`, 190, y, { align: 'right' });
+      }
       y += lines.length * 5 + 2;
     });
 
@@ -3038,13 +6706,23 @@ export default function SummitApp() {
     doc.text('Total Investment', 20, y);
     doc.text(`$${estimatorTotalPrice.toLocaleString()}`, pageWidth - 20, y, { align: 'right' });
 
-    y += 8;
-    doc.setFontSize(11);
-    doc.text(`Special discount applied — $${bufferUsed.toLocaleString()}`, 20, y);
+    if (bufferUsed > 0) {
+      y += 8;
+      doc.setFontSize(11);
+      doc.text(
+        `Special discount applied — $${bufferUsed.toLocaleString()}`,
+        20,
+        y
+      );
+    }
 
     y += 12;
     doc.setFontSize(10);
-    doc.text('Subject to change order upon day of build. This estimate is valid for 30 days.', 20, y);
+    doc.text(
+      'Pricing subject to change upon signed change order for unforeseen conditions. Valid for 30 days.',
+      20,
+      y
+    );
 
     y += 10;
     doc.text(`Thank you for choosing ${brandCompany}.`, 20, y);
@@ -3065,7 +6743,7 @@ export default function SummitApp() {
 
   const renderProfessionalEstimate = () => {
     const client = resolveEstimatorClient();
-    const scopeItems = buildScopeOfWork().filter((item) => !item.startsWith('Additional Notes:'));
+    const scopeItems = buildScopeOfWork();
 
     return (
       <div className="bg-white p-5 sm:p-8 text-zinc-900 pb-16 rounded-3xl border border-zinc-200/80 shadow-sm">
@@ -3132,7 +6810,17 @@ export default function SummitApp() {
               <div className="font-semibold text-lg mb-4">Scope of Work</div>
               <div className="space-y-3 text-sm">
                 {scopeItems.map((item, index) => (
-                  <div key={index}>• {item}</div>
+                  <div
+                    key={index}
+                    className="flex justify-between gap-4 items-start"
+                  >
+                    <div className="min-w-0">• {item.text}</div>
+                    {item.amount != null && item.amount > 0 && (
+                      <div className="shrink-0 tabular-nums font-medium text-emerald-700">
+                        ${Math.round(item.amount).toLocaleString()}
+                      </div>
+                    )}
+                  </div>
                 ))}
               </div>
             </div>
@@ -3149,13 +6837,16 @@ export default function SummitApp() {
                 <div>Total Investment</div>
                 <div className="tabular-nums text-emerald-700">${estimatorTotalPrice.toLocaleString()}</div>
               </div>
-              <div className="text-amber-700 text-right font-medium">
-                Special discount applied — ${bufferUsed.toLocaleString()}
-              </div>
+              {bufferUsed > 0 && (
+                <div className="text-amber-700 text-right font-medium">
+                  Special discount applied — ${bufferUsed.toLocaleString()}
+                </div>
+              )}
             </div>
 
             <div className="mt-8 text-xs text-amber-800/90 border-t border-amber-100 pt-6">
-              Subject to change order upon day of build. This estimate is valid for 30 days.
+              Pricing subject to change upon signed change order for unforeseen conditions
+              (decking, fascia, structure, etc.). This estimate is valid for 30 days.
             </div>
             <div className="mt-3 text-xs text-zinc-500">
               Questions? Contact {userName || 'Rep'} ({userTitle || 'Project Manager'}) ·{' '}
@@ -3210,7 +6901,7 @@ export default function SummitApp() {
 
   const sidebarPrimary: SidebarItem[] = [
     { tab: 'home', label: 'Home', icon: 'home' },
-    { tab: 'leads', label: 'Jobs', icon: 'jobs' },
+    { tab: 'leads', label: 'Pipeline', icon: 'jobs' },
     { tab: 'estimates', label: 'Estimates', icon: 'estimates' },
     { tab: 'calendar', label: 'Calendar', icon: 'calendar' },
     { tab: 'performance', label: 'Performance', icon: 'performance' },
@@ -3873,7 +7564,7 @@ export default function SummitApp() {
                             onClick={() =>
                               loadEstimate(estimate, { leadId: lead.id })
                             }
-                            className="w-full text-left rounded-2xl border border-zinc-200 px-4 py-3 hover:border-emerald-300 hover:bg-emerald-50/30 transition-colors"
+                            className="w-full text-left rounded-2xl border border-zinc-200 px-4 py-3 hover:border-sky-300 hover:bg-sky-50/30 transition-colors"
                           >
                             <div className="flex items-center justify-between gap-2">
                               <div className="min-w-0">
@@ -4236,9 +7927,14 @@ export default function SummitApp() {
 
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 mb-16">
                 {PIPELINE_STAGES.map((stage) => {
-                  const count = leads.filter(
+                  const stageLeads = leads.filter(
                     (l) => normalizePipelineStage(l.category) === stage
-                  ).length;
+                  );
+                  const count = stageLeads.length;
+                  const stageValue = stageLeads.reduce(
+                    (sum, l) => sum + leadEstimateValue(l),
+                    0
+                  );
                   const styles = PIPELINE_STAGE_STYLES[stage];
                   const active = pipelineFilter === stage;
                   return (
@@ -4254,7 +7950,7 @@ export default function SummitApp() {
                       className={`rounded-3xl border bg-white p-4 sm:p-5 text-center transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${
                         active
                           ? `border-zinc-800 ring-2 ${styles.ring} shadow-sm`
-                          : 'border-zinc-200 hover:border-zinc-300'
+                          : 'border-zinc-200 hover:border-sky-300'
                       }`}
                       title={`View ${stage} leads`}
                     >
@@ -4269,6 +7965,9 @@ export default function SummitApp() {
                       </div>
                       <div className="text-3xl sm:text-4xl font-semibold tabular-nums tracking-tight text-zinc-900">
                         {count}
+                      </div>
+                      <div className="text-xs font-semibold text-zinc-600 mt-1 tabular-nums">
+                        ${stageValue.toLocaleString()}
                       </div>
                       <div className="mt-1.5 text-[10px] font-medium text-zinc-400">
                         View
@@ -4293,9 +7992,9 @@ export default function SummitApp() {
 
                 <div
                   onClick={() => openEstimatesHub()}
-                  className="group bg-white border border-zinc-200/80 hover:border-emerald-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
+                  className="group bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
                 >
-                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1 group-hover:text-emerald-900 transition-colors">
+                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900 transition-colors">
                     Estimates
                   </div>
                   <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
@@ -4305,10 +8004,10 @@ export default function SummitApp() {
 
                 <div
                   onClick={() => handleTabChange('leads')}
-                  className="group bg-white border border-zinc-200/80 hover:border-emerald-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
+                  className="group bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
                 >
-                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1 group-hover:text-emerald-900 transition-colors">
-                    Jobs
+                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900 transition-colors">
+                    Pipeline
                   </div>
                   <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
                     Pipeline board · open a job to estimate
@@ -4317,7 +8016,7 @@ export default function SummitApp() {
 
                 <div
                   onClick={() => handleTabChange('documents')}
-                  className="group bg-white border border-zinc-200/80 hover:border-zinc-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
+                  className="group bg-white border border-zinc-200/80 hover:border-sky-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
                 >
                   <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1">
                     Documents
@@ -4327,7 +8026,7 @@ export default function SummitApp() {
 
                 <div
                   onClick={() => handleTabChange('calendar')}
-                  className="group bg-white border border-zinc-200/80 hover:border-zinc-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200 sm:col-span-2 lg:col-span-1"
+                  className="group bg-white border border-zinc-200/80 hover:border-sky-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200 sm:col-span-2 lg:col-span-1"
                 >
                   <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1">
                     Calendar
@@ -4405,7 +8104,7 @@ export default function SummitApp() {
                     return (
                       <div
                         key={`${lead.id}-${estimate.id}`}
-                        className="bg-white border border-zinc-200 rounded-3xl p-5 hover:border-zinc-300 hover:shadow-sm transition-all"
+                        className="bg-white border border-zinc-200 rounded-3xl p-5 hover:border-sky-300 hover:shadow-sm transition-all"
                       >
                         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                           <button
@@ -4461,19 +8160,297 @@ export default function SummitApp() {
         })()}
 
         {activeTab === 'documents' && (
-          <div className="pb-8 w-full">
+          <div className="pb-8 w-full max-w-3xl">
             <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
               Documents
             </h1>
             <p className="text-zinc-500 mt-1 mb-8">
-              Contracts, signed estimates, and job files
+              System templates you can fill and assign to a job, or add from a
+              lead’s Documents tab.
             </p>
-            <div className="rounded-3xl border border-dashed border-zinc-200 bg-white px-6 py-16 text-center">
-              <p className="text-sm font-medium text-zinc-800">No documents yet</p>
-              <p className="text-sm text-zinc-500 mt-2 max-w-md mx-auto">
-                Saved PDFs and contracts for your leads will show up here.
-              </p>
+            <div className="space-y-3">
+              {SYSTEM_DOCUMENTS.map((doc) => (
+                <button
+                  key={doc.id}
+                  type="button"
+                  onClick={() => {
+                    if (doc.id === 'takeoff') {
+                      setTakeoffForm(emptyTakeoff());
+                      setSystemDocWorkspace('takeoff');
+                      setSystemDocPreview(null);
+                      setTakeoffAssignOpen(false);
+                      setTakeoffAssignSearch('');
+                    } else if (doc.id === 'pricing') {
+                      setSystemDocWorkspace('pricing');
+                      setSystemDocPreview(null);
+                    }
+                  }}
+                  className="w-full text-left rounded-3xl border border-zinc-200 bg-white p-5 hover:border-sky-300 transition"
+                >
+                  <div className="font-semibold text-zinc-900">{doc.name}</div>
+                  <div className="text-sm text-zinc-500 mt-1">{doc.description}</div>
+                </button>
+              ))}
             </div>
+            <p className="text-xs text-zinc-400 mt-6">
+              Open Take-off or Company pricing here, or on a lead use Documents →
+              + Add → From system.
+            </p>
+          </div>
+        )}
+
+        {systemDocWorkspace === 'pricing' && (
+        <div className="fixed inset-0 z-[85] bg-zinc-50 overflow-y-auto">
+          <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-20">
+            <div className="flex items-center justify-between gap-3 mb-4 sticky top-0 bg-zinc-50/95 backdrop-blur py-3 z-10">
+              <div>
+                <h1 className="text-xl font-semibold text-zinc-900">Company pricing</h1>
+                <p className="text-xs text-zinc-500">Cost · Sell PHX · Sell Tuc/North</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSystemDocWorkspace(null)}
+                className="text-sm font-medium text-sky-700 shrink-0"
+              >
+                Close
+              </button>
+            </div>
+            <div className="grid grid-cols-1 gap-4">
+              {PRICING_GUIDE.map((section) => (
+                <section
+                  key={section.title}
+                  className="rounded-2xl border border-zinc-200 bg-white overflow-hidden"
+                >
+                  <div className="px-3 py-2 border-b border-zinc-100 bg-zinc-50">
+                    <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-600">
+                      {section.title}
+                    </h2>
+                  </div>
+                  <div className="divide-y divide-zinc-50">
+                    {section.rows.map((row, idx) => {
+                      const live =
+                        row.key && priceSheet && priceSheet[row.key] != null
+                          ? Number(priceSheet[row.key])
+                          : null;
+                      const sellPhx = live != null && live > 0 ? live : row.sellPhx;
+                      const liveCost =
+                        row.key != null
+                          ? getCost(row.key, row.cost ?? 0)
+                          : row.cost ?? 0;
+                      const unit = row.unit || '';
+                      const money = (n?: number) =>
+                        n != null && n > 0 ? (
+                          <span className="whitespace-nowrap">
+                            <span className="font-semibold text-zinc-900">
+                              ${Number(n).toLocaleString()}
+                            </span>
+                            {unit ? (
+                              <span className="text-[10px] text-zinc-400 ml-0.5">{unit}</span>
+                            ) : null}
+                          </span>
+                        ) : null;
+                      return (
+                        <div
+                          key={`${section.title}-${idx}`}
+                          className="px-3 py-2 flex items-start justify-between gap-3"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-zinc-900 leading-snug">
+                              {row.label}
+                            </div>
+                            {row.note && (
+                              <div className="text-[11px] text-zinc-400 leading-snug mt-0.5">
+                                {row.note}
+                              </div>
+                            )}
+                          </div>
+                          <div className="text-right shrink-0 text-xs leading-snug space-y-0.5">
+                            {liveCost > 0 && (
+                              <div className="text-zinc-500">
+                                C{' '}
+                                <span className="font-medium text-zinc-700">
+                                  ${Number(liveCost).toLocaleString()}
+                                </span>
+                                {unit ? (
+                                  <span className="text-[10px] text-zinc-400 ml-0.5">
+                                    {unit}
+                                  </span>
+                                ) : null}
+                              </div>
+                            )}
+                            {sellPhx != null && sellPhx > 0 && (
+                              <div>
+                                <span className="text-zinc-400">PHX </span>
+                                {money(sellPhx)}
+                              </div>
+                            )}
+                            {row.sellTuc != null && row.sellTuc > 0 && (
+                              <div>
+                                <span className="text-zinc-400">Tuc </span>
+                                {money(row.sellTuc)}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+{systemDocWorkspace === 'takeoff' && (
+          <div className="fixed inset-0 z-[85] bg-zinc-50 overflow-y-auto">
+            <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-28">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+                <div>
+                  <h1 className="text-xl font-semibold text-zinc-900">
+                    Take-off / Inspection Sheet
+                  </h1>
+                  <p className="text-sm text-zinc-500">
+                    Fill now, then assign to a lead
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSystemDocWorkspace(null);
+                    setTakeoffAssignOpen(false);
+                  }}
+                  className="text-sm text-zinc-600 hover:text-zinc-900 px-3 py-1.5 rounded-xl border border-zinc-200 bg-white"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                {TAKEOFF_FIELD_LABELS.map(({ key, label }) =>
+                  key === 'notes' ? (
+                    <div key={key} className="md:col-span-2">
+                      <label className="text-xs text-zinc-500 mb-1 block">
+                        {label}
+                      </label>
+                      <textarea
+                        value={takeoffForm[key]}
+                        onChange={(e) =>
+                          setTakeoffForm((f) => ({
+                            ...f,
+                            [key]: e.target.value,
+                          }))
+                        }
+                        rows={3}
+                        className="w-full border border-zinc-200 rounded-xl px-3 py-2 text-sm text-zinc-900 bg-white"
+                      />
+                    </div>
+                  ) : (
+                    <div key={key}>
+                      <label className="text-xs text-zinc-500 mb-1 block">
+                        {label}
+                      </label>
+                      <input
+                        value={takeoffForm[key]}
+                        onChange={(e) =>
+                          setTakeoffForm((f) => ({
+                            ...f,
+                            [key]: e.target.value,
+                          }))
+                        }
+                        className="w-full border border-zinc-200 rounded-xl px-3 py-2 text-sm text-zinc-900 bg-white"
+                      />
+                    </div>
+                  )
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-2 sticky bottom-4">
+                <button
+                  type="button"
+                  onClick={() => setTakeoffAssignOpen(true)}
+                  className="px-4 py-2.5 rounded-xl bg-sky-600 text-white text-sm font-medium hover:bg-sky-700"
+                >
+                  Assign to lead
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void assignTakeoffToNewLead()}
+                  className="px-4 py-2.5 rounded-xl border border-zinc-200 bg-white text-sm font-medium text-zinc-800 hover:border-sky-300"
+                >
+                  New lead + assign
+                </button>
+              </div>
+            </div>
+
+            {takeoffAssignOpen && (
+              <div className="fixed inset-0 z-[90] bg-black/40 flex items-end sm:items-center justify-center p-4">
+                <div className="bg-white rounded-3xl w-full max-w-md max-h-[80vh] overflow-hidden flex flex-col shadow-lg">
+                  <div className="p-4 border-b border-zinc-100">
+                    <div className="font-semibold text-zinc-900 mb-2">
+                      Assign to lead
+                    </div>
+                    <input
+                      value={takeoffAssignSearch}
+                      onChange={(e) => setTakeoffAssignSearch(e.target.value)}
+                      placeholder="Search name, job #, address…"
+                      className="w-full border border-zinc-200 rounded-xl px-3 py-2 text-sm"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="overflow-y-auto flex-1 p-2">
+                    {leads
+                      .filter((l) => {
+                        const q = takeoffAssignSearch.trim().toLowerCase();
+                        if (!q) return true;
+                        const hay = [
+                          l.clientFirstName,
+                          l.clientLastName,
+                          l.jobNumber,
+                          l.clientAddress,
+                          l.clientCity,
+                          l.clientPhone,
+                        ]
+                          .join(' ')
+                          .toLowerCase();
+                        return hay.includes(q);
+                      })
+                      .slice(0, 50)
+                      .map((l) => (
+                        <button
+                          key={l.id}
+                          type="button"
+                          onClick={() => assignTakeoffToLead(l.id)}
+                          className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-sky-50 text-sm"
+                        >
+                          <div className="font-medium text-zinc-900">
+                            {[l.clientFirstName, l.clientLastName]
+                              .filter(Boolean)
+                              .join(' ') || 'Untitled lead'}
+                          </div>
+                          <div className="text-xs text-zinc-500">
+                            {l.jobNumber || 'No job #'}
+                            {l.clientAddress ? ` · ${l.clientAddress}` : ''}
+                          </div>
+                        </button>
+                      ))}
+                    {leads.length === 0 && (
+                      <p className="text-sm text-zinc-500 px-3 py-4">
+                        No leads yet — use New lead + assign.
+                      </p>
+                    )}
+                  </div>
+                  <div className="p-3 border-t border-zinc-100">
+                    <button
+                      type="button"
+                      onClick={() => setTakeoffAssignOpen(false)}
+                      className="text-sm text-zinc-500 hover:text-zinc-800"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -4695,7 +8672,7 @@ export default function SummitApp() {
                               ? 'day-highlight font-semibold'
                               : isToday
                                 ? 'bg-transparent text-slate-900 border-slate-500 font-medium'
-                                : 'bg-white border-zinc-200 text-zinc-700 hover:border-zinc-300'
+                                : 'bg-white border-zinc-200 text-zinc-700 hover:border-sky-300'
                           }`}
                         >
                           {label.toUpperCase()}
@@ -4869,7 +8846,7 @@ export default function SummitApp() {
                             onClick={() =>
                               scheduleLeadOnDay(lead.id, selectedIso)
                             }
-                            className="px-3 py-1.5 rounded-full text-xs font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-100 hover:border-zinc-300"
+                            className="px-3 py-1.5 rounded-full text-xs font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-100 hover:border-sky-300"
                           >
                             + {name}
                           </button>
@@ -5039,9 +9016,9 @@ export default function SummitApp() {
               <button
                 type="button"
                 onClick={() => openEstimatePicker('estimate')}
-                className="text-left group bg-white border border-zinc-200/80 hover:border-emerald-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-6 sm:p-7 transition-all duration-200"
+                className="text-left group bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-6 sm:p-7 transition-all duration-200"
               >
-                <div className="text-xl font-semibold text-zinc-900 mb-1 group-hover:text-emerald-900">
+                <div className="text-xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900">
                   New estimate
                 </div>
                 <p className="text-sm text-zinc-500">
@@ -5063,7 +9040,7 @@ export default function SummitApp() {
               <button
                 type="button"
                 onClick={() => openEstimatesHub()}
-                className="text-left group bg-white border border-zinc-200/80 hover:border-zinc-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-6 sm:p-7 transition-all duration-200"
+                className="text-left group bg-white border border-zinc-200/80 hover:border-sky-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-6 sm:p-7 transition-all duration-200"
               >
                 <div className="text-xl font-semibold text-zinc-900 mb-1">
                   All estimates
@@ -5075,7 +9052,7 @@ export default function SummitApp() {
               <button
                 type="button"
                 onClick={() => handleTabChange('calendar')}
-                className="text-left group bg-white border border-zinc-200/80 hover:border-zinc-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-6 sm:p-7 transition-all duration-200"
+                className="text-left group bg-white border border-zinc-200/80 hover:border-sky-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-6 sm:p-7 transition-all duration-200"
               >
                 <div className="text-xl font-semibold text-zinc-900 mb-1">
                   Calendar
@@ -5087,7 +9064,7 @@ export default function SummitApp() {
               <button
                 type="button"
                 onClick={() => handleTabChange('documents')}
-                className="text-left group bg-white border border-zinc-200/80 hover:border-zinc-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-6 sm:p-7 transition-all duration-200"
+                className="text-left group bg-white border border-zinc-200/80 hover:border-sky-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-6 sm:p-7 transition-all duration-200"
               >
                 <div className="text-xl font-semibold text-zinc-900 mb-1">
                   Documents
@@ -5110,6 +9087,57 @@ export default function SummitApp() {
             </p>
 
             <div className="max-w-xl space-y-6">
+              <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6 space-y-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-zinc-900">
+                    Cloud (Supabase)
+                  </h2>
+                  <p className="text-sm text-zinc-500 mt-1">
+                    Backend client for future lead sync. Keys live in{' '}
+                    <code className="text-xs bg-zinc-100 px-1 rounded">
+                      .env.local
+                    </code>
+                    , not in source.
+                  </p>
+                </div>
+                <div
+                  className={`rounded-2xl border px-4 py-3 text-sm ${
+                    supabaseEnabled
+                      ? 'border-slate-200 bg-slate-50 text-slate-800'
+                      : 'border-dashed border-zinc-200 bg-zinc-50 text-zinc-600'
+                  }`}
+                >
+                  {supabaseEnabled ? (
+                    <>
+                      <div className="font-semibold text-zinc-900">Connected</div>
+                      <div className="text-xs text-zinc-500 mt-0.5 truncate">
+                        {process.env.NEXT_PUBLIC_SUPABASE_URL || 'Supabase project'}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="font-medium text-zinc-800">Not configured</div>
+                      <p className="mt-1 text-xs">
+                        Set{' '}
+                        <code className="bg-zinc-200/80 px-1 rounded">
+                          NEXT_PUBLIC_SUPABASE_URL
+                        </code>{' '}
+                        and{' '}
+                        <code className="bg-zinc-200/80 px-1 rounded">
+                          NEXT_PUBLIC_SUPABASE_ANON_KEY
+                        </code>
+                        , then restart the dev server.
+                      </p>
+                    </>
+                  )}
+                </div>
+                {supabaseEnabled && supabase ? (
+                  <p className="text-xs text-zinc-400">
+                    Browser client ready for cloud sync.
+                  </p>
+                ) : null}
+              </section>
+
               <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6 space-y-4">
                 <div>
                   <h2 className="text-lg font-semibold text-zinc-900">
@@ -5413,7 +9441,7 @@ export default function SummitApp() {
           <div className="w-full pb-4">
             <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
               <div>
-                <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">Jobs</h1>
+                <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">Pipeline</h1>
                 <p className="text-zinc-500 mt-0.5">
                   {pipelineFilter ? (
                     <>
@@ -5468,7 +9496,7 @@ export default function SummitApp() {
                   className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
                     pipelineFilter == null
                       ? 'bg-zinc-900 text-white'
-                      : 'bg-white text-zinc-600 border border-zinc-200 hover:border-zinc-300'
+                      : 'bg-white text-zinc-600 border border-zinc-200 hover:border-sky-300'
                   }`}
                 >
                   All stages
@@ -5489,7 +9517,7 @@ export default function SummitApp() {
                       className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-all border ${
                         active
                           ? 'bg-zinc-900 text-white border-zinc-900 shadow-sm'
-                          : 'bg-white text-zinc-600 border-zinc-200 hover:border-zinc-300 hover:shadow-sm'
+                          : 'bg-white text-zinc-600 border-zinc-200 hover:border-sky-300 hover:shadow-sm'
                       }`}
                     >
                       <span
@@ -5508,51 +9536,132 @@ export default function SummitApp() {
             )}
 
             {leadsView === 'trash' ? (
-              trash.length === 0 ? (
-                <div className="text-center py-20 text-zinc-400">Trash is empty.</div>
-              ) : (
-                <div>
-                  <div className="flex justify-end mb-4">
-                    <button
-                      onClick={emptyTrash}
-                      className="px-6 py-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-100 rounded-2xl text-sm font-medium transition-colors"
-                    >
-                      Empty trash permanently
-                    </button>
+              <div className="space-y-3">
+                {trash.length === 0 ? (
+                  <div className="text-center py-16 text-slate-500">
+                    <p className="font-medium">Trash is empty</p>
+                    <p className="text-sm mt-1">
+                      Deleted leads and documents will appear here
+                    </p>
                   </div>
-                  <div className="space-y-4">
-                    {trash.map((lead) => (
-                      <div
-                        key={lead.id}
-                        className="bg-white border border-zinc-200 rounded-3xl p-6 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4"
+                ) : (
+                  <>
+                    <div className="flex justify-end mb-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (
+                            confirm(
+                              `Permanently delete all ${trash.length} items? This cannot be undone.`
+                            )
+                          ) {
+                            emptyTrash();
+                          }
+                        }}
+                        className="text-sm text-red-600 hover:text-red-700 font-medium"
                       >
-                        <div>
-                          <div className="font-semibold text-zinc-900">
-                            {lead.clientFirstName} {lead.clientLastName}
+                        Empty trash permanently
+                      </button>
+                    </div>
+
+                    {trash.map((item) => {
+                      // Defensive: never let a bad item crash the whole list
+                      if (!item || !item.id) return null;
+
+                      let title = 'Unknown item';
+                      let subtitle = item.deletedAt || '';
+
+                      try {
+                        if (item.kind === 'lead' && item.lead) {
+                          title =
+                            [
+                              item.lead.clientFirstName,
+                              item.lead.clientLastName,
+                            ]
+                              .filter(Boolean)
+                              .join(' ') ||
+                            item.lead.jobNumber ||
+                            `Lead #${item.lead.id}`;
+                          subtitle = `Lead · ${item.deletedAt}`;
+                        } else if (item.kind === 'photo' && item.photo) {
+                          title = item.photo.name || 'Photo';
+                          subtitle = `Photo · ${item.leadLabel || 'Lead'} · ${item.deletedAt}`;
+                        } else if (
+                          item.kind === 'roofMeasurement' &&
+                          item.measurement
+                        ) {
+                          title =
+                            item.measurement.label ||
+                            'Roof measurement';
+                          subtitle = `Map measurement · ${item.leadLabel || 'Lead'} · ${item.deletedAt}`;
+                        } else if (item.kind === 'estimate' && item.estimate) {
+                          title =
+                            item.estimate.selectedShingle ||
+                            `Estimate · $${Number(item.estimate.total || 0).toLocaleString()}`;
+                          subtitle = `Estimate · ${item.leadLabel || 'Lead'} · ${item.deletedAt}`;
+                        } else if (item.kind === 'note' && item.note) {
+                          title =
+                            (item.note.text || 'Note').slice(0, 80) || 'Note';
+                          subtitle = `Note · ${item.leadLabel || 'Lead'} · ${item.deletedAt}`;
+                        } else if (
+                          (item.kind === 'document' ||
+                            item.kind === 'measurement') &&
+                          item.document
+                        ) {
+                          title =
+                            item.document.name ||
+                            (item.kind === 'measurement'
+                              ? 'Measurement'
+                              : 'Document');
+                          subtitle = `${
+                            item.kind === 'measurement'
+                              ? 'Measurement'
+                              : 'Document'
+                          } · ${item.leadLabel || 'Lead'} · ${item.deletedAt}`;
+                        } else {
+                          title = `Broken ${item.kind || 'item'}`;
+                          subtitle = `Corrupted entry · ${item.deletedAt || ''}`;
+                        }
+                      } catch {
+                        title = 'Broken trash item';
+                        subtitle = 'Could not read this entry';
+                      }
+
+                      return (
+                        <div
+                          key={item.id}
+                          className="flex items-center justify-between gap-3 p-4 bg-white border border-slate-200 rounded-xl"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-medium text-slate-900 truncate">
+                              {title}
+                            </div>
+                            <div className="text-xs text-slate-500 mt-0.5">
+                              {subtitle}
+                            </div>
                           </div>
-                          <div className="text-sm text-zinc-500">
-                            {lead.clientAddress} • {lead.date}
+                          <div className="flex gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => restoreFromTrash(item.id)}
+                              className="px-3 py-1.5 rounded-xl text-sm font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                            >
+                              Restore
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => permanentlyDelete(item.id)}
+                              className="px-3 py-1.5 rounded-xl text-sm font-medium bg-red-50 text-red-700 border border-red-100 hover:bg-red-100"
+                            >
+                              Delete
+                            </button>
                           </div>
                         </div>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => restoreFromTrash(lead.id)}
-                            className="px-5 py-3 border border-zinc-300 rounded-2xl text-sm hover:bg-zinc-100 hover:border-zinc-200 transition-colors"
-                          >
-                            Restore
-                          </button>
-                          <button
-                            onClick={() => permanentlyDelete(lead.id)}
-                            className="px-5 py-3 bg-zinc-100 hover:bg-zinc-50 hover:text-zinc-800 text-zinc-800 rounded-2xl text-sm font-medium transition-colors"
-                          >
-                            Delete permanently
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )
+                      );
+                    })}
+                  </>
+                )}
+              </div>
             ) : (
               <>
                 <div className="mb-6 sm:mb-8">
@@ -5744,9 +9853,11 @@ export default function SummitApp() {
                       : 'Lead estimate'}
                   </div>
                   <p className="text-xs text-zinc-500 mt-0.5 truncate">
-                    {estimateWorkspace === 'estimate'
-                      ? 'Customer quote'
-                      : 'Internal financials & buffer'}
+                    {estimateFlow === 'pick'
+                      ? 'Choose roof system'
+                      : estimateWorkspace === 'estimate'
+                        ? `Customer quote · ${roofSystem}`
+                        : 'Internal financials & buffer'}
                     {estimatorClient.jobNumber
                       ? ` · Job #${estimatorClient.jobNumber}`
                       : ''}
@@ -5764,30 +9875,32 @@ export default function SummitApp() {
                   ← Back to lead
                 </button>
               </div>
-              <div className="inline-flex p-1 rounded-full bg-zinc-100">
-                <button
-                  type="button"
-                  onClick={() => setEstimateWorkspace('estimate')}
-                  className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-colors ${
-                    estimateWorkspace === 'estimate'
-                      ? 'bg-white text-zinc-900 shadow-sm'
-                      : 'text-zinc-500 hover:text-zinc-800'
-                  }`}
-                >
-                  Estimate
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setEstimateWorkspace('internal')}
-                  className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-colors ${
-                    estimateWorkspace === 'internal'
-                      ? 'bg-white text-zinc-900 shadow-sm'
-                      : 'text-zinc-500 hover:text-zinc-800'
-                  }`}
-                >
-                  Internal
-                </button>
-              </div>
+              {estimateFlow === 'estimate' && (
+                <div className="inline-flex p-1 rounded-full bg-zinc-100">
+                  <button
+                    type="button"
+                    onClick={() => setEstimateWorkspace('estimate')}
+                    className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-colors ${
+                      estimateWorkspace === 'estimate'
+                        ? 'bg-white text-zinc-900 shadow-sm'
+                        : 'text-zinc-500 hover:text-zinc-800'
+                    }`}
+                  >
+                    Estimate
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEstimateWorkspace('internal')}
+                    className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-colors ${
+                      estimateWorkspace === 'internal'
+                        ? 'bg-white text-zinc-900 shadow-sm'
+                        : 'text-zinc-500 hover:text-zinc-800'
+                    }`}
+                  >
+                    Internal
+                  </button>
+                </div>
+              )}
             </div>
 
             {estimateWorkspace === 'internal' && (
@@ -5827,8 +9940,11 @@ export default function SummitApp() {
                       <div className="font-semibold mb-4">Cost breakdown</div>
                       <div className="space-y-2">
                         <div className="flex justify-between">
-                          <span>Base labor</span>
-                          <span>${(sq * 100).toFixed(2)}</span>
+                          <span>
+                            Base labor (${laborPerSq}/sq ·{' '}
+                            {REGION_LABEL[activePricingRegion]})
+                          </span>
+                          <span>${(sq * laborPerSq).toFixed(2)}</span>
                         </div>
                         {ly > 1 && (
                           <div className="flex justify-between">
@@ -5904,15 +10020,15 @@ export default function SummitApp() {
                             <span>${ridgeMaterial.toFixed(2)}</span>
                           </div>
                         )}
-                        {mbCapMaterial > 0 && (
+                        {summitIsModBit && mbCapMaterial > 0 && (
                           <div className="flex justify-between">
-                            <span>TopShield PRO SA Cap</span>
+                            <span>MB SA cap sheet</span>
                             <span>${mbCapMaterial.toFixed(2)}</span>
                           </div>
                         )}
-                        {mbBasePlyMaterial > 0 && (
+                        {summitIsModBit && mbBasePlyMaterial > 0 && (
                           <div className="flex justify-between">
-                            <span>MB base ply (2 layers)</span>
+                            <span>MB base ply</span>
                             <span>${mbBasePlyMaterial.toFixed(2)}</span>
                           </div>
                         )}
@@ -6057,7 +10173,59 @@ export default function SummitApp() {
               </div>
             )}
 
-            {estimateWorkspace === 'estimate' && (
+            {estimateWorkspace === 'estimate' && estimateFlow === 'pick' && (
+              <div className="pb-16 w-full">
+                <div className="mb-6">
+                  <h2 className="text-2xl font-semibold text-zinc-900 tracking-tight">
+                    New estimate
+                  </h2>
+                  <p className="text-sm text-zinc-500 mt-1">
+                    Choose the roof system for this job. You can change it later.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {(
+                    [
+                      {
+                        id: 'shingle' as const,
+                        label: 'Shingle',
+                        desc: 'IKO, GAF, Owens — architectural shingles',
+                      },
+                      {
+                        id: 'tile' as const,
+                        label: 'Tile',
+                        desc: 'Detach & Reset / R&R systems',
+                      },
+                      {
+                        id: 'flat' as const,
+                        label: 'Low Slope',
+                        desc: 'Mod bit, BUR, coatings, foam — low slope systems',
+                      },
+                    ] as const
+                  ).map((sys) => (
+                    <button
+                      key={sys.id}
+                      type="button"
+                      onClick={() => selectRoofSystem(sys.id)}
+                      className="text-left bg-white border-2 border-zinc-200 hover:border-sky-300 hover:shadow-md rounded-3xl p-6 sm:p-8 transition-all group"
+                    >
+                      <div className="text-sky-700 text-xs font-semibold mb-2 uppercase tracking-wide group-hover:text-sky-800">
+                        Roof system
+                      </div>
+                      <div className="text-2xl font-semibold text-zinc-900 mb-2">
+                        {sys.label}
+                      </div>
+                      <p className="text-sm text-zinc-500">{sys.desc}</p>
+                      <div className="mt-5 text-sm font-semibold text-sky-700">
+                        Continue →
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {estimateWorkspace === 'estimate' && estimateFlow === 'estimate' && (
             <>
             {/* Optional measurement helpers — never required */}
             <div className="mb-6 rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5">
@@ -6198,18 +10366,6 @@ export default function SummitApp() {
                   />
                 </div>
                 <div className="bg-white rounded-3xl p-5 border border-zinc-200">
-                  <div className="text-xs text-zinc-500 mb-1">MB SQUARES (FLAT)</div>
-                  <input
-                    type="number"
-                    min={0}
-                    step={0.1}
-                    value={modifiedBitumenSquares}
-                    onChange={(e) => setModifiedBitumenSquares(e.target.value)}
-                    placeholder="0"
-                    className="text-3xl font-semibold w-full bg-transparent border-0 focus:outline-none p-0 text-zinc-900"
-                  />
-                </div>
-                <div className="bg-white rounded-3xl p-5 border border-zinc-200">
                   <div className="text-xs text-zinc-500 mb-1">LAYERS</div>
                   <select value={layers} onChange={(e) => setLayers(e.target.value)} className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900">
                     <option value="">Select...</option>
@@ -6252,178 +10408,1017 @@ export default function SummitApp() {
             </div>
 
             <div className="mb-8">
-              <div className="text-sm font-semibold text-zinc-600 mb-4">CHOOSE YOUR SHINGLE</div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div onClick={() => toggleShingle('cambridge')} className={`bg-white border-2 rounded-3xl p-6 cursor-pointer transition-all ${selectedShingle === 'cambridge' ? 'border-sky-400/70 bg-sky-50/40 shadow-sm ring-1 ring-sky-200/60' : 'border-zinc-200 hover:border-zinc-300'}`}>
-                  <div className="text-emerald-700 text-xs font-semibold mb-1">GOOD</div>
-                  <div className="font-semibold text-xl mb-3 text-zinc-900">IKO Cambridge</div>
-                  <p className="text-sm text-zinc-600 mb-4">Architectural shingle with a dimensional wood-shake look at a great value. Built-in algae resistance and strong wind protection.</p>
-                  <div className="text-xs text-zinc-500 mb-1">COLOR</div>
-                  <select value={cambridgeColor} onChange={(e) => setCambridgeColor(e.target.value)} className="w-full border border-zinc-200 rounded-2xl px-4 py-2 text-sm text-zinc-900" onClick={e => e.stopPropagation()}>
-                    <option value="">Select color...</option>
-                    <option>Charcoal Grey</option><option>Driftwood</option><option>Earthtone Cedar</option><option>Harvard Slate</option><option>Dual Black</option><option>Weatherwood</option><option>Dual Brown</option><option>Dual Grey</option>
-                  </select>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+                <div>
+                  <div className="text-sm font-semibold text-zinc-600">
+                    {roofSystem === 'shingle'
+                      ? 'CHOOSE YOUR SHINGLE'
+                      : roofSystem === 'tile'
+                        ? 'CHOOSE YOUR TILE SYSTEM'
+                        : 'CHOOSE YOUR LOW SLOPE SYSTEM'}
+                  </div>
                 </div>
-                <div onClick={() => toggleShingle('dynasty')} className={`bg-white border-2 rounded-3xl p-6 cursor-pointer transition-all relative ${selectedShingle === 'dynasty' ? 'border-sky-400/70 bg-sky-50/40 shadow-sm ring-1 ring-sky-200/60' : 'border-zinc-200 hover:border-zinc-300'}`}>
-                  <div className="absolute -top-2 right-6 bg-sky-700 text-white text-xs px-3 py-0.5 rounded-full font-medium shadow-sm">RECOMMENDED</div>
-                  <div className="text-sky-700 text-xs font-semibold mb-1">BETTER</div>
-                  <div className="font-semibold text-xl mb-3 text-zinc-900">IKO Dynasty</div>
-                  <p className="text-sm text-zinc-600 mb-4">High-performance shingle with ArmourZone reinforced nailing area for superior wind resistance up to 130 mph. Class 3 impact resistance and excellent durability.</p>
-                  <div className="text-xs text-zinc-500 mb-1">COLOR</div>
-                  <select value={dynastyColor} onChange={(e) => setDynastyColor(e.target.value)} className="w-full border border-zinc-200 rounded-2xl px-4 py-2 text-sm text-zinc-900" onClick={e => e.stopPropagation()}>
-                    <option value="">Select color...</option>
-                    <option>Granite Black</option><option>Shadow Brown</option><option>Cornerstone / Weatherwood</option><option>Frostone Grey</option><option>Glacier</option><option>Brownstone</option><option>Driftshake</option><option>Biscayne</option><option>Atlantic Blue</option><option>Monaco Red</option><option>Emerald Green</option><option>Sentinel Slate</option><option>Matte Black</option>
-                  </select>
-                </div>
-                <div onClick={() => toggleShingle('armourshake')} className={`bg-white border-2 rounded-3xl p-6 cursor-pointer transition-all ${selectedShingle === 'armourshake' ? 'border-sky-400/70 bg-sky-50/40 shadow-sm ring-1 ring-sky-200/60' : 'border-zinc-200 hover:border-zinc-300'}`}>
-                  <div className="text-amber-700 text-xs font-semibold mb-1">PREMIUM</div>
-                  <div className="font-semibold text-xl mb-3 text-zinc-900">IKO Armourshake</div>
-                  <p className="text-sm text-zinc-600 mb-4">Designer shingle with exceptional thickness and deep shadow lines for a true wood-shake appearance. Premium weight and standout curb appeal.</p>
-                  <div className="text-xs text-zinc-500 mb-1">COLOR</div>
-                  <select value={armourshakeColor} onChange={(e) => setArmourshakeColor(e.target.value)} className="w-full border border-zinc-200 rounded-2xl px-4 py-2 text-sm text-zinc-900" onClick={e => e.stopPropagation()}>
-                    <option value="">Select color...</option>
-                    <option>Shadow Black</option><option>Greystone</option><option>Chalet Wood</option><option>Weathered Stone</option><option>Western Redwood</option>
-                  </select>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEstimateFlow('pick');
+                    setEstimateWorkspace('estimate');
+                  }}
+                  className="text-sm font-medium text-sky-800 hover:text-sky-950 self-start sm:self-auto"
+                >
+                  ← Change system
+                </button>
               </div>
+
+              {roofSystem === 'shingle' && (
+                <div className="bg-white rounded-3xl p-5 border border-zinc-200 space-y-4">
+                  {/* Product */}
+                  <div className="space-y-2">
+                    <div className="text-xs text-zinc-500">PRODUCT</div>
+                    <select
+                      value={selectedShingle}
+                      onChange={(e) => {
+                        const val = e.target.value as ShingleType;
+                        selectShingleProduct(val);
+                        // Clear color when product changes
+                        setCambridgeColor('');
+                        setDynastyColor('');
+                        setArmourshakeColor('');
+                        if (val) {
+                          setProductColors((prev) => ({ ...prev, [val]: '' }));
+                        }
+                        setHasUnsavedChanges(true);
+                      }}
+                      className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white"
+                    >
+                      <option value="">Select product…</option>
+                      {SHINGLE_PRODUCTS.map((p) => (
+                        <option key={p.key} value={p.key}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+
+                    {/* Description for selected product */}
+                    {selectedShingle && (
+                      <p className="text-sm text-zinc-500 leading-relaxed">
+                        {
+                          SHINGLE_PRODUCTS.find((p) => p.key === selectedShingle)
+                            ?.description
+                        }
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Color dropdown — only when a product is selected */}
+                  {selectedShingle &&
+                    SHINGLE_PRODUCTS.some((p) => p.key === selectedShingle) && (
+                      <div className="space-y-2">
+                        <div className="text-xs text-zinc-500">COLOR</div>
+                        <select
+                          value={
+                            selectedShingle === 'cambridge'
+                              ? cambridgeColor
+                              : selectedShingle === 'dynasty'
+                                ? dynastyColor
+                                : selectedShingle === 'armourshake'
+                                  ? armourshakeColor
+                                  : productColors[selectedShingle] || ''
+                          }
+                          onChange={(e) => {
+                            setProductColor(selectedShingle, e.target.value);
+                            setHasUnsavedChanges(true);
+                          }}
+                          className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white"
+                        >
+                          <option value="">Select color…</option>
+                          {(
+                            SHINGLE_PRODUCTS.find((p) => p.key === selectedShingle)
+                              ?.colors || []
+                          ).map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                </div>
+              )}
+
+              {roofSystem === 'tile' && (
+                <div className="bg-white rounded-3xl p-5 border border-zinc-200 space-y-4">
+                  <div>
+                    <div className="text-xs text-zinc-500 mb-2">TILE SCOPE</div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTileMode('dr');
+                          selectShingleProduct('tile_dr');
+                          setTileProduct('');
+                          setHasUnsavedChanges(true);
+                        }}
+                        className={`flex-1 py-2.5 rounded-2xl text-sm font-medium border transition-all ${
+                          tileMode === 'dr' || selectedShingle === 'tile_dr'
+                            ? 'border-sky-400/60 bg-sky-50 text-sky-900'
+                            : 'border-zinc-300 text-zinc-700'
+                        }`}
+                      >
+                        Detach &amp; Reset
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTileMode('rr');
+                          selectShingleProduct('tile_rr');
+                          setCurrentTile('');
+                          setHasUnsavedChanges(true);
+                        }}
+                        className={`flex-1 py-2.5 rounded-2xl text-sm font-medium border transition-all ${
+                          tileMode === 'rr' || selectedShingle === 'tile_rr'
+                            ? 'border-sky-400/60 bg-sky-50 text-sky-900'
+                            : 'border-zinc-300 text-zinc-700'
+                        }`}
+                      >
+                        Remove &amp; Replace
+                      </button>
+                    </div>
+                  </div>
+
+                  {(tileMode === 'rr' || selectedShingle === 'tile_rr') && (
+                    <div className="space-y-2">
+                      <div className="text-xs text-zinc-500">NEW TILE PRODUCT</div>
+                      <select
+                        value={tileProduct}
+                        onChange={(e) => {
+                          setTileProduct(e.target.value);
+                          setTileBrand('');
+                          setHasUnsavedChanges(true);
+                        }}
+                        className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white"
+                      >
+                        <option value="">Select tile…</option>
+                        {TILE_PRODUCTS.map((p) => (
+                          <option key={p.key} value={p.key}>
+                            {p.label}
+                          </option>
+                        ))}
+                      </select>
+                      {tileProduct && (
+                        <p className="text-sm text-zinc-500 leading-relaxed">
+                          {
+                            TILE_PRODUCTS.find((p) => p.key === tileProduct)
+                              ?.description
+                          }
+                        </p>
+                      )}
+                      {tileProduct && (
+                        <div className="mt-3 space-y-2">
+                          <div className="text-xs text-zinc-500">BRAND</div>
+                          <select
+                            value={tileBrand}
+                            onChange={(e) => {
+                              setTileBrand(e.target.value);
+                              setHasUnsavedChanges(true);
+                            }}
+                            className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white"
+                          >
+                            <option value="">Select brand…</option>
+                            {(TILE_BRANDS[tileProduct] || []).map((b) => (
+                              <option key={b.key} value={b.key}>
+                                {b.label}
+                              </option>
+                            ))}
+                          </select>
+                          {(TILE_BRANDS[tileProduct] || []).length === 0 && (
+                            <p className="text-xs text-zinc-400">
+                              No brands loaded yet
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {(tileMode === 'dr' || selectedShingle === 'tile_dr') && (
+                    <div className="space-y-2">
+                      <div className="text-xs text-zinc-500">CURRENT TILE ON ROOF</div>
+                      <input
+                        type="text"
+                        value={currentTile}
+                        onChange={(e) => {
+                          setCurrentTile(e.target.value);
+                          setHasUnsavedChanges(true);
+                        }}
+                        placeholder="e.g. Concrete S-tile, clay mission…"
+                        className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {roofSystem === 'flat' && (
+                <div className="space-y-4">
+                  <div className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
+                    <div className="text-xs font-semibold tracking-wide text-zinc-500 mb-3">
+                      SYSTEM
+                    </div>
+                    <select
+                      value={
+                        flatSystem === 'mod_bit'
+                          ? 'mod_bitumen'
+                          : flatSystem === 'bur'
+                            ? 'bur'
+                            : flatSystem === 'foam'
+                              ? foamKind === 'overlay'
+                                ? 'foam_overlay'
+                                : foamKind === 'full'
+                                  ? 'full_foam'
+                                  : ''
+                              : flatSystem === 'coating'
+                                ? 'coating'
+                                : ''
+                      }
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setModifiedBitumenColor('');
+                        if (!val) {
+                          applyFlatSelection('');
+                        } else if (val === 'mod_bitumen') {
+                          applyFlatSelection('mod_bit');
+                        } else if (val === 'bur') {
+                          applyFlatSelection('bur');
+                        } else if (val === 'full_foam') {
+                          applyFlatSelection('foam', '', 'full');
+                        } else if (val === 'foam_overlay') {
+                          applyFlatSelection('foam', '', 'overlay');
+                        } else if (val === 'coating') {
+                          applyFlatSelection(
+                            'coating',
+                            coatingKind || 'elastomeric'
+                          );
+                        }
+                      }}
+                      className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20"
+                    >
+                      <option value="">Select system…</option>
+                      {LOW_SLOPE_TYPES.map((p) => (
+                        <option key={p.key} value={p.key}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+                    {(flatSystem === 'mod_bit' ||
+                      flatSystem === 'bur' ||
+                      flatSystem === 'foam' ||
+                      flatSystem === 'coating') && (
+                      <p className="text-sm text-zinc-500 mt-3 leading-relaxed">
+                        {
+                          LOW_SLOPE_TYPES.find((p) => {
+                            if (flatSystem === 'mod_bit')
+                              return p.key === 'mod_bitumen';
+                            if (flatSystem === 'bur') return p.key === 'bur';
+                            if (flatSystem === 'foam')
+                              return (
+                                p.key ===
+                                (foamKind === 'overlay'
+                                  ? 'foam_overlay'
+                                  : 'full_foam')
+                              );
+                            if (flatSystem === 'coating')
+                              return p.key === 'coating';
+                            return false;
+                          })?.description
+                        }
+                      </p>
+                    )}
+
+                    {/* Cap color — mod bitumen */}
+                    {flatSystem === 'mod_bit' && (
+                      <div className="mt-4">
+                        <div className="text-xs font-semibold tracking-wide text-zinc-500 mb-3">
+                          CAP COLOR
+                        </div>
+                        <select
+                          value={modifiedBitumenColor}
+                          onChange={(e) => {
+                            setModifiedBitumenColor(e.target.value);
+                            setHasUnsavedChanges(true);
+                          }}
+                          className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20"
+                        >
+                          <option value="">Select color…</option>
+                          {MOD_BITUMEN_CAP_COLORS.map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Coating type */}
+                    {flatSystem === 'coating' && (
+                      <div className="mt-4">
+                        <div className="text-xs font-semibold tracking-wide text-zinc-500 mb-3">
+                          COATING TYPE
+                        </div>
+                        <select
+                          value={coatingKind}
+                          onChange={(e) => {
+                            applyFlatSelection(
+                              'coating',
+                              e.target.value as CoatingKind
+                            );
+                          }}
+                          className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20"
+                        >
+                          <option value="">Select coating…</option>
+                          {COATING_TYPES.map((p) => (
+                            <option key={p.key} value={p.key}>
+                              {p.label}
+                            </option>
+                          ))}
+                        </select>
+                        {coatingKind && (
+                          <p className="text-sm text-zinc-500 mt-3 leading-relaxed">
+                            {
+                              COATING_TYPES.find((p) => p.key === coatingKind)
+                                ?.description
+                            }
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Foam top coating (optional finish) */}
+                    {flatSystem === 'foam' && foamKind && (
+                      <div className="mt-4">
+                        <div className="text-xs font-semibold tracking-wide text-zinc-500 mb-3">
+                          TOP COATING
+                        </div>
+                        <select
+                          value={coatingKind}
+                          onChange={(e) => {
+                            setCoatingKind(e.target.value as CoatingKind);
+                            setHasUnsavedChanges(true);
+                          }}
+                          className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20"
+                        >
+                          <option value="">Select top coating…</option>
+                          {COATING_TYPES.map((p) => (
+                            <option key={p.key} value={p.key}>
+                              {p.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Foam ISO + adders (detail inputs after system pick) */}
+                  {flatSystem === 'foam' && foamKind && (
+                    <div className="bg-white border border-zinc-200 rounded-3xl p-5 space-y-4">
+                      <div>
+                        <div className="text-xs font-semibold tracking-wide text-zinc-500 mb-3">
+                          ISO BOARD
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <div className="text-xs text-zinc-500 mb-1">4×8 sheets</div>
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={foamIso48}
+                              onChange={(e) => {
+                                setFoamIso48(e.target.value);
+                                setHasUnsavedChanges(true);
+                              }}
+                              placeholder="0"
+                              className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
+                            />
+                          </div>
+                          <div>
+                            <div className="text-xs text-zinc-500 mb-1">4×4 sheets</div>
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={foamIso44}
+                              onChange={(e) => {
+                                setFoamIso44(e.target.value);
+                                setHasUnsavedChanges(true);
+                              }}
+                              placeholder="0"
+                              className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold tracking-wide text-zinc-500 mb-2">
+                          FOAM ADDERS
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          {(
+                            [
+                              {
+                                key: 'granules' as const,
+                                label: 'Granules',
+                                on: foamGranules,
+                                set: setFoamGranules,
+                              },
+                              {
+                                key: 'spf' as const,
+                                label: 'Extra inch SPF',
+                                on: foamExtraSpf,
+                                set: setFoamExtraSpf,
+                              },
+                              {
+                                key: 'scarify' as const,
+                                label: 'Scarify',
+                                on: foamScarify,
+                                set: setFoamScarify,
+                              },
+                            ]
+                          ).map((a) => (
+                            <button
+                              key={a.key}
+                              type="button"
+                              onClick={() => {
+                                a.set(!a.on);
+                                setHasUnsavedChanges(true);
+                              }}
+                              className={`rounded-2xl border px-3 py-3 text-sm font-semibold transition ${
+                                a.on
+                                  ? 'border-sky-400 bg-sky-50 text-sky-900'
+                                  : 'border-zinc-200 bg-white text-zinc-700 hover:border-sky-300'
+                              }`}
+                            >
+                              {a.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Coating adders:
+                      Additional coat → coating, foam overlay, BUR, full foam
+                      Pressure wash → coating + foam overlay only */}
+                  {(flatSystem === 'coating' ||
+                    flatSystem === 'bur' ||
+                    flatSystem === 'foam') && (
+                    <div className="mb-2">
+                      <div className="text-sm font-semibold text-zinc-600 mb-4">
+                        COATING ADDERS
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="bg-white border border-zinc-200 rounded-3xl p-5">
+                          <div className="font-semibold mb-2 text-zinc-900">
+                            Additional coat
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCoatingExtraPass(true);
+                                setHasUnsavedChanges(true);
+                              }}
+                              className={`flex-1 py-2.5 rounded-2xl text-sm font-medium border transition-all ${
+                                coatingExtraPass
+                                  ? 'border-sky-400/60 bg-sky-50 text-sky-900'
+                                  : 'border-zinc-300'
+                              }`}
+                            >
+                              Yes
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCoatingExtraPass(false);
+                                setHasUnsavedChanges(true);
+                              }}
+                              className={`flex-1 py-2.5 rounded-2xl text-sm font-medium border transition-all ${
+                                !coatingExtraPass
+                                  ? 'border-sky-400/60 bg-sky-50 text-sky-900'
+                                  : 'border-zinc-300'
+                              }`}
+                            >
+                              No
+                            </button>
+                          </div>
+                        </div>
+                        {(flatSystem === 'coating' ||
+                          (flatSystem === 'foam' && foamKind === 'overlay')) && (
+                          <div className="bg-white border border-zinc-200 rounded-3xl p-5">
+                            <div className="font-semibold mb-2 text-zinc-900">
+                              Pressure wash &amp; clean
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCoatingPressureWash(true);
+                                  setHasUnsavedChanges(true);
+                                }}
+                                className={`flex-1 py-2.5 rounded-2xl text-sm font-medium border transition-all ${
+                                  coatingPressureWash
+                                    ? 'border-sky-400/60 bg-sky-50 text-sky-900'
+                                    : 'border-zinc-300'
+                                }`}
+                              >
+                                Yes
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCoatingPressureWash(false);
+                                  setHasUnsavedChanges(true);
+                                }}
+                                className={`flex-1 py-2.5 rounded-2xl text-sm font-medium border transition-all ${
+                                  !coatingPressureWash
+                                    ? 'border-sky-400/60 bg-sky-50 text-sky-900'
+                                    : 'border-zinc-300'
+                                }`}
+                              >
+                                No
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Low slope adder — for shingle & tile (flat systems pick type as main product) */}
+            {roofSystem !== 'flat' && (
+              <div className="mb-8">
+                <div className="text-sm font-semibold text-zinc-600 mb-3">
+                  LOW SLOPE ROOF
+                </div>
+                <p className="text-xs text-zinc-500 mb-3">
+                  Optional attached or detached low-slope area on this job.
+                </p>
+                <div className="grid grid-cols-3 gap-3 mb-4">
+                  {(
+                    [
+                      { id: 'none' as const, label: 'None' },
+                      { id: 'attached' as const, label: 'Attached' },
+                      { id: 'detached' as const, label: 'Detached' },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => {
+                        setLowSlopeMode(opt.id);
+                        if (opt.id === 'none') {
+                          setLowSlopeType('none');
+                          setModifiedBitumenSquares('');
+                        }
+                        setHasUnsavedChanges(true);
+                      }}
+                      className={`rounded-2xl border px-3 py-3 text-sm font-semibold transition ${
+                        lowSlopeMode === opt.id
+                          ? 'border-sky-500 bg-sky-50 text-sky-800'
+                          : 'border-zinc-200 bg-white text-zinc-700 hover:border-sky-300'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
+                {lowSlopeMode !== 'none' && (
+                  <div className="bg-white rounded-3xl p-5 sm:p-6 border border-zinc-200 space-y-4">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      Low slope type ({lowSlopeMode})
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      {(
+                        [
+                          {
+                            id: 'mod_bitumen' as const,
+                            label: 'Modified Bitumen',
+                          },
+                          { id: 'full_foam' as const, label: 'Foam' },
+                          { id: 'elastomeric' as const, label: 'Elastomeric' },
+                          { id: 'silicone' as const, label: 'Silicone' },
+                          { id: 'urethane' as const, label: 'Urethane' },
+                        ] as const
+                      ).map((t) => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => {
+                            setLowSlopeType(t.id);
+                            setHasUnsavedChanges(true);
+                          }}
+                          className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition text-left ${
+                            lowSlopeType === t.id
+                              ? 'border-sky-400 bg-sky-50 text-sky-900'
+                              : 'border-zinc-200 bg-zinc-50 text-zinc-700 hover:border-sky-300'
+                          }`}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <div className="text-xs text-zinc-500 mb-1">LOW SLOPE SQUARES</div>
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.1}
+                          value={modifiedBitumenSquares}
+                          onChange={(e) => {
+                            setModifiedBitumenSquares(e.target.value);
+                            setHasUnsavedChanges(true);
+                          }}
+                          placeholder="0"
+                          className="w-full text-2xl font-semibold border border-zinc-200 rounded-2xl px-4 py-3 text-zinc-900 focus:outline-none focus:border-zinc-400"
+                        />
+                      </div>
+                      {lowSlopeType === 'mod_bitumen' && (
+                        <div>
+                          <div className="text-xs text-zinc-500 mb-1">COLOR</div>
+                          <select
+                            value={modifiedBitumenColor}
+                            onChange={(e) => {
+                              setModifiedBitumenColor(e.target.value);
+                              setHasUnsavedChanges(true);
+                            }}
+                            className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
+                          >
+                            <option value="">Select color…</option>
+                            {MOD_BITUMEN_CAP_COLORS.map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="mb-8">
+              <div className="text-sm font-semibold text-zinc-600 mb-4">UNDERLAYMENT</div>
+              <div className="bg-white border border-zinc-200 rounded-3xl p-5 mb-4">
+                <select
+                  value={selectedUnderlayment}
+                  onChange={(e) => {
+                    setSelectedUnderlayment(e.target.value as Underlayment);
+                    setHasUnsavedChanges(true);
+                  }}
+                  className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white"
+                >
+                  <option value="">Select underlayment…</option>
+                  <option value="standard">Standard Synthetic</option>
+                  <option value="high-temp">High-Temp Synthetic</option>
+                  <option value="sa-high-temp">Self-Adhered High-Temp</option>
+                </select>
+                {selectedUnderlayment === 'standard' && (
+                  <p className="text-sm text-zinc-500 leading-relaxed mt-2">
+                    Standard synthetic underlayment for typical shingle applications.
+                  </p>
+                )}
+                {selectedUnderlayment === 'high-temp' && (
+                  <p className="text-sm text-zinc-500 leading-relaxed mt-2">
+                    High-temperature rated synthetic underlayment for hotter roof decks and
+                    valleys.
+                  </p>
+                )}
+                {selectedUnderlayment === 'sa-high-temp' && (
+                  <p className="text-sm text-zinc-500 leading-relaxed mt-2">
+                    Self-adhered high-temp underlayment. Excellent for valleys, eaves, and
+                    critical areas.
+                  </p>
+                )}
+              </div>
+
             </div>
 
             <div className="mb-8">
-              <div className="text-sm font-semibold text-zinc-600 mb-4">MODIFIED BITUMEN (Low Slope / Flat)</div>
-              <div className="bg-white rounded-3xl p-6 border border-zinc-200">
-                <div className="font-semibold text-xl mb-3 text-zinc-900">TopShield PRO SA Cap</div>
-                <p className="text-sm text-zinc-600 mb-4">Premium self-adhered granular cap sheet for low-slope roofing. Exceptional durability and long-term waterproofing protection.</p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <div className="text-xs text-zinc-500 mb-1">MB SQUARES</div>
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.1}
-                      value={modifiedBitumenSquares}
-                      onChange={(e) => setModifiedBitumenSquares(e.target.value)}
-                      placeholder="0"
-                      className="w-full text-2xl font-semibold border border-zinc-200 rounded-2xl px-4 py-3 text-zinc-900 focus:outline-none focus:border-zinc-400"
-                    />
-                  </div>
-                  <div>
-                    <div className="text-xs text-zinc-500 mb-1">COLOR</div>
-                    <select
-                      value={modifiedBitumenColor}
-                      onChange={(e) => setModifiedBitumenColor(e.target.value)}
-                      className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
-                    >
-                      <option value="">Select color...</option>
-                      <option>Thunder Black</option>
-                      <option>Gunmetal Gray</option>
-                      <option>Weathered Wood</option>
-                      <option>Russet Ridge</option>
-                      <option>Roasted Chestnut</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="mb-8">
-              <div className="text-sm font-semibold text-zinc-600 mb-4">UNDERLAYMENT</div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div onClick={() => setSelectedUnderlayment(selectedUnderlayment === 'standard' ? '' : 'standard')} className={`bg-white border-2 rounded-3xl p-6 cursor-pointer transition-all ${selectedUnderlayment === 'standard' ? 'border-sky-400/70 bg-sky-50/40 shadow-sm ring-1 ring-sky-200/60' : 'border-zinc-200 hover:border-zinc-300'}`}>
-                  <div className="font-semibold text-lg mb-1 text-zinc-900">Standard Synthetic</div>
-                  <div className="text-sm text-zinc-600">IKO Stormtite or equivalent</div>
-                </div>
-                <div onClick={() => setSelectedUnderlayment(selectedUnderlayment === 'high-temp' ? '' : 'high-temp')} className={`bg-white border-2 rounded-3xl p-6 cursor-pointer transition-all ${selectedUnderlayment === 'high-temp' ? 'border-sky-400/70 bg-sky-50/40 shadow-sm ring-1 ring-sky-200/60' : 'border-zinc-200 hover:border-zinc-300'}`}>
-                  <div className="font-semibold text-lg mb-1 text-zinc-900">High-Temp Synthetic</div>
-                  <div className="text-sm text-zinc-600">TopShield Bigfoot 30 • AZ heat ready</div>
-                </div>
-              </div>
-            </div>
-            <div className="mb-8">
               <div className="text-sm font-semibold text-zinc-600 mb-4">ADDERS</div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                {/* Fascia */}
                 <div className="bg-white border border-zinc-200 rounded-3xl p-6">
-                  <div className="flex justify-between items-center mb-3">
+                  <div className="mb-3">
                     <div className="font-semibold text-zinc-900">Fascia</div>
-                    <div className="text-xs text-emerald-700/80">10 LF included at no cost on repairs</div>
+                    <div className="text-xs text-amber-700/80 mt-0.5">
+                      10 LF fascia + mold included
+                    </div>
                   </div>
                   <div className="flex gap-2 mb-3">
-                    <button onClick={() => toggleFascia('repair')} className={`flex-1 py-2 rounded-2xl text-sm font-medium border transition-all ${fasciaMode === 'repair' ? 'border-sky-400/60 bg-sky-50 text-sky-900' : 'border-zinc-300'}`}>Repair</button>
-                    <button onClick={() => toggleFascia('full')} className={`flex-1 py-2 rounded-2xl text-sm font-medium border transition-all ${fasciaMode === 'full' ? 'border-sky-400/60 bg-sky-50 text-sky-900' : 'border-zinc-300'}`}>Full Replacement</button>
+                    <button
+                      type="button"
+                      onClick={() => toggleFascia('repair')}
+                      className={`flex-1 py-2 rounded-2xl text-sm font-medium border transition-all ${
+                        fasciaMode === 'repair'
+                          ? 'border-sky-400/60 bg-sky-50 text-sky-900'
+                          : 'border-zinc-300'
+                      }`}
+                    >
+                      Repair
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleFascia('full')}
+                      className={`flex-1 py-2 rounded-2xl text-sm font-medium border transition-all ${
+                        fasciaMode === 'full'
+                          ? 'border-sky-400/60 bg-sky-50 text-sky-900'
+                          : 'border-zinc-300'
+                      }`}
+                    >
+                      Full Replacement
+                    </button>
                   </div>
-                  <select value={fasciaType} onChange={(e) => setFasciaType(e.target.value as '2x6' | '2x8' | '')} className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 mb-3">
+                  <select
+                    value={fasciaType}
+                    onChange={(e) => {
+                      setFasciaType(e.target.value as FasciaType);
+                      setHasUnsavedChanges(true);
+                    }}
+                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 mb-3"
+                  >
                     <option value="">Select Fascia Type...</option>
                     <option value="2x6">2x6 Prime Combed</option>
                     <option value="2x8">2x8 Prime Combed</option>
                   </select>
-                  <input type="number" value={fasciaLF} onChange={(e) => setFasciaLF(e.target.value)} placeholder="Linear Feet (after 10 free)" className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900" />
-                  {parseFloat(fasciaLF) > 10 && fasciaType && (
-                    <div className="mt-3 text-sm">
-                      <div className="flex justify-between items-center">
+                  <input
+                    type="number"
+                    min={0}
+                    value={fasciaLF}
+                    onChange={(e) => {
+                      setFasciaLF(e.target.value);
+                      setHasUnsavedChanges(true);
+                    }}
+                    placeholder="Linear Feet (after 10 free)"
+                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
+                  />
+                  {parseFloat(fasciaLF || '0') > 10 &&
+                    (fasciaMode || fasciaType) && (
+                      <div className="mt-3 text-sm flex justify-between items-center">
                         <div className="text-amber-700">Cost</div>
-                        <div className="font-semibold text-emerald-700">+ ${fasciaCost}</div>
+                        <div className="font-semibold text-emerald-700">
+                          + ${Number(fasciaCost || 0).toLocaleString()}
+                        </div>
                       </div>
-                      <div className="text-xs text-amber-700 mt-1">Subject to change upon signed change order</div>
-                    </div>
-                  )}
+                    )}
                 </div>
+
+                {/* Decking */}
                 <div className="bg-white border border-zinc-200 rounded-3xl p-6">
-                  <div className="flex justify-between items-center mb-3">
+                  <div className="mb-3">
                     <div className="font-semibold text-zinc-900">Decking</div>
-                    <div className="text-xs text-emerald-700/80">2 sheets included at no cost on repairs</div>
+                    <div className="text-xs text-amber-700/80 mt-0.5">
+                      2 sheets included at no cost
+                    </div>
                   </div>
                   <div className="flex gap-2 mb-4">
-                    <button onClick={() => toggleDecking('repair')} className={`flex-1 py-2 rounded-2xl text-sm font-medium border transition-all ${deckingMode === 'repair' ? 'border-sky-400/60 bg-sky-50 text-sky-900' : 'border-zinc-300'}`}>Repair</button>
-                    <button onClick={() => toggleDecking('full')} className={`flex-1 py-2 rounded-2xl text-sm font-medium border transition-all ${deckingMode === 'full' ? 'border-sky-400/60 bg-sky-50 text-sky-900' : 'border-zinc-300'}`}>Full Re-Deck</button>
+                    <button
+                      type="button"
+                      onClick={() => toggleDecking('repair')}
+                      className={`flex-1 py-2 rounded-2xl text-sm font-medium border transition-all ${
+                        deckingMode === 'repair'
+                          ? 'border-sky-400/60 bg-sky-50 text-sky-900'
+                          : 'border-zinc-300'
+                      }`}
+                    >
+                      Repair
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleDecking('full')}
+                      className={`flex-1 py-2 rounded-2xl text-sm font-medium border transition-all ${
+                        deckingMode === 'full'
+                          ? 'border-sky-400/60 bg-sky-50 text-sky-900'
+                          : 'border-zinc-300'
+                      }`}
+                    >
+                      Full Re-Deck
+                    </button>
                   </div>
                   {deckingMode === 'full' ? (
                     <div>
-                      <div className="flex justify-between items-end mb-1">
-                        <div className="text-sm text-amber-700">Estimated Sheets Needed</div>
-                        <div className="text-3xl font-semibold text-zinc-900">{sheetsNeeded}</div>
+                      <div className="flex justify-between items-center mb-1">
+                        <div className="text-sm text-zinc-500">Estimated sheets</div>
+                        <div className="text-sm font-semibold text-zinc-900">
+                          {sheetsNeeded}
+                        </div>
                       </div>
-                      <div className="flex justify-between items-center mb-3">
+                      <div className="flex justify-between items-center mt-2">
                         <div className="text-sm text-amber-700">Cost</div>
-                        <div className="text-lg font-semibold text-emerald-700">+ ${(deckingCost).toLocaleString()}</div>
+                        <div className="text-sm font-semibold text-emerald-700">
+                          + ${Number(deckingCost || 0).toLocaleString()}
+                        </div>
                       </div>
-                      <div className="text-xs text-amber-700">Subject to change upon signed change order</div>
                     </div>
                   ) : deckingMode === 'repair' ? (
-                    <div>
-                      <input type="number" value={deckingSheets} onChange={(e) => setDeckingSheets(e.target.value)} placeholder="Additional Sheets" className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 mb-2" />
-                      {parseFloat(deckingSheets) > 2 && (
-                        <div className="text-sm mb-2">
-                          <div className="flex justify-between items-center">
-                            <div className="text-amber-700">Cost</div>
-                            <div className="font-semibold text-emerald-700">+ ${deckingCost}</div>
+                    <div className="space-y-2">
+                      <input
+                        type="number"
+                        min={0}
+                        value={deckingOsbSheets}
+                        onChange={(e) => {
+                          setDeckingOsbSheets(e.target.value);
+                          setHasUnsavedChanges(true);
+                        }}
+                        placeholder="OSB sheets"
+                        className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        value={deckingCdxSheets}
+                        onChange={(e) => {
+                          setDeckingCdxSheets(e.target.value);
+                          setHasUnsavedChanges(true);
+                        }}
+                        placeholder="CDX sheets"
+                        className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
+                      />
+                      {(parseFloat(deckingOsbSheets || '0') > 0 ||
+                        parseFloat(deckingCdxSheets || '0') > 0) && (
+                        <div className="flex justify-between items-center text-sm">
+                          <div className="text-amber-700">Cost</div>
+                          <div className="font-semibold text-emerald-700">
+                            + ${Number(deckingCost || 0).toLocaleString()}
                           </div>
                         </div>
                       )}
-                      <div className="text-xs text-amber-700">Subject to change upon signed change order</div>
+                    </div>
+                  ) : null}
+                </div>
+
+                {/* Gutters */}
+                <div className="bg-white border border-zinc-200 rounded-3xl p-6">
+                  <div className="mb-3">
+                    <div className="font-semibold text-zinc-900">Gutters</div>
+                    <div className="text-xs text-amber-700/80 mt-0.5">
+                      Detach &amp; reset or remove &amp; replace
+                    </div>
+                  </div>
+                  <div className="flex gap-2 mb-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGutterMode(gutterMode === 'dr' ? 'none' : 'dr');
+                        setHasUnsavedChanges(true);
+                      }}
+                      className={`flex-1 py-2 rounded-2xl text-sm font-medium border transition-all ${
+                        gutterMode === 'dr'
+                          ? 'border-sky-400/60 bg-sky-50 text-sky-900'
+                          : 'border-zinc-300'
+                      }`}
+                    >
+                      D&amp;R
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGutterMode(gutterMode === 'rr' ? 'none' : 'rr');
+                        setHasUnsavedChanges(true);
+                      }}
+                      className={`flex-1 py-2 rounded-2xl text-sm font-medium border transition-all ${
+                        gutterMode === 'rr'
+                          ? 'border-sky-400/60 bg-sky-50 text-sky-900'
+                          : 'border-zinc-300'
+                      }`}
+                    >
+                      R&amp;R
+                    </button>
+                  </div>
+                  {gutterMode !== 'none' ? (
+                    <div>
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={gutterLF}
+                        onChange={(e) => {
+                          setGutterLF(e.target.value);
+                          setHasUnsavedChanges(true);
+                        }}
+                        placeholder="Linear Feet"
+                        className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 mb-2"
+                      />
+                      {parseFloat(gutterLF || '0') > 0 && (
+                        <div className="text-sm flex justify-between items-center">
+                          <div className="text-amber-700">Cost</div>
+                          <div className="font-semibold text-emerald-700">
+                            + $
+                            {(
+                              parseFloat(gutterLF || '0') *
+                              getSellPrice(
+                                gutterMode === 'rr' ? 'gutters_rr' : 'gutters_dr',
+                                gutterMode === 'rr'
+                                  ? activePricingRegion === 'central'
+                                    ? 20
+                                    : 30
+                                  : activePricingRegion === 'central'
+                                    ? 15
+                                    : 20
+                              )
+                            ).toLocaleString()}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : null}
                 </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="bg-white border border-zinc-200 rounded-3xl p-5">
                   <div className="font-semibold mb-2 text-zinc-900">Solar Panels</div>
-                  <input type="number" value={solarPanels} onChange={(e) => setSolarPanels(e.target.value)} placeholder="# of Panels" className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900" />
-                  {parseFloat(solarPanels) > 0 && <div className="text-xs text-emerald-700 mt-2">+ ${(parseFloat(solarPanels) * 250).toLocaleString()}</div>}
+                  <input
+                    type="number"
+                    value={solarPanels}
+                    onChange={(e) => setSolarPanels(e.target.value)}
+                    placeholder="# of Panels"
+                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
+                  />
+                  {parseFloat(solarPanels || '0') > 0 && (
+                    <div className="text-xs text-emerald-700 mt-2">
+                      + ${(parseFloat(solarPanels) * 250).toLocaleString()}
+                    </div>
+                  )}
                 </div>
                 <div className="bg-white border border-zinc-200 rounded-3xl p-5">
                   <div className="font-semibold mb-2 text-zinc-900">HVAC</div>
                   <div className="text-xs text-zinc-500 mb-2">detach and reset</div>
-                  <input type="number" value={hvacUnits} onChange={(e) => setHvacUnits(e.target.value)} placeholder="# of Units" className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900" />
-                  {parseFloat(hvacUnits) > 0 && <div className="text-xs text-emerald-700 mt-2">+ ${(parseFloat(hvacUnits) * 1500).toLocaleString()}</div>}
+                  <input
+                    type="number"
+                    value={hvacUnits}
+                    onChange={(e) => setHvacUnits(e.target.value)}
+                    placeholder="# of Units"
+                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
+                  />
+                  {parseFloat(hvacUnits || '0') > 0 && (
+                    <div className="text-xs text-emerald-700 mt-2">
+                      + $
+                      {(
+                        parseFloat(hvacUnits) *
+                        getSellPrice(
+                          'hvac',
+                          activePricingRegion === 'central' ? 1250 : 1600
+                        )
+                      ).toLocaleString()}
+                    </div>
+                  )}
                 </div>
                 <div className="bg-white border border-zinc-200 rounded-3xl p-5">
                   <div className="font-semibold mb-2 text-zinc-900">Skylights</div>
                   <div className="text-xs text-zinc-500 mb-2">detach and reset</div>
-                  <input type="number" value={skylights} onChange={(e) => setSkylights(e.target.value)} placeholder="# of Skylights" className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900" />
-                  {parseFloat(skylights) > 0 && <div className="text-xs text-emerald-700 mt-2">+ ${(parseFloat(skylights) * 575).toLocaleString()}</div>}
+                  <input
+                    type="number"
+                    value={skylights}
+                    onChange={(e) => setSkylights(e.target.value)}
+                    placeholder="# of Skylights"
+                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
+                  />
+                  {parseFloat(skylights || '0') > 0 && (
+                    <div className="text-xs text-emerald-700 mt-2">
+                      + $
+                      {(
+                        parseFloat(skylights) *
+                        getSellPrice(
+                          'skylight',
+                          activePricingRegion === 'central' ? 500 : 550
+                        )
+                      ).toLocaleString()}
+                    </div>
+                  )}
                 </div>
                 <div className="bg-white border border-zinc-200 rounded-3xl p-5">
                   <div className="font-semibold mb-2 text-zinc-900">Ridge Vent</div>
-                  <input type="number" value={ridgeVentLF} onChange={(e) => setRidgeVentLF(e.target.value)} placeholder="Linear Feet" className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900" />
-                  {parseFloat(ridgeVentLF) > 0 && <div className="text-xs text-emerald-700 mt-2">+ ${(parseFloat(ridgeVentLF) * 16).toFixed(0)}</div>}
+                  <input
+                    type="number"
+                    value={ridgeVentLF}
+                    onChange={(e) => setRidgeVentLF(e.target.value)}
+                    placeholder="Linear Feet"
+                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
+                  />
+                  {parseFloat(ridgeVentLF || '0') > 0 && (
+                    <div className="text-xs text-emerald-700 mt-2">
+                      + $
+                      {(
+                        parseFloat(ridgeVentLF) * getSellPrice('ridge_vent', 12)
+                      ).toFixed(0)}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -6444,7 +11439,9 @@ export default function SummitApp() {
                 <div>
                   <div className="text-xs text-zinc-500">TOTAL PRICE</div>
                   {selectedShingle === '' ? (
-                    <div className="text-2xl font-semibold text-zinc-400">Select a shingle to view pricing</div>
+                    <div className="text-2xl font-semibold text-zinc-400">
+                      Select a product to view pricing
+                    </div>
                   ) : (
                     <div className="text-5xl font-semibold text-emerald-700 tabular-nums">${estimatorTotalPrice.toLocaleString()}</div>
                   )}
@@ -6468,6 +11465,7 @@ export default function SummitApp() {
               const profileNotes = profileLead?.notes || [];
               const profileEstimates = profileLead?.estimates || [];
               const profilePhotos = profileLead?.photos || [];
+              const profileDocuments = profileLead?.documents || [];
               const profileMeasurements = profileLead?.measurements || [];
               // Combined session report: draft sections + current outline
               const currentSectionPreview =
@@ -6536,6 +11534,7 @@ export default function SummitApp() {
                   label: 'Measurements',
                   count: profileMeasurements.length,
                 },
+                { id: 'financial', label: 'Financial' },
                 { id: 'insurance', label: 'Insurance' },
                 {
                   id: 'notes',
@@ -6552,7 +11551,11 @@ export default function SummitApp() {
                   label: 'Photos',
                   count: profilePhotos.length,
                 },
-                { id: 'documents', label: 'Documents' },
+                {
+                  id: 'documents',
+                  label: 'Documents',
+                  count: profileDocuments.length,
+                },
               ];
 
               const fieldClass =
@@ -6595,7 +11598,7 @@ export default function SummitApp() {
                               <button
                                 key={tab.id}
                                 type="button"
-                                onClick={() => setProfileTab(tab.id)}
+                                onClick={() => switchProfileTab(tab.id)}
                                 className={`px-3 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
                                   active
                                     ? 'bg-zinc-900 text-white shadow-sm'
@@ -6730,6 +11733,138 @@ export default function SummitApp() {
                                 )}
                               </div>
                             )}
+
+                            <div className="mt-6 pt-5 border-t border-zinc-100">
+                              <div className="flex items-center justify-between mb-3">
+                                <h3 className="text-sm font-semibold text-zinc-800">
+                                  Additional contacts
+                                </h3>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setAdditionalContacts((prev) => [
+                                      ...prev,
+                                      emptyAdditionalContact(),
+                                    ])
+                                  }
+                                  className="text-sm font-medium text-sky-700 hover:underline"
+                                >
+                                  + Add contact
+                                </button>
+                              </div>
+                              {additionalContacts.length > 0 && (
+                                <div className="space-y-4">
+                                  {additionalContacts.map((c, idx) => (
+                                    <div
+                                      key={c.id}
+                                      className="rounded-2xl border border-zinc-200 p-4 space-y-3"
+                                    >
+                                      <div className="flex justify-between items-center">
+                                        <span className="text-xs font-semibold text-zinc-500">
+                                          Contact {idx + 1}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setAdditionalContacts((prev) =>
+                                              prev.filter((x) => x.id !== c.id)
+                                            )
+                                          }
+                                          className="text-xs text-zinc-400 hover:text-red-600"
+                                        >
+                                          Remove
+                                        </button>
+                                      </div>
+                                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <input
+                                          placeholder="First name"
+                                          value={c.firstName}
+                                          onChange={(e) =>
+                                            setAdditionalContacts((prev) =>
+                                              prev.map((x) =>
+                                                x.id === c.id
+                                                  ? {
+                                                      ...x,
+                                                      firstName: e.target.value,
+                                                    }
+                                                  : x
+                                              )
+                                            )
+                                          }
+                                          className={`${fieldClass} !py-2.5`}
+                                        />
+                                        <input
+                                          placeholder="Last name"
+                                          value={c.lastName}
+                                          onChange={(e) =>
+                                            setAdditionalContacts((prev) =>
+                                              prev.map((x) =>
+                                                x.id === c.id
+                                                  ? {
+                                                      ...x,
+                                                      lastName: e.target.value,
+                                                    }
+                                                  : x
+                                              )
+                                            )
+                                          }
+                                          className={`${fieldClass} !py-2.5`}
+                                        />
+                                        <input
+                                          placeholder="Relationship (spouse, other…)"
+                                          value={c.relationship || ''}
+                                          onChange={(e) =>
+                                            setAdditionalContacts((prev) =>
+                                              prev.map((x) =>
+                                                x.id === c.id
+                                                  ? {
+                                                      ...x,
+                                                      relationship: e.target.value,
+                                                    }
+                                                  : x
+                                              )
+                                            )
+                                          }
+                                          className={`${fieldClass} !py-2.5 sm:col-span-2`}
+                                        />
+                                        <PhoneInput
+                                          placeholder="Phone"
+                                          value={c.phone || ''}
+                                          onChange={(v) =>
+                                            setAdditionalContacts((prev) =>
+                                              prev.map((x) =>
+                                                x.id === c.id
+                                                  ? { ...x, phone: v }
+                                                  : x
+                                              )
+                                            )
+                                          }
+                                          className={`${fieldClass} !py-2.5`}
+                                        />
+                                        <input
+                                          placeholder="Email"
+                                          value={c.email || ''}
+                                          onChange={(e) =>
+                                            setAdditionalContacts((prev) =>
+                                              prev.map((x) =>
+                                                x.id === c.id
+                                                  ? {
+                                                      ...x,
+                                                      email: e.target.value,
+                                                    }
+                                                  : x
+                                              )
+                                            )
+                                          }
+                                          className={`${fieldClass} !py-2.5`}
+                                          inputMode="email"
+                                        />
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           </section>
 
                           <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
@@ -6931,20 +12066,24 @@ export default function SummitApp() {
                             </div>
                           </section>
 
-                          <div className="pt-2 pb-4">
+                          <div className="pt-6 pb-4 flex items-center justify-between gap-3 border-t border-zinc-100 mt-6">
                             <button
                               type="button"
                               onClick={() => {
                                 if (currentLeadId != null) moveToTrash(currentLeadId);
                               }}
                               disabled={currentLeadId == null}
-                              className="w-full py-3.5 rounded-2xl text-sm font-semibold border border-red-200 text-red-700 bg-white hover:bg-red-50 hover:border-red-300 transition-colors disabled:opacity-40"
+                              className="text-xs text-zinc-400 hover:text-red-600 disabled:opacity-40"
                             >
-                              Delete lead
+                              Move to trash
                             </button>
-                            <p className="text-center text-xs text-zinc-400 mt-2">
-                              Moves this lead to trash. You can restore it later.
-                            </p>
+                            <button
+                              type="button"
+                              onClick={saveLeadProfile}
+                              className="btn-primary px-5 py-2.5 rounded-xl font-semibold text-sm"
+                            >
+                              Save
+                            </button>
                           </div>
                         </div>
                       )}
@@ -7116,6 +12255,8 @@ export default function SummitApp() {
                             )}
                           </div>
 
+                          
+
                           {/* Map or start */}
                           {!showTracer && !geocoding && (
                             <div className="rounded-3xl bg-zinc-100 border border-zinc-100 px-6 py-12 text-center space-y-4">
@@ -7124,7 +12265,19 @@ export default function SummitApp() {
                                   ? 'Trace the roof on satellite to measure'
                                   : 'Add a property address on the lead, then open the map'}
                               </p>
-                              <button
+                              
+                          <div className="flex flex-wrap items-center justify-center gap-2">
+                            <input
+                              ref={measurementFileRef}
+                              type="file"
+                              accept="application/pdf,.pdf,image/*"
+                              className="hidden"
+                              onChange={(e) => {
+                                void uploadMeasurementReport(e.target.files);
+                                e.target.value = '';
+                              }}
+                            />
+                            <button
                                 type="button"
                                 onClick={() => {
                                   if (!hasProfileAddress) {
@@ -7138,8 +12291,58 @@ export default function SummitApp() {
                               >
                                 {hasProfileAddress ? 'Open map' : 'Add address first'}
                               </button>
+                            <button
+                              type="button"
+                              onClick={() => measurementFileRef.current?.click()}
+                              className="btn-primary px-8 py-3 rounded-full text-sm font-semibold"
+                            >
+                              + Upload
+                            </button>
+                          </div>
                             </div>
                           )}
+
+                          {(() => {
+                            const lead = leads.find((l) => l.id === currentLeadId);
+                            const reports = lead?.measurementReports || [];
+                            if (reports.length === 0) return null;
+                            return (
+                              <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-2">
+                                <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                                  Uploaded measurements
+                                </div>
+                                {reports.map((doc) => (
+                                  <div
+                                    key={doc.id}
+                                    className="flex items-center gap-2 rounded-xl border border-zinc-100 px-3 py-2.5 hover:border-sky-300 hover:bg-sky-50/50 transition"
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setMeasurementPdfUrl(doc.url);
+                                        setMeasurementPdfName(doc.name);
+                                      }}
+                                      className="flex-1 min-w-0 text-left"
+                                    >
+                                      <span className="text-sm font-medium text-zinc-900 truncate block">
+                                        {doc.name}
+                                      </span>
+                                      <span className="text-xs text-zinc-400">
+                                        {doc.createdAt}
+                                      </span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => removeMeasurementReport(doc.id)}
+                                      className="shrink-0 text-xs font-semibold text-red-600 hover:text-red-700 px-2 py-1"
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
 
                           {geocoding && !showTracer && (
                             <div className="rounded-3xl bg-zinc-100 border border-zinc-100 py-16 text-center text-sm text-zinc-400">
@@ -7199,7 +12402,7 @@ export default function SummitApp() {
                                         <button
                                           type="button"
                                           onClick={() => prepareSectionKind('pitched')}
-                                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-white border border-emerald-200 text-emerald-900 hover:bg-emerald-50 transition-colors"
+                                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-white border border-emerald-200 text-emerald-900 hover:bg-sky-50 transition-colors"
                                         >
                                           Add pitched section
                                         </button>
@@ -7216,7 +12419,7 @@ export default function SummitApp() {
                                         <button
                                           type="button"
                                           onClick={() => prepareSectionKind('flat')}
-                                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-white border border-emerald-200 text-emerald-900 hover:bg-emerald-50 transition-colors"
+                                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-white border border-emerald-200 text-emerald-900 hover:bg-sky-50 transition-colors"
                                         >
                                           Add flat section
                                         </button>
@@ -7233,14 +12436,14 @@ export default function SummitApp() {
                                         <button
                                           type="button"
                                           onClick={() => prepareSectionKind('pitched')}
-                                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-white border border-emerald-200 text-emerald-900 hover:bg-emerald-50 transition-colors"
+                                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-white border border-emerald-200 text-emerald-900 hover:bg-sky-50 transition-colors"
                                         >
                                           More pitched
                                         </button>
                                         <button
                                           type="button"
                                           onClick={() => prepareSectionKind('flat')}
-                                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-white border border-emerald-200 text-emerald-900 hover:bg-emerald-50 transition-colors"
+                                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-white border border-emerald-200 text-emerald-900 hover:bg-sky-50 transition-colors"
                                         >
                                           More flat
                                         </button>
@@ -7592,6 +12795,357 @@ export default function SummitApp() {
                         );
                       })()}
 
+                      {profileTab === 'financial' && (
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                            <div className="lg:col-span-2 space-y-3">
+                              <div className="flex items-center justify-between gap-3">
+                                <h2 className="text-sm font-semibold text-zinc-900">
+                                  Worksheet
+                                </h2>
+                                <div className="relative">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setFinSectionMenuOpen((o) => !o)
+                                    }
+                                    className="text-sm font-medium text-sky-700 hover:underline"
+                                  >
+                                    + Section
+                                  </button>
+                                  {finSectionMenuOpen && (
+                                    <div className="absolute right-0 mt-1 w-52 rounded-xl border border-zinc-200 bg-white shadow-lg z-20 py-1">
+                                      {(
+                                        [
+                                          'Roof – Shingle',
+                                          'Roof – Tile',
+                                          'Roof – Flat / Mod bit',
+                                          'Roof – Foam',
+                                          'Roof – Coating',
+                                          'Other',
+                                        ] as const
+                                      ).map((title) => (
+                                        <button
+                                          key={title}
+                                          type="button"
+                                          className="w-full text-left px-3 py-2 text-sm text-zinc-800 hover:bg-sky-50"
+                                          onClick={() => {
+                                            setFinancialWorksheet((w) =>
+                                              withAutoApproved({
+                                                ...w,
+                                                sections: [
+                                                  ...w.sections,
+                                                  {
+                                                    id: newFinId(),
+                                                    title,
+                                                    lines: [],
+                                                  },
+                                                ],
+                                              })
+                                            );
+                                            setFinSectionMenuOpen(false);
+                                          }}
+                                        >
+                                          {title}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                              {financialWorksheet.sections.length === 0 && (
+                                <div className="rounded-2xl border border-dashed border-zinc-200 bg-white px-4 py-10 text-center text-sm text-zinc-400">
+                                  No sections yet. Pick a roof type above, then
+                                  add line items under it.
+                                </div>
+                              )}
+                              {financialWorksheet.sections.map((sec) => {
+                                const sub = sec.lines.reduce(
+                                  (s, l) => s + (Number(l.amount) || 0),
+                                  0
+                                );
+                                return (
+                                  <div
+                                    key={sec.id}
+                                    className="rounded-2xl border border-zinc-200 bg-white overflow-hidden"
+                                  >
+                                    <div className="flex items-center gap-2 px-3 py-2 bg-zinc-50 border-b border-zinc-100">
+                                      <input
+                                        value={sec.title}
+                                        onChange={(e) =>
+                                          setFinancialWorksheet((w) => ({
+                                            ...w,
+                                            sections: w.sections.map((s) =>
+                                              s.id === sec.id
+                                                ? {
+                                                    ...s,
+                                                    title: e.target.value,
+                                                  }
+                                                : s
+                                            ),
+                                          }))
+                                        }
+                                        className="flex-1 bg-transparent text-sm font-semibold text-zinc-800 border-0 focus:outline-none"
+                                        placeholder="Section title"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setFinancialWorksheet((w) => ({
+                                            ...w,
+                                            sections: w.sections.map((s) =>
+                                              s.id === sec.id
+                                                ? {
+                                                    ...s,
+                                                    lines: [
+                                                      ...s.lines,
+                                                      {
+                                                        id: newFinId(),
+                                                        label: '',
+                                                        amount: 0,
+                                                      },
+                                                    ],
+                                                  }
+                                                : s
+                                            ),
+                                          }))
+                                        }
+                                        className="text-xs font-medium text-sky-700"
+                                      >
+                                        + Line
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setFinancialWorksheet((w) => ({
+                                            ...w,
+                                            sections: w.sections.filter(
+                                              (s) => s.id !== sec.id
+                                            ),
+                                          }))
+                                        }
+                                        className="text-xs text-zinc-400 hover:text-red-600"
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
+                                    <div className="divide-y divide-zinc-50">
+                                      {sec.lines.length === 0 && (
+                                        <div className="px-3 py-3 text-xs text-zinc-400">
+                                          No line items
+                                        </div>
+                                      )}
+                                      {sec.lines.map((line) => (
+                                        <div
+                                          key={line.id}
+                                          className="flex items-center gap-2 px-3 py-2"
+                                        >
+                                          <input
+                                            value={line.label}
+                                            placeholder="RCV, estimate, discount…"
+                                            onChange={(e) =>
+                                              setFinancialWorksheet((w) => ({
+                                                ...w,
+                                                sections: w.sections.map((s) =>
+                                                  s.id === sec.id
+                                                    ? {
+                                                        ...s,
+                                                        lines: s.lines.map(
+                                                          (l) =>
+                                                            l.id === line.id
+                                                              ? {
+                                                                  ...l,
+                                                                  label:
+                                                                    e.target
+                                                                      .value,
+                                                                }
+                                                              : l
+                                                        ),
+                                                      }
+                                                    : s
+                                                ),
+                                              }))
+                                            }
+                                            className="flex-1 border border-zinc-200 rounded-lg px-2 py-1.5 text-sm"
+                                          />
+                                          <input
+                                            type="number"
+                                            step="0.01"
+                                            value={
+                                              line.amount
+                                                ? String(line.amount)
+                                                : ''
+                                            }
+                                            onChange={(e) =>
+                                              setFinancialWorksheet((w) =>
+                                                withAutoApproved({
+                                                  ...w,
+                                                  sections: w.sections.map(
+                                                    (s) =>
+                                                      s.id === sec.id
+                                                        ? {
+                                                            ...s,
+                                                            lines: s.lines.map(
+                                                              (l) =>
+                                                                l.id === line.id
+                                                                  ? {
+                                                                      ...l,
+                                                                      amount:
+                                                                        parseFloat(
+                                                                          e
+                                                                            .target
+                                                                            .value
+                                                                        ) || 0,
+                                                                    }
+                                                                  : l
+                                                            ),
+                                                          }
+                                                        : s
+                                                  ),
+                                                })
+                                              )
+                                            }
+                                            className="w-28 border border-zinc-200 rounded-lg px-2 py-1.5 text-sm text-right"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              setFinancialWorksheet((w) =>
+                                                withAutoApproved({
+                                                  ...w,
+                                                  sections: w.sections.map(
+                                                    (s) =>
+                                                      s.id === sec.id
+                                                        ? {
+                                                            ...s,
+                                                            lines:
+                                                              s.lines.filter(
+                                                                (l) =>
+                                                                  l.id !==
+                                                                  line.id
+                                                              ),
+                                                          }
+                                                        : s
+                                                  ),
+                                                })
+                                              )
+                                            }
+                                            className="text-xs text-zinc-400 hover:text-red-600"
+                                          >
+                                            ✕
+                                          </button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                    <div className="px-3 py-2 border-t border-zinc-100 flex justify-between text-xs text-zinc-500">
+                                      <span>Subtotal</span>
+                                      <span className="font-semibold text-zinc-800 tabular-nums">
+                                        $
+                                        {sub.toLocaleString(undefined, {
+                                          minimumFractionDigits: 2,
+                                          maximumFractionDigits: 2,
+                                        })}
+                                      </span>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                              {financialWorksheet.sections.length > 0 && (
+                                <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3 flex justify-between text-sm">
+                                  <span className="font-semibold text-zinc-800">
+                                    Grand total
+                                  </span>
+                                  <span className="font-semibold text-zinc-900 tabular-nums">
+                                    $
+                                    {jobSectionsTotal(
+                                      financialWorksheet.sections
+                                    ).toLocaleString(undefined, {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    })}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                            <div className="space-y-3">
+                              <div className="rounded-2xl border-2 border-sky-700 bg-white p-4">
+                                <div className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">
+                                  Approved job value
+                                </div>
+                                <div className="text-xl font-semibold text-zinc-900 tabular-nums">
+                                  $
+                                  {(
+                                    financialWorksheet.approvedJobValue || 0
+                                  ).toLocaleString(undefined, {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                  })}
+                                </div>
+                                <p className="mt-1.5 text-[11px] text-zinc-400">
+                                  Auto from worksheet grand total
+                                </p>
+                              </div>
+                              <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+                                <div className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">
+                                  Collected
+                                </div>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={
+                                    financialWorksheet.collected
+                                      ? String(financialWorksheet.collected)
+                                      : ''
+                                  }
+                                  onChange={(e) =>
+                                    setFinancialWorksheet((w) => ({
+                                      ...w,
+                                      collected:
+                                        parseFloat(e.target.value) || 0,
+                                    }))
+                                  }
+                                  className="w-full text-lg font-semibold text-zinc-900 border-0 p-0 focus:outline-none"
+                                  placeholder="0.00"
+                                />
+                              </div>
+                              <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+                                <div className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">
+                                  Balance due
+                                </div>
+                                <div className="text-lg font-semibold text-zinc-900 tabular-nums">
+                                  $
+                                  {(
+                                    (financialWorksheet.approvedJobValue ||
+                                      0) -
+                                    (financialWorksheet.collected || 0)
+                                  ).toLocaleString(undefined, {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                  })}
+                                </div>
+                              </div>
+                              <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+                                <div className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">
+                                  Notes
+                                </div>
+                                <textarea
+                                  value={financialWorksheet.notes || ''}
+                                  onChange={(e) =>
+                                    setFinancialWorksheet((w) => ({
+                                      ...w,
+                                      notes: e.target.value,
+                                    }))
+                                  }
+                                  rows={3}
+                                  className="w-full text-sm border-0 p-0 focus:outline-none resize-none"
+                                  placeholder="Supplement pending, etc."
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
                       {profileTab === 'insurance' && (
                         <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
                           <h2 className="text-lg font-semibold text-zinc-900 mb-1">
@@ -7726,22 +13280,35 @@ export default function SummitApp() {
                           </div>
                           <div className="space-y-3">
                             {profileNotes.length > 0 ? (
-                              [...profileNotes].reverse().map((note, index) => (
+                              [...profileNotes].reverse().map((note, reverseIndex) => {
+                                const noteIndex =
+                                  profileNotes.length - 1 - reverseIndex;
+                                return (
                                 <div
-                                  key={`${note.date}-${index}`}
+                                  key={`${note.date}-${noteIndex}`}
                                   className="relative pl-6 border-l-2 border-zinc-200"
                                 >
                                   <div className="absolute -left-[7px] top-1.5 w-3 h-3 rounded-full bg-zinc-400 border-2 border-white shadow" />
                                   <div className="bg-zinc-100 rounded-2xl p-4 text-sm">
-                                    <div className="text-zinc-500 text-xs mb-1 font-medium">
-                                      {note.date}
+                                    <div className="flex items-start justify-between gap-2 mb-1">
+                                      <div className="text-zinc-500 text-xs font-medium">
+                                        {note.date}
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => removeLeadNote(noteIndex)}
+                                        className="text-xs font-semibold text-red-600 hover:text-red-700 shrink-0"
+                                      >
+                                        Delete
+                                      </button>
                                     </div>
                                     <div className="whitespace-pre-wrap text-zinc-800">
                                       {note.text}
                                     </div>
                                   </div>
                                 </div>
-                              ))
+                                );
+                              })
                             ) : (
                               <div className="text-zinc-400 py-10 text-center rounded-2xl border border-dashed border-zinc-200">
                                 No notes yet — add the first update above.
@@ -7776,14 +13343,16 @@ export default function SummitApp() {
                           {profileEstimates.length > 0 ? (
                             <div className="space-y-3">
                               {profileEstimates.map((est, index) => (
-                                <button
+                                <div
                                   key={est.id ?? index}
-                                  type="button"
-                                  className="w-full text-left border border-zinc-200 rounded-2xl p-5 hover:border-zinc-300 hover:bg-zinc-100 transition-colors"
-                                  onClick={() => loadEstimate(est)}
+                                  className="w-full border border-zinc-200 rounded-2xl p-5 hover:border-sky-300 hover:bg-zinc-100 transition-colors"
                                 >
-                                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
-                                    <div>
+                                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+                                    <button
+                                      type="button"
+                                      className="text-left min-w-0 flex-1"
+                                      onClick={() => loadEstimate(est)}
+                                    >
                                       <div className="font-medium text-zinc-900">
                                         Estimate · {est.date}
                                       </div>
@@ -7791,17 +13360,26 @@ export default function SummitApp() {
                                         {est.squares || 0} squares ·{' '}
                                         {est.selectedShingle || 'No shingle'}
                                       </div>
-                                    </div>
-                                    <div className="text-xl font-semibold text-zinc-900">
-                                      $
-                                      {(
-                                        est.negotiatedPrice ||
-                                        est.total ||
-                                        0
-                                      ).toLocaleString()}
+                                    </button>
+                                    <div className="flex items-center gap-3 shrink-0">
+                                      <div className="text-xl font-semibold text-zinc-900">
+                                        $
+                                        {(
+                                          est.negotiatedPrice ||
+                                          est.total ||
+                                          0
+                                        ).toLocaleString()}
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => removeLeadEstimate(est.id)}
+                                        className="text-xs font-semibold text-red-600 hover:text-red-700 px-2 py-1"
+                                      >
+                                        Delete
+                                      </button>
                                     </div>
                                   </div>
-                                </button>
+                                </div>
                               ))}
                             </div>
                           ) : (
@@ -7817,10 +13395,6 @@ export default function SummitApp() {
                           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-5">
                             <div>
                               <h2 className="text-lg font-semibold text-zinc-900">Photos</h2>
-                              <p className="text-sm text-zinc-500 mt-0.5">
-                                Multi-upload site photos. Local previews for now; Supabase later
-                                for 500+.
-                              </p>
                             </div>
                             {profilePhotos.length > 0 && (
                               <div className="text-sm font-medium text-zinc-600 bg-zinc-100 border border-zinc-200 rounded-xl px-3 py-1.5 self-start">
@@ -7833,8 +13407,21 @@ export default function SummitApp() {
                           <input
                             ref={photoInputRef}
                             type="file"
-                            accept="image/*"
+                            accept="image/*,.heic,.heif,image/heic,image/heif"
                             multiple
+                            className="hidden"
+                            onChange={(e) => {
+                              if (e.target.files?.length) {
+                                void handlePhotoFiles(e.target.files);
+                                e.target.value = '';
+                              }
+                            }}
+                          />
+                          <input
+                            ref={photoCameraInputRef}
+                            type="file"
+                            accept="image/*"
+                            capture="environment"
                             className="hidden"
                             onChange={(e) => {
                               if (e.target.files?.length) {
@@ -7882,7 +13469,7 @@ export default function SummitApp() {
                             className={`rounded-3xl border-2 border-dashed px-6 py-8 sm:py-12 text-center cursor-pointer transition-colors ${
                               photoDragOver
                                 ? 'border-slate-400 bg-slate-50/90 ring-1 ring-slate-300/30'
-                                : 'border-zinc-200 bg-zinc-100 hover:border-zinc-300'
+                                : 'border-zinc-200 bg-zinc-100 hover:border-sky-300'
                             } ${photosUploading ? 'opacity-70 pointer-events-none' : ''}`}
                           >
                             <div className="font-medium text-zinc-800">
@@ -7893,17 +13480,42 @@ export default function SummitApp() {
                             <div className="text-sm text-zinc-500 mt-1">
                               Select many images at once — grid scales for large albums
                             </div>
-                            <button
-                              type="button"
-                              disabled={photosUploading}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                photoInputRef.current?.click();
-                              }}
-                              className="btn-primary mt-4 px-5 py-2.5 rounded-2xl text-sm font-medium disabled:opacity-50"
-                            >
-                              {photosUploading ? 'Working…' : 'Upload photos'}
-                            </button>
+                            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                              <button
+                                type="button"
+                                disabled={photosUploading}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (!photosUploading) {
+                                    photoCameraInputRef.current?.click();
+                                  }
+                                }}
+                                className="px-5 py-2.5 rounded-2xl text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+                              >
+                                {photosUploading ? 'Working…' : 'Take photo'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openPhotoReportBuilder();
+                                }}
+                                className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-sky-300 bg-sky-50 text-sky-900 hover:bg-sky-100"
+                              >
+                                Create report
+                              </button>
+                              <button
+                                type="button"
+                                disabled={photosUploading}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  photoInputRef.current?.click();
+                                }}
+                                className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-medium disabled:opacity-50"
+                              >
+                                {photosUploading ? 'Working…' : 'Upload photos'}
+                              </button>
+                            </div>
                           </div>
 
                           {profilePhotos.length > 0 ? (
@@ -7922,7 +13534,7 @@ export default function SummitApp() {
                                   >
                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img
-                                      src={photo.dataUrl}
+                                      src={photo.url || photo.dataUrl || ''}
                                       alt={photo.name}
                                       loading="lazy"
                                       decoding="async"
@@ -7954,17 +13566,212 @@ export default function SummitApp() {
 
                       {profileTab === 'documents' && (
                         <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
-                          <h2 className="text-lg font-semibold text-zinc-900 mb-1">
-                            Documents
-                          </h2>
-                          <p className="text-sm text-zinc-500 mb-5">
-                            Contracts and files for this lead.
-                          </p>
-                          <div className="rounded-2xl border border-dashed border-zinc-200 px-6 py-12 text-center">
-                            <p className="text-sm font-medium text-zinc-800">No documents yet</p>
-                            <p className="text-sm text-zinc-500 mt-2">
-                              PDFs and signed paperwork will appear here.
-                            </p>
+                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-5">
+                            <div>
+                              <h2 className="text-lg font-semibold text-zinc-900">
+                                Documents
+                              </h2>
+                              <p className="text-sm text-zinc-500 mt-0.5">
+                                Contracts, insurance letters, PDFs…
+                              </p>
+                            </div>
+                            {profileDocuments.length > 0 && (
+                              <div className="text-sm font-medium text-zinc-600 bg-zinc-100 border border-zinc-200 rounded-xl px-3 py-1.5 self-start">
+                                {profileDocuments.length.toLocaleString()} document
+                                {profileDocuments.length !== 1 ? 's' : ''}
+                              </div>
+                            )}
+                          </div>
+
+                          <input
+                            ref={docInputRef}
+                            type="file"
+                            multiple
+                            accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.heic,.txt,.csv,application/pdf"
+                            className="hidden"
+                            onChange={(e) => {
+                              if (e.target.files?.length) {
+                                void handleDocFiles(e.target.files);
+                                e.target.value = '';
+                              }
+                            }}
+                          />
+
+                          <div className="mb-4 relative">
+                            <button
+                              type="button"
+                              disabled={docsUploading}
+                              onClick={() => setDocAddMenuOpen((o) => !o)}
+                              className="px-5 py-2.5 rounded-2xl text-sm font-medium bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50"
+                            >
+                              {docsUploading ? 'Uploading…' : '+ Add'}
+                            </button>
+                            {docAddMenuOpen && (
+                              <div className="absolute left-0 sm:left-auto sm:right-0 mt-2 w-64 rounded-2xl border border-zinc-200 bg-white shadow-lg z-20 py-1">
+                                <button
+                                  type="button"
+                                  className="w-full text-left px-4 py-2.5 text-sm text-zinc-800 hover:bg-sky-50"
+                                  onClick={() => {
+                                    setDocAddMenuOpen(false);
+                                    docInputRef.current?.click();
+                                  }}
+                                >
+                                  Upload file
+                                </button>
+                                <div className="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wide text-zinc-400">
+                                  From system
+                                </div>
+                                {SYSTEM_DOCUMENTS.map((doc) => (
+                                  <button
+                                    key={doc.id}
+                                    type="button"
+                                    className="w-full text-left px-4 py-2.5 text-sm text-zinc-800 hover:bg-sky-50"
+                                    onClick={() => {
+                                      setDocAddMenuOpen(false);
+                                      if (doc.id === 'takeoff') {
+                                        setProfileTab('takeoff');
+                                        showToast(
+                                          'Fill the Take-off sheet, then Save + add to Documents'
+                                        );
+                                      }
+                                    }}
+                                  >
+                                    <div className="font-medium">{doc.name}</div>
+                                    <div className="text-xs text-zinc-500 mt-0.5">
+                                      {doc.description}
+                                    </div>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {profileDocuments.length === 0 ? (
+                            <div className="rounded-2xl border border-dashed border-zinc-200 px-6 py-12 text-center">
+                              <p className="text-sm font-medium text-zinc-800">
+                                No documents yet
+                              </p>
+                              <p className="text-sm text-zinc-500 mt-2">
+                                PDFs and signed paperwork will appear here.
+                              </p>
+                            </div>
+                          ) : (
+                            <ul className="space-y-2">
+                              {profileDocuments.map((doc) => (
+                                <li
+                                  key={doc.id}
+                                  className="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-2.5"
+                                >
+                                  <div className="min-w-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const isPdf =
+                                          doc.mimeType === 'application/pdf' ||
+                                          /\.pdf$/i.test(doc.name);
+                                        if (isPdf) {
+                                          setMeasurementPdfUrl(doc.url);
+                                          setMeasurementPdfName(doc.name);
+                                        } else {
+                                          window.open(doc.url, '_blank', 'noopener,noreferrer');
+                                        }
+                                      }}
+                                      className="text-sm font-medium text-emerald-700 hover:underline truncate block text-left w-full"
+                                    >
+                                      {doc.name}
+                                    </button>
+                                    <div className="text-xs text-zinc-400 mt-0.5">
+                                      {doc.createdAt}
+                                      {doc.size != null
+                                        ? ` · ${
+                                            doc.size < 1024 * 1024
+                                              ? `${Math.max(1, Math.round(doc.size / 1024))} KB`
+                                              : `${(doc.size / (1024 * 1024)).toFixed(1)} MB`
+                                          }`
+                                        : ''}
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeLeadDocument(doc.id)}
+                                    className="text-xs text-zinc-500 hover:text-red-600 shrink-0 px-2 py-1"
+                                  >
+                                    Remove
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+
+                        </section>
+                      )}
+
+                      {profileTab === 'takeoff' && (
+                        <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
+                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-5">
+                            <div>
+                              <h2 className="text-lg font-semibold text-zinc-900">
+                                Take-off
+                              </h2>
+                              <p className="text-sm text-zinc-500 mt-0.5">
+                                Site inspection sheet — roof, penetrations, and
+                                interior notes.
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => saveTakeoff(false)}
+                                className="px-4 py-2 rounded-xl bg-sky-600 text-white text-sm font-medium hover:bg-sky-700"
+                              >
+                                Save take-off
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => saveTakeoff(true)}
+                                className="px-4 py-2 rounded-xl border border-zinc-200 bg-white text-sm font-medium text-zinc-800 hover:border-sky-300"
+                              >
+                                Save + add to Documents
+                              </button>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {TAKEOFF_FIELD_LABELS.map(({ key, label }) =>
+                              key === 'notes' ? (
+                                <div key={key} className="md:col-span-2">
+                                  <label className="text-xs text-zinc-500 mb-1 block">
+                                    {label}
+                                  </label>
+                                  <textarea
+                                    value={takeoffForm[key]}
+                                    onChange={(e) =>
+                                      setTakeoffForm((f) => ({
+                                        ...f,
+                                        [key]: e.target.value,
+                                      }))
+                                    }
+                                    rows={3}
+                                    className="w-full border border-zinc-200 rounded-xl px-3 py-2 text-sm text-zinc-900"
+                                  />
+                                </div>
+                              ) : (
+                                <div key={key}>
+                                  <label className="text-xs text-zinc-500 mb-1 block">
+                                    {label}
+                                  </label>
+                                  <input
+                                    value={takeoffForm[key]}
+                                    onChange={(e) =>
+                                      setTakeoffForm((f) => ({
+                                        ...f,
+                                        [key]: e.target.value,
+                                      }))
+                                    }
+                                    className="w-full border border-zinc-200 rounded-xl px-3 py-2 text-sm text-zinc-900"
+                                  />
+                                </div>
+                              )
+                            )}
                           </div>
                         </section>
                       )}
@@ -7984,7 +13791,150 @@ export default function SummitApp() {
                   </div>
 
                   {/* Photo lightbox */}
-                  {lightboxPhoto && (
+                  
+      {photoReportOpen && currentLeadId != null && (() => {
+        const lead = leads.find((l) => l.id === currentLeadId);
+        const photos = lead?.photos || [];
+        return (
+          <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-6">
+            <div className="bg-white w-full sm:max-w-2xl max-h-[92vh] overflow-hidden rounded-t-3xl sm:rounded-3xl shadow-xl flex flex-col">
+              <div className="sticky top-0 bg-white border-b border-zinc-100 px-5 py-4 flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-semibold text-lg text-zinc-900">Photo report</div>
+                  <div className="text-xs text-zinc-500">Select photos, add captions, download PDF</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPhotoReportOpen(false)}
+                  className="text-sm text-zinc-500 hover:text-zinc-800 px-2 py-1"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="px-5 py-3 border-b border-zinc-50">
+                <input
+                  value={photoReportTitle}
+                  onChange={(e) => setPhotoReportTitle(e.target.value)}
+                  className="w-full border border-zinc-200 rounded-2xl px-4 py-2.5 text-sm text-zinc-900"
+                  placeholder="Report title"
+                />
+              </div>
+              <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+                {photos.map((p) => {
+                  const on = photoReportSelected.includes(p.id);
+                  const src = p.url || p.dataUrl || '';
+                  return (
+                    <div
+                      key={p.id}
+                      className={`flex gap-3 p-3 rounded-2xl border ${
+                        on ? 'border-sky-400 bg-sky-50/50' : 'border-zinc-200 bg-white'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => togglePhotoInReport(p.id)}
+                        className="shrink-0 w-20 h-20 rounded-xl overflow-hidden bg-zinc-100 border border-zinc-200"
+                      >
+                        {src ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={src} alt="" className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-[10px] text-zinc-400">
+                            No preview
+                          </div>
+                        )}
+                      </button>
+                      <div className="flex-1 min-w-0 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-xs text-zinc-500 truncate">{p.name}</div>
+                          <button
+                            type="button"
+                            onClick={() => togglePhotoInReport(p.id)}
+                            className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${
+                              on
+                                ? 'border-sky-400 bg-sky-50 text-sky-800'
+                                : 'border-zinc-200 text-zinc-500'
+                            }`}
+                          >
+                            {on ? 'In report' : 'Add'}
+                          </button>
+                        </div>
+                        {on && (
+                          <textarea
+                            value={photoReportCaptions[p.id] || ''}
+                            onChange={(e) =>
+                              setPhotoReportCaptions((prev) => ({
+                                ...prev,
+                                [p.id]: e.target.value,
+                              }))
+                            }
+                            rows={2}
+                            placeholder="Caption / description..."
+                            className="w-full border border-zinc-200 rounded-xl px-3 py-2 text-sm text-zinc-900 resize-none"
+                          />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="sticky bottom-0 border-t border-zinc-100 bg-white px-5 py-4 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPhotoReportOpen(false)}
+                  className="flex-1 py-3 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={photoReportBusy || photoReportSelected.length === 0}
+                  onClick={() => void generatePhotoReportPdf()}
+                  className="flex-1 py-3 rounded-2xl text-sm font-semibold btn-primary disabled:opacity-50"
+                >
+                  {photoReportBusy ? 'Building…' : 'Save report'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      
+      {measurementPdfUrl && (
+        <div className="fixed inset-0 z-[85] flex flex-col bg-black/50">
+          <div className="flex items-center justify-between gap-3 px-4 py-3 bg-white border-b border-zinc-200">
+            <div className="font-semibold text-zinc-900 truncate">{measurementPdfName || 'Measurement report'}</div>
+            <div className="flex gap-2 shrink-0">
+              <a
+                href={measurementPdfUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-1.5 rounded-xl text-sm font-semibold border border-zinc-200 text-zinc-700"
+              >
+                Open tab
+              </a>
+              <button
+                type="button"
+                onClick={() => {
+                  setMeasurementPdfUrl(null);
+                  setMeasurementPdfName('');
+                }}
+                className="px-3 py-1.5 rounded-xl text-sm font-semibold bg-zinc-900 text-white"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+          <iframe
+            title="Measurement PDF"
+            src={measurementPdfUrl}
+            className="flex-1 w-full bg-zinc-100"
+          />
+        </div>
+      )}
+
+      {lightboxPhoto && (
                     <div
                       className="fixed inset-0 z-[70] bg-black/90 flex items-center justify-center p-4"
                       onClick={() => setLightboxPhoto(null)}
@@ -7999,7 +13949,7 @@ export default function SummitApp() {
                       </button>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
-                        src={lightboxPhoto.dataUrl}
+                        src={lightboxPhoto.url || lightboxPhoto.dataUrl || ''}
                         alt={lightboxPhoto.name}
                         className="max-w-full max-h-[85vh] object-contain rounded-lg"
                         onClick={(e) => e.stopPropagation()}
