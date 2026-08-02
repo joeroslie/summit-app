@@ -784,6 +784,39 @@ type AppTrashItem =
 /** Pricing region for multi-area sell rates (price_sheet.region). */
 type PricingRegion = 'central' | 'southern' | 'northern';
 
+/** Mitigation line from Supabase mitigation_price_sheet */
+type MitigationPriceRow = {
+  item_key: string;
+  label: string;
+  category: string;
+  unit: string;
+  insurance_rate: number | null;
+  cash_retail: number | null;
+};
+
+type MitigationEntity = 'rosalie' | 'prowest';
+
+type MitigationLineItem = {
+  id: string;
+  itemKey: string;
+  label: string;
+  qty: number;
+  unitPrice: number;
+  amount: number;
+};
+
+type MitigationInvoiceDraft = {
+  entity: MitigationEntity;
+  rateMode: 'insurance' | 'cash';
+  invoiceFor: string;
+  location: string;
+  job: string;
+  claimNumber: string;
+  date: string;
+  lines: MitigationLineItem[];
+  notes: string;
+};
+
 const VALLEY_CITIES = [
   'phoenix',
   'mesa',
@@ -1977,6 +2010,14 @@ export default function SummitApp() {
   /** Live cost rates from Supabase `cost_sheet` (item_key → cost) */
   const [costSheet, setCostSheet] = useState<Record<string, number>>({});
   const [costsReady, setCostsReady] = useState(false);
+  /** Mitigation price sheet (insurance / cash retail) */
+  const [mitigationPrices, setMitigationPrices] = useState<MitigationPriceRow[]>(
+    []
+  );
+  const [mitigationPricesReady, setMitigationPricesReady] = useState(false);
+  const [showMitigationInvoice, setShowMitigationInvoice] = useState(false);
+  const [mitigationDraft, setMitigationDraft] =
+    useState<MitigationInvoiceDraft | null>(null);
   /** Manual override for pricing region (null = derive from job address) */
   const [pricingRegionOverride, setPricingRegionOverride] =
     useState<PricingRegion | null>(null);
@@ -2048,6 +2089,46 @@ export default function SummitApp() {
   );
   const activePricingRegion: PricingRegion =
     pricingRegionOverride || addressPricingRegion;
+
+  const getMitigationRate = (
+    itemKey: string,
+    mode: 'insurance' | 'cash' = 'insurance'
+  ): number => {
+    const row = mitigationPrices.find((r) => r.item_key === itemKey);
+    if (!row) return 0;
+    const v = mode === 'cash' ? row.cash_retail : row.insurance_rate;
+    return typeof v === 'number' && !Number.isNaN(v) ? v : 0;
+  };
+
+  const startMitigationInvoice = (leadId?: number | null) => {
+    const lead =
+      leadId != null
+        ? leads.find((l) => l.id === leadId)
+        : currentLeadId != null
+          ? leads.find((l) => l.id === currentLeadId)
+          : null;
+    const name = lead
+      ? [lead.clientFirstName, lead.clientLastName].filter(Boolean).join(' ')
+      : '';
+    const addr = lead
+      ? [lead.clientAddress, lead.clientCity, lead.clientState, lead.clientZip]
+          .filter(Boolean)
+          .join(', ')
+      : '';
+    setMitigationDraft({
+      entity: 'rosalie',
+      rateMode: 'insurance',
+      invoiceFor: name,
+      location: addr,
+      job: lead?.jobNumber || '',
+      claimNumber: '',
+      date: new Date().toLocaleDateString(),
+      lines: [],
+      notes:
+        'Work performed to mitigate any further damages.\nPrice includes materials, labor and roof access / set up.\nPlease forward to Insurance Company for reimbursement.',
+    });
+    setShowMitigationInvoice(true);
+  };
 
   // Prices from Supabase `price_sheet` (cached; prefer item_key__region)
   const getSellPrice = (
@@ -2864,9 +2945,60 @@ export default function SummitApp() {
               'costs from Supabase cost_sheet (regional + all)'
             );
           });
+
+        // mitigation_price_sheet
+        void supabase
+          .from('mitigation_price_sheet')
+          .select(
+            'item_key,label,category,unit,insurance_rate,cash_retail,active,sort_order'
+          )
+          .eq('active', true)
+          .order('sort_order')
+          .then(({ data: mitRows, error: mitErr }) => {
+            if (mitErr) {
+              console.warn(
+                'mitigation_price_sheet load failed',
+                JSON.stringify(mitErr, null, 2)
+              );
+              setMitigationPricesReady(true);
+              return;
+            }
+            if (Array.isArray(mitRows)) {
+              setMitigationPrices(
+                mitRows.map(
+                  (r: {
+                    item_key?: string;
+                    label?: string;
+                    category?: string;
+                    unit?: string;
+                    insurance_rate?: number | null;
+                    cash_retail?: number | null;
+                  }) => ({
+                    item_key: String(r.item_key || ''),
+                    label: String(r.label || r.item_key || ''),
+                    category: String(r.category || ''),
+                    unit: String(r.unit || 'each'),
+                    insurance_rate:
+                      r.insurance_rate == null
+                        ? null
+                        : Number(r.insurance_rate),
+                    cash_retail:
+                      r.cash_retail == null ? null : Number(r.cash_retail),
+                  })
+                )
+              );
+              console.log(
+                'Loaded',
+                mitRows.length,
+                'mitigation prices from Supabase'
+              );
+            }
+            setMitigationPricesReady(true);
+          });
       } else {
         setPricesReady(true);
         setCostsReady(true);
+        setMitigationPricesReady(true);
       }
 
       setEstimateDate(
