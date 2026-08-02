@@ -2544,15 +2544,10 @@ export default function SummitApp() {
       };
       persistAppInvoices([inv, ...appInvoices]);
       showToast('Saved to lead Documents + Invoices');
-      // Close form and open the lead's Documents tab so the file is visible
+      // Close form only — do not navigate into lead Documents
       setShowMitigationInvoice(false);
       setSystemDocWorkspace(null);
       setMitigationDraft(null);
-      if (currentLeadId != null) {
-        setIsEditingLead(true);
-        setProfileTab('documents');
-        setActiveTab('leads');
-      }
       return;
     }
 
@@ -8998,110 +8993,84 @@ showToast(
 
         {activeTab === 'invoices' && (
           <div className="pb-8 w-full">
-            <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-8">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
               <div>
                 <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
                   Invoices
                 </h1>
-                <p className="text-zinc-500 mt-1">
-                  {appInvoices.length === 0
-                    ? 'All invoices across leads'
-                    : `${appInvoices.length} invoice${appInvoices.length === 1 ? '' : 's'}`}
-                </p>
+                <p className="text-zinc-500 mt-1">All invoices</p>
               </div>
-              <button
-                type="button"
-                onClick={() => startNewInvoice()}
-                className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold"
-              >
-                New invoice
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-center rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-white px-4 py-2.5 text-sm font-medium transition"
+                  onClick={() => startNewInvoice()}
+                >
+                  New invoice
+                </button>
+              </div>
             </div>
-
-            {appInvoices.length === 0 ? (
-              <div className="rounded-3xl border border-dashed border-zinc-200 bg-white px-6 py-16 text-center">
-                <p className="text-sm font-medium text-zinc-800">No invoices yet</p>
-                <p className="text-sm text-zinc-500 mt-2 max-w-md mx-auto">
-                  New invoice asks you to select or create a lead first — they all list here.
-                </p>
-                <div className="mt-6 flex flex-wrap justify-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => startNewInvoice()}
-                    className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold"
-                  >
-                    New invoice
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleTabChange('leads')}
-                    className="px-5 py-2.5 rounded-2xl text-sm font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
-                  >
-                    Go to jobs
-                  </button>
-                </div>
+            <div className="bg-white border border-zinc-200 rounded-3xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-zinc-100 text-xs font-semibold text-zinc-500 uppercase tracking-wide grid grid-cols-12 gap-2">
+                <div className="col-span-3">Date</div>
+                <div className="col-span-3">Lead / job</div>
+                <div className="col-span-2">Type</div>
+                <div className="col-span-2">Total</div>
+                <div className="col-span-2 text-right">Actions</div>
               </div>
-            ) : (
-              <div className="space-y-3">
-                {appInvoices.map((inv) => (
-                  <div
-                    key={inv.id}
-                    className="bg-white border border-zinc-200 rounded-3xl p-5 hover:border-sky-300 hover:shadow-sm transition-all"
-                  >
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                      <button
-                        type="button"
-                        className="text-left min-w-0 flex-1"
-                        onClick={() => {
-                          if (inv.leadId) {
-                            setCurrentLeadId(inv.leadId);
-                            setIsEditingLead(true);
-                            setProfileTab('documents');
-                            setActiveTab('leads');
-                          }
-                        }}
-                      >
-                        <div className="font-semibold text-zinc-900 truncate">
-                          {inv.leadLabel || 'Unknown lead'}
-                        </div>
-                        <div className="text-sm text-zinc-500 mt-0.5 truncate">
-                          {new Date(inv.createdAt).toLocaleDateString()}
-                          {inv.job ? ` · ${inv.job}` : ''}
-                          {inv.title ? ` · ${inv.title}` : ''}
-                        </div>
-                      </button>
-                      <div className="flex items-center gap-3 shrink-0">
-                        <div className="text-xl font-semibold tabular-nums text-emerald-700">
-                          ${Number(inv.total).toLocaleString()}
-                        </div>
+              {appInvoices.length === 0 ? (
+                <div className="p-8 text-center text-sm text-zinc-500">
+                  No invoices yet. New invoice asks you to select or create a lead
+                  first.
+                </div>
+              ) : (
+                <ul className="divide-y divide-zinc-100">
+                  {appInvoices.map((inv) => (
+                    <li
+                      key={inv.id}
+                      className="px-4 py-3 grid grid-cols-12 gap-2 items-center text-sm"
+                    >
+                      <div className="col-span-3 text-zinc-600">
+                        {new Date(inv.createdAt).toLocaleDateString()}
+                      </div>
+                      <div className="col-span-3 truncate">
+                        {inv.leadLabel}
+                        {inv.job ? ` · ${inv.job}` : ''}
+                      </div>
+                      <div className="col-span-2 truncate text-zinc-600">
+                        {inv.title}
+                      </div>
+                      <div className="col-span-2 tabular-nums">
+                        ${Number(inv.total).toLocaleString()}
+                      </div>
+                      <div className="col-span-2 flex justify-end gap-2">
                         <a
+                          className="text-xs text-sky-700 hover:underline"
                           href={inv.url}
                           download={inv.fileName}
-                          className="btn-primary px-3 py-1.5 text-xs font-semibold rounded-lg no-underline"
-                          onClick={(e) => e.stopPropagation()}
                         >
                           Download
                         </a>
                         <button
                           type="button"
-                          onClick={() => {
-                            if (inv.leadId) {
-                              setCurrentLeadId(inv.leadId);
-                              setIsEditingLead(true);
-                              setProfileTab('documents');
-                              setActiveTab('leads');
-                            }
-                          }}
-                          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                          className="text-xs text-red-600"
+                          onClick={() =>
+                            persistAppInvoices(
+                              appInvoices.filter((x) => x.id !== inv.id)
+                            )
+                          }
                         >
-                          Lead
+                          Delete
                         </button>
                       </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <p className="text-xs text-zinc-400 mt-3">
+              Delete removes from this list. Download exports the file.
+            </p>
           </div>
         )}
 
@@ -12346,14 +12315,8 @@ showToast(
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {/* Solar Panels */}
                 <div className="bg-white border border-zinc-200 rounded-3xl p-5">
-                  <div className="mb-3">
-                    <div className="font-semibold text-zinc-900">Solar Panels</div>
-                    <div className="text-xs text-amber-700/80 mt-0.5">
-                      Total solar panels
-                    </div>
-                  </div>
+                  <div className="font-semibold mb-2 text-zinc-900">Solar Panels</div>
                   <input
                     type="number"
                     value={solarPanels}
@@ -12367,15 +12330,9 @@ showToast(
                     </div>
                   )}
                 </div>
-
-                {/* HVAC */}
                 <div className="bg-white border border-zinc-200 rounded-3xl p-5">
-                  <div className="mb-3">
-                    <div className="font-semibold text-zinc-900">HVAC</div>
-                    <div className="text-xs text-amber-700/80 mt-0.5">
-                      Detach and reset
-                    </div>
-                  </div>
+                  <div className="font-semibold mb-2 text-zinc-900">HVAC</div>
+                  <div className="text-xs text-zinc-500 mb-2">detach and reset</div>
                   <input
                     type="number"
                     value={hvacUnits}
@@ -12396,15 +12353,9 @@ showToast(
                     </div>
                   )}
                 </div>
-
-                {/* Skylights */}
                 <div className="bg-white border border-zinc-200 rounded-3xl p-5">
-                  <div className="mb-3">
-                    <div className="font-semibold text-zinc-900">Skylights</div>
-                    <div className="text-xs text-amber-700/80 mt-0.5">
-                      Detach and reset
-                    </div>
-                  </div>
+                  <div className="font-semibold mb-2 text-zinc-900">Skylights</div>
+                  <div className="text-xs text-zinc-500 mb-2">detach and reset</div>
                   <input
                     type="number"
                     value={skylights}
@@ -12425,15 +12376,8 @@ showToast(
                     </div>
                   )}
                 </div>
-
-                {/* Ridge Vent */}
                 <div className="bg-white border border-zinc-200 rounded-3xl p-5">
-                  <div className="mb-3">
-                    <div className="font-semibold text-zinc-900">Ridge Vent</div>
-                    <div className="text-xs text-amber-700/80 mt-0.5">
-                      Total LF of ridge vent
-                    </div>
-                  </div>
+                  <div className="font-semibold mb-2 text-zinc-900">Ridge Vent</div>
                   <input
                     type="number"
                     value={ridgeVentLF}
@@ -12451,7 +12395,6 @@ showToast(
                   )}
                 </div>
               </div>
-
             </div>
             <div className="mb-8">
               <div className="text-sm font-semibold text-zinc-600 mb-4">ADDITIONAL NOTES</div>
