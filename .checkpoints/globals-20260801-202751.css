@@ -1,0 +1,414 @@
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+/*
+  Summit layout & palette
+  Content width is estimator-first: ~1024px (5xl) — not sparse, not stretched.
+  Same shell for header, home, leads, profile, estimates.
+  Theme: data-theme="day" | "night" on <html> (manual or auto-by-time).
+*/
+:root,
+html[data-theme="day"] {
+  color-scheme: light;
+  --background: #f2f3f5;
+  --foreground: #141618;
+  --surface: #fafbfc;
+  --surface-raised: #ffffff;
+  --chrome: #c5cad1;
+  --chrome-line: #d8dce2;
+  --chrome-soft: #eef0f3;
+  --graphite: #1c1e21;
+  --graphite-hover: #2a2d32;
+  --steel: #4a6fa5;
+  --steel-soft: #eef3f9;
+  --emerald: #059669;
+  --emerald-soft: #ecfdf5;
+  --amber: #b45309;
+  --amber-soft: #fffbeb;
+  --scrollbar: #c5cad1;
+
+  /* Perfect proportions — estimator base */
+  --page-max: 64rem; /* 1024px */
+  --page-pad-x: clamp(1rem, 2.5vw, 1.5rem);
+  --page-pad-y: clamp(1.25rem, 2vw, 1.75rem);
+  --header-h: 3.5rem;
+}
+
+/*
+  Night mode — invert zinc scale so existing utilities flip surfaces/text,
+  remap soft tints, and paint pure white cards as raised dark surfaces.
+*/
+html[data-theme="night"] {
+  color-scheme: dark;
+  --background: #0f1115;
+  --foreground: #e8eaed;
+  --surface: #15181d;
+  --surface-raised: #1a1d24;
+  --chrome: #3a3f48;
+  --chrome-line: #2c3038;
+  --chrome-soft: #1c1f26;
+  --graphite: #e8eaed;
+  --graphite-hover: #f4f5f6;
+  --steel: #7ba3d4;
+  --steel-soft: #1a2433;
+  --emerald: #34d399;
+  --emerald-soft: #0f2a22;
+  --amber: #fbbf24;
+  --amber-soft: #2a2110;
+  --scrollbar: #3f4550;
+
+  /* Zinc inverted so bg-zinc-100 / text-zinc-900 work in both themes */
+  --color-zinc-50: oklch(14.1% 0.005 285.823);
+  --color-zinc-100: oklch(18% 0.005 286);
+  --color-zinc-200: oklch(27.4% 0.006 286.033);
+  --color-zinc-300: oklch(37% 0.013 285.805);
+  --color-zinc-400: oklch(55.2% 0.016 285.938);
+  --color-zinc-500: oklch(70.5% 0.015 286.067);
+  --color-zinc-600: oklch(78% 0.01 286);
+  --color-zinc-700: oklch(87.1% 0.006 286.286);
+  --color-zinc-800: oklch(92% 0.004 286.32);
+  --color-zinc-900: oklch(96.7% 0.001 286.375);
+  --color-zinc-950: oklch(98.5% 0 0);
+
+  /* Soft washes → deep tinted panels */
+  --color-emerald-50: oklch(22% 0.04 160);
+  --color-emerald-100: oklch(26% 0.05 160);
+  --color-emerald-200: oklch(32% 0.06 160);
+  --color-emerald-700: oklch(72% 0.14 160);
+  --color-emerald-800: oklch(78% 0.12 160);
+  --color-emerald-900: oklch(86% 0.08 160);
+  --color-amber-50: oklch(24% 0.04 80);
+  --color-amber-100: oklch(28% 0.05 80);
+  --color-amber-200: oklch(34% 0.06 80);
+  --color-amber-700: oklch(78% 0.14 75);
+  --color-amber-800: oklch(82% 0.12 75);
+  --color-amber-900: oklch(88% 0.08 80);
+  --color-amber-950: oklch(92% 0.05 80);
+  --color-sky-50: oklch(22% 0.03 230);
+  --color-sky-100: oklch(26% 0.04 230);
+  --color-sky-700: oklch(72% 0.1 230);
+  --color-sky-800: oklch(78% 0.09 230);
+  --color-sky-900: oklch(86% 0.06 230);
+  --color-sky-950: oklch(92% 0.03 230);
+  --color-red-50: oklch(24% 0.05 25);
+  --color-red-600: oklch(72% 0.18 25);
+  --color-red-700: oklch(78% 0.16 25);
+}
+
+/* Pure white cards → raised night surface (keep text-white as real white) */
+html[data-theme="night"] :where(.bg-white) {
+  background-color: var(--surface-raised);
+}
+html[data-theme="night"] :where(.bg-white\/95) {
+  background-color: color-mix(in srgb, var(--surface-raised) 95%, transparent);
+}
+html[data-theme="night"] :where(.bg-white\/80) {
+  background-color: color-mix(in srgb, var(--surface-raised) 80%, transparent);
+}
+html[data-theme="night"] :where(.bg-white\/50) {
+  background-color: color-mix(in srgb, var(--surface-raised) 50%, transparent);
+}
+html[data-theme="night"] :where(.bg-white\/20) {
+  background-color: rgb(255 255 255 / 0.12);
+}
+html[data-theme="night"] :where(.bg-white\/10) {
+  background-color: rgb(255 255 255 / 0.08);
+}
+/* Inverted zinc-900 is light — intentional dark chrome stays graphite */
+html[data-theme="night"] :where(.bg-zinc-900, .bg-zinc-800) {
+  background-color: #2a2e36;
+  color: #f4f5f6;
+}
+html[data-theme="night"] :where(.ring-white) {
+  --tw-ring-color: rgb(255 255 255 / 0.12);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-chrome: var(--chrome-line);
+  --color-chrome-soft: var(--chrome-soft);
+  --color-graphite: var(--graphite);
+  --color-graphite-hover: var(--graphite-hover);
+  --color-steel: var(--steel);
+  --color-steel-soft: var(--steel-soft);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition:
+    background-color 0.2s ease,
+    color 0.15s ease;
+}
+
+button,
+[role="button"] {
+  touch-action: manipulation;
+}
+
+* {
+  scrollbar-color: var(--scrollbar) transparent;
+}
+
+/* Primary CTA — sky outline (forced so utilities don't win) */
+.btn-primary {
+  border-radius: 9999px !important;
+  padding: 8px 16px !important;
+  font-weight: 500 !important;
+  background: transparent !important;
+  color: #0ea5e9 !important;
+  border: 2px solid #0ea5e9 !important;
+  box-shadow: none !important;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
+}
+
+.btn-primary:hover {
+  background: #0ea5e9 !important;
+  color: #fff !important;
+  border-color: #0ea5e9 !important;
+  box-shadow: 0 2px 4px rgba(14, 165, 233, 0.25), 0 8px 16px rgba(14, 165, 233, 0.15) !important;
+  transform: translateY(-1px);
+}
+.btn-primary:active {
+  transform: translateY(0);
+  box-shadow: none !important;
+}
+.btn-primary:disabled {
+  opacity: 0.35;
+  transform: none;
+  box-shadow: none !important;
+  background: transparent !important;
+  color: #0ea5e9 !important;
+}
+/* Night: slightly brighter outline */
+html[data-theme="night"] .btn-primary {
+  background: transparent !important;
+  color: #38bdf8 !important;
+  border-color: #38bdf8 !important;
+  box-shadow: none !important;
+}
+html[data-theme="night"] .btn-primary:hover {
+  background: #0ea5e9 !important;
+  color: #fff !important;
+  border-color: #0ea5e9 !important;
+  box-shadow: 0 2px 4px rgba(14, 165, 233, 0.35), 0 8px 20px rgba(14, 165, 233, 0.2) !important;
+  transform: translateY(-1px);
+}
+
+.price-pos {
+  color: #047857;
+}
+html[data-theme="night"] .price-pos {
+  color: #34d399;
+}
+
+.order-note {
+  color: #b45309;
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+html[data-theme="night"] .order-note {
+  color: #fbbf24;
+  background: #2a2110;
+  border-color: #5c4a1a;
+}
+
+.chrome-panel {
+  background: var(--surface-raised);
+  border: 1px solid var(--chrome-line);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.6) inset;
+}
+html[data-theme="night"] .chrome-panel {
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+}
+
+.steel-wash {
+  background: var(--steel-soft);
+  border-color: #b8c4d4;
+}
+html[data-theme="night"] .steel-wash {
+  border-color: #3a4a60;
+}
+
+/* Horizontal rail only (header bar content) */
+.page-rail {
+  width: 100%;
+  max-width: var(--page-max);
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: var(--page-pad-x);
+  padding-right: var(--page-pad-x);
+}
+
+/* Full page content — same width as estimator */
+.page-shell {
+  width: 100%;
+  max-width: var(--page-max);
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: var(--page-pad-x);
+  padding-right: var(--page-pad-x);
+  padding-top: var(--page-pad-y);
+  padding-bottom: calc(var(--page-pad-y) + 0.5rem);
+}
+
+.page-shell--flush-y {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+
+.page-shell--flush-top {
+  padding-top: var(--page-pad-y);
+  padding-bottom: 4.5rem;
+}
+
+/* Soft enter */
+.page-fade {
+  animation: page-fade-in 0.2s ease-out;
+}
+@keyframes page-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/*
+  Kanban — fills page shell evenly.
+  2 / 3 / 6 cols so 6 stages never feel crushed or sparse.
+*/
+.kanban-board {
+  display: grid;
+  width: 100%;
+  gap: 0.625rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  transition:
+    gap 0.2s ease,
+    grid-template-columns 0.25s ease;
+}
+@media (min-width: 768px) {
+  .kanban-board {
+    gap: 0.75rem;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1024px) {
+  .kanban-board {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 0.625rem;
+  }
+}
+.kanban-board.kanban-board--single {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 22rem;
+}
+.kanban-col {
+  min-height: min(62vh, 32rem);
+  max-height: calc(100vh - 12.5rem);
+  transition:
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+}
+
+/* Leaflet */
+.leaflet-container {
+  width: 100% !important;
+  height: 100% !important;
+  background: #e6e8eb;
+  font: inherit;
+  z-index: 0;
+}
+html[data-theme="night"] .leaflet-container {
+  background: #1a1d24;
+}
+
+.leaflet-tile-pane {
+  image-rendering: auto;
+}
+
+.leaflet-tile {
+  image-rendering: -webkit-optimize-contrast;
+}
+
+.roof-tracer-map.leaflet-container,
+.roof-tracer-map .leaflet-container {
+  border-radius: 1rem;
+}
+
+/* Elevated cards + kanban columns — soft depth, lift on hover */
+.card,
+.lead-card,
+.kanban-col,
+.kanban-column {
+  box-shadow:
+    0 10px 15px -3px rgb(0 0 0 / 0.1),
+    0 4px 6px -4px rgb(0 0 0 / 0.1);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.card:hover,
+.lead-card:hover {
+  box-shadow:
+    0 20px 25px -5px rgb(0 0 0 / 0.1),
+    0 8px 10px -6px rgb(0 0 0 / 0.1);
+  transform: translateY(-2px);
+}
+
+html[data-theme="night"] .card,
+html[data-theme="night"] .lead-card,
+html[data-theme="night"] .kanban-col,
+html[data-theme="night"] .kanban-column {
+  box-shadow:
+    0 10px 15px -3px rgb(0 0 0 / 0.4),
+    0 4px 6px -4px rgb(0 0 0 / 0.3);
+}
+
+html[data-theme="night"] .card:hover,
+html[data-theme="night"] .lead-card:hover {
+  box-shadow:
+    0 20px 25px -5px rgb(0 0 0 / 0.5),
+    0 8px 10px -6px rgb(0 0 0 / 0.35);
+}
+
+/* Pill action buttons (not every <button> — that would break day cells / nav) */
+.btn {
+  border-radius: 9999px;
+  padding: 8px 16px;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+}
+
+/* Calendar day selected / focus highlight */
+.day-highlight {
+  background: white !important;
+  border: 2px solid #0ea5e9 !important;
+  color: #0ea5e9 !important;
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.1) !important;
+}
+
+html[data-theme="night"] .day-highlight {
+  background: var(--surface-raised) !important;
+  border-color: #38bdf8 !important;
+  color: #38bdf8 !important;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15) !important;
+}
