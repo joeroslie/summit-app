@@ -8049,21 +8049,12 @@ showToast(
                   <p className="text-xl text-zinc-500 mt-2">Welcome back</p>
                 </div>
 
-                <div className="flex flex-col sm:items-end gap-3">
-                  <button
-                    type="button"
-                    onClick={() => createNewLead()}
-                    className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold"
-                  >
-                    New Lead
-                  </button>
-                  <div className="sm:text-right">
-                    <div className="text-sm uppercase tracking-widest text-zinc-400">
-                      Pipeline Overview
-                    </div>
-                    <div className="text-sm font-medium text-sky-800/80 mt-1">
-                      {leads.length} active job{leads.length === 1 ? '' : 's'}
-                    </div>
+                <div className="sm:text-right">
+                  <div className="text-sm uppercase tracking-widest text-zinc-400">
+                    Pipeline Overview
+                  </div>
+                  <div className="text-sm font-medium text-sky-800/80 mt-1">
+                    {leads.length} active job{leads.length === 1 ? '' : 's'}
                   </div>
                 </div>
               </div>
@@ -8120,6 +8111,7 @@ showToast(
                 })}
               </div>
 
+              {/* Quick links — match original card stack */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                 <div
                   onClick={() => createNewLead()}
@@ -8169,13 +8161,26 @@ showToast(
 
                 <div
                   onClick={() => handleTabChange('calendar')}
-                  className="group bg-white border border-zinc-200/80 hover:border-sky-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200 sm:col-span-2 lg:col-span-1"
+                  className="group bg-white border border-zinc-200/80 hover:border-sky-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
                 >
                   <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1">
                     Calendar
                   </div>
                   <p className="text-sm text-zinc-500">Schedule and follow-ups</p>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => handleTabChange('tools')}
+                  className="group text-left bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 transition-all duration-200"
+                >
+                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900 transition-colors">
+                    Tools
+                  </div>
+                  <p className="text-sm text-zinc-500">
+                    Weather, canvassing
+                  </p>
+                </button>
               </div>
             </div>
           );
@@ -9140,82 +9145,22 @@ showToast(
                 Tools
               </h1>
               <p className="text-zinc-500 mt-1">
-                Shortcuts for estimating and job work
+                Field tools — more coming soon
               </p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <button
-                type="button"
-                onClick={() => createNewLead()}
-                className="text-left group bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-6 sm:p-7 transition-all duration-200"
-              >
-                <div className="text-xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900">
-                  New Lead
-                </div>
-                <p className="text-sm text-zinc-500">
-                  Start a job in the pipeline
-                </p>
-              </button>
-              <button
-                type="button"
-                onClick={() => openEstimatePicker('estimate')}
-                className="text-left group bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-6 sm:p-7 transition-all duration-200"
-              >
-                <div className="text-xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900">
-                  New estimate
-                </div>
-                <p className="text-sm text-zinc-500">
-                  Pick a lead and build a quote
-                </p>
-              </button>
-              <button
-                type="button"
-                onClick={() => openEstimatePicker('internal')}
-                className="text-left group bg-white border border-zinc-200/80 hover:border-amber-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-6 sm:p-7 transition-all duration-200"
-              >
-                <div className="text-xl font-semibold text-zinc-900 mb-1 group-hover:text-amber-900">
-                  Internal calc
-                </div>
-                <p className="text-sm text-zinc-500">
-                  Cost, commission, and buffer on a lead
-                </p>
-              </button>
-              <button
-                type="button"
-                onClick={() => openEstimatesHub()}
-                className="text-left group bg-white border border-zinc-200/80 hover:border-sky-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-6 sm:p-7 transition-all duration-200"
-              >
+              <div className="bg-white border border-zinc-200 rounded-3xl p-6 sm:p-7">
                 <div className="text-xl font-semibold text-zinc-900 mb-1">
-                  All estimates
+                  Weather Tracking
                 </div>
-                <p className="text-sm text-zinc-500">
-                  Browse saved quotes across jobs
-                </p>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleTabChange('calendar')}
-                className="text-left group bg-white border border-zinc-200/80 hover:border-sky-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-6 sm:p-7 transition-all duration-200"
-              >
+                <p className="text-sm text-zinc-500">Coming soon</p>
+              </div>
+              <div className="bg-white border border-zinc-200 rounded-3xl p-6 sm:p-7">
                 <div className="text-xl font-semibold text-zinc-900 mb-1">
-                  Calendar
+                  Canvassing
                 </div>
-                <p className="text-sm text-zinc-500">
-                  Schedule and follow-ups
-                </p>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleTabChange('documents')}
-                className="text-left group bg-white border border-zinc-200/80 hover:border-sky-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-6 sm:p-7 transition-all duration-200"
-              >
-                <div className="text-xl font-semibold text-zinc-900 mb-1">
-                  Documents
-                </div>
-                <p className="text-sm text-zinc-500">
-                  Contracts and job files
-                </p>
-              </button>
+                <p className="text-sm text-zinc-500">Coming soon</p>
+              </div>
             </div>
           </div>
         )}
