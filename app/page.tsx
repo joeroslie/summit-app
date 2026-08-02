@@ -1481,7 +1481,7 @@ function normalizeLead(raw: Partial<Lead> & { clientJobNumber?: string }): Lead 
       raw.category ?? (raw as { milestone?: unknown }).milestone
     ),
     estimates: raw.estimates ?? [],
-    notes: raw.notes ?? [],
+    notes: Array.isArray(raw.notes) ? raw.notes : [],
     photos: raw.photos ?? [],
     photoReports: raw.photoReports ?? [],
     documents: raw.documents ?? [],
@@ -1582,6 +1582,7 @@ function mapAppLeadToDb(lead: Lead) {
     photoReports: lead.photoReports || [],
     documents: lead.documents,
     measurementReports: lead.measurementReports || [],
+    notes: lead.notes || [],
     trash: lead.trash || [],
     takeoff: lead.takeoff || null,
     followUpDate: lead.followUpDate || '',
@@ -1707,22 +1708,31 @@ function mapDbLeadToApp(row: Record<string, unknown>): Lead {
     stageMap[stageRaw] || normalizePipelineStage(stageRaw) || 'Lead';
 
   const createdAt = row.created_at ?? row.createdAt;
-  const noteText = row.notes;
+  // Prefer structured notes in details (array). Fallback: legacy joined string column.
   let notes: LeadNote[] = [];
-  if (typeof noteText === 'string' && noteText.trim()) {
-    notes = [
-      {
-        text: noteText.trim(),
-        date: createdAt
-          ? new Date(String(createdAt)).toLocaleDateString()
-          : new Date().toLocaleDateString(),
-      },
-    ];
-  } else if (Array.isArray(d.notes)) {
-    notes = (d.notes as LeadNote[]).map((n) => ({
-      text: String(n?.text ?? ''),
-      date: String(n?.date ?? ''),
+  if (Array.isArray(d.notes) && d.notes.length > 0) {
+    notes = (d.notes as LeadNote[]).map((n: any, i: number) => ({
+      id: String(n?.id ?? `note-${i}`),
+      text: String(n?.text ?? n?.body ?? ''),
+      date: String(n?.date ?? n?.createdAt ?? ''),
+      createdAt: n?.createdAt ? String(n.createdAt) : undefined,
     }));
+  } else if (typeof row.notes === 'string' && row.notes.trim()) {
+    // Legacy: one joined blob — split on blank lines so multi-note history isn't one card
+    const parts = String(row.notes)
+      .split(/\n{2,}/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const fallbackDate = createdAt
+      ? new Date(String(createdAt)).toLocaleDateString()
+      : new Date().toLocaleDateString();
+    notes = (parts.length > 1 ? parts : [String(row.notes).trim()]).map(
+      (t, i) => ({
+        id: `legacy-${i}`,
+        text: t,
+        date: fallbackDate,
+      })
+    );
   }
 
   const dbId = row.id != null ? String(row.id) : undefined;
@@ -5821,12 +5831,14 @@ export default function SummitApp() {
     }
     showToast('Trash emptied');
   };
-  
+
 
   const addLeadNote = () => {
     if (!leadNoteDraft.trim() || !currentLeadId) return;
     const newNote: LeadNote = {
-      text: leadNoteDraft.trim(),
+      id: String(Date.now()),
+        createdAt: new Date().toISOString(),
+        text: leadNoteDraft.trim(),
       date:
         new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
         ' ' +
@@ -6708,7 +6720,7 @@ showToast(
     { key: 'paintingSf', label: 'Interior — painting SF / coats' },
     { key: 'ceilingHeight', label: 'Ceiling height' },
     { key: 'ceilingFans', label: 'Ceiling fans' },
-    { key: 'notes', label: 'Notes' },
+    { key: 'notes', label: 'Messages' },
   ];
 
   const saveTakeoff = (alsoDocument = false) => {
@@ -8247,7 +8259,7 @@ showToast(
                         </div>
                         <button
                           type="button"
-                          className="text-sm text-zinc-500 hover:text-red-600 transition-colors"
+                          className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
                           onClick={() => removeMitigationLine(ln.id)}
                         >
                           Remove
@@ -8788,7 +8800,7 @@ showToast(
                       enterLeadEstimator(lead.id, 'estimate');
                       showToast('Applied to estimate');
                     }}
-                    className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold"
+                    className="btn-primary px-8 py-3 rounded-full text-sm font-semibold disabled:opacity-50"
                   >
                     Apply to estimate
                   </button>
@@ -9275,7 +9287,7 @@ showToast(
               <button
                 type="button"
                 onClick={() => setSystemDocWorkspace(null)}
-                className="text-sm font-medium text-sky-700 shrink-0"
+                className="text-sm font-medium text-emerald-700 shrink-0"
               >
                 Close
               </button>
@@ -9643,7 +9655,7 @@ showToast(
                     >
                       ←
                     </button>
-                    <div className="text-center text-emerald-700 font-semibold text-sm">
+                    <div className="text-center text-emerald-600 font-semibold text-sm">
                       {monthLabel}
                     </div>
                     <button
@@ -10656,7 +10668,7 @@ showToast(
                             <button
                               type="button"
                               onClick={() => permanentlyDelete(item.id)}
-                              className="px-3 py-1.5 rounded-xl text-sm font-medium bg-red-50 text-red-700 border border-red-100 hover:bg-red-100"
+                              className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
                             >
                               Delete
                             </button>
@@ -12563,7 +12575,7 @@ showToast(
                 { id: 'measurements', label: 'Measurements' },
                 { id: 'financial', label: 'Financial' },
                 { id: 'insurance', label: 'Insurance' },
-                { id: 'notes', label: 'Notes' },
+                { id: 'notes', label: 'Messages' },
                 { id: 'estimates', label: 'Estimates' },
                 { id: 'photos', label: 'Photos' },
                 { id: 'documents', label: 'Documents' },
@@ -12770,7 +12782,7 @@ showToast(
                                               prev.filter((x) => x.id !== c.id)
                                             )
                                           }
-                                          className="text-xs text-zinc-400 hover:text-red-600"
+                                          className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
                                         >
                                           Remove
                                         </button>
@@ -13093,7 +13105,7 @@ showToast(
                           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
                             <div>
                               <h2 className="text-lg font-semibold text-zinc-900">
-                                Pipeline / milestones
+                                Pipeline
                               </h2>
                               <p className="text-sm text-zinc-500 mt-1">
                                 Track job progress from first contact through close-out.
@@ -13110,9 +13122,17 @@ showToast(
                           </div>
 
                           <div className="rounded-2xl bg-zinc-100 border border-zinc-200 px-4 py-3 mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                            <div className="text-sm text-zinc-800">
-                              <span className="font-medium">Current status:</span>{' '}
-                              <span className="font-semibold">{leadCategory}</span>
+                            <div className="text-sm text-zinc-800 flex items-center gap-2 flex-wrap">
+                              <span className="font-medium">Current status:</span>
+                              <span
+                                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-semibold ${PIPELINE_STAGE_STYLES[leadCategory]?.badge || 'bg-zinc-100 text-zinc-700 border-zinc-200'}`}
+                              >
+                                <span
+                                  className={`w-2 h-2 rounded-full ${PIPELINE_STAGE_STYLES[leadCategory]?.dash || 'bg-zinc-400'}`}
+                                  aria-hidden
+                                />
+                                {leadCategory}
+                              </span>
                             </div>
                             <div className="text-xs text-zinc-500 font-medium">
                               Step {milestoneIndex + 1} of {PIPELINE_STAGES.length}
@@ -13124,6 +13144,7 @@ showToast(
                               const done = idx < milestoneIndex;
                               const current = idx === milestoneIndex;
                               const upcoming = idx > milestoneIndex;
+                              const styles = PIPELINE_STAGE_STYLES[stage];
                               return (
                                 <li key={stage}>
                                   <button
@@ -13131,16 +13152,16 @@ showToast(
                                     onClick={() => setLeadMilestone(stage)}
                                     className={`w-full text-left flex items-center gap-4 rounded-2xl border px-4 py-3.5 transition-colors ${
                                       current
-                                        ? 'border-zinc-900 bg-white shadow-sm'
+                                        ? `bg-white shadow-sm ring-2 ${styles.ring} border-zinc-300`
                                         : done
-                                          ? 'border-zinc-200 bg-white hover:border-zinc-200'
+                                          ? 'border-zinc-200 bg-white hover:border-zinc-300'
                                           : 'border-zinc-100 bg-zinc-100/80 hover:border-zinc-200'
                                     }`}
                                   >
                                     <div
                                       className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${
                                         current
-                                          ? 'bg-zinc-900 text-white'
+                                          ? `${styles.dash} text-white`
                                           : done
                                             ? 'bg-zinc-200 text-zinc-700'
                                             : 'bg-white border border-zinc-200 text-zinc-400'
@@ -13149,27 +13170,35 @@ showToast(
                                       {idx + 1}
                                     </div>
                                     <div className="min-w-0 flex-1">
-                                      <div
-                                        className={`font-semibold ${
-                                          current
-                                            ? 'text-zinc-900'
-                                            : done
-                                              ? 'text-zinc-800'
-                                              : 'text-zinc-500'
-                                        }`}
-                                      >
-                                        {stage}
+                                      <div className="flex items-center gap-2">
+                                        <span
+                                          className={`w-2.5 h-2.5 rounded-full shrink-0 ${styles.dash}`}
+                                          aria-hidden
+                                        />
+                                        <div
+                                          className={`font-semibold ${
+                                            current
+                                              ? 'text-zinc-900'
+                                              : done
+                                                ? 'text-zinc-800'
+                                                : 'text-zinc-500'
+                                          }`}
+                                        >
+                                          {stage}
+                                        </div>
                                       </div>
                                       <div className="text-xs text-zinc-500 mt-0.5">
                                         {current
-                                          ? 'Current milestone — highlighted'
+                                          ? 'Current milestone'
                                           : done
                                             ? 'Completed'
                                             : 'Upcoming'}
                                       </div>
                                     </div>
                                     {current && (
-                                      <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-zinc-700 bg-zinc-100 px-2.5 py-1 rounded-full">
+                                      <span
+                                        className={`shrink-0 text-xs font-semibold uppercase tracking-wide px-2.5 py-1 rounded-full border ${styles.badge}`}
+                                      >
                                         Now
                                       </span>
                                     )}
@@ -13184,10 +13213,7 @@ showToast(
                             })}
                           </ol>
 
-                          <p className="mt-5 text-xs text-zinc-400">
-                            Tap any stage to set it, use Advance job, or drag cards on the Leads
-                            board. Home, kanban, and this profile all share the same 6 stages.
-                          </p>
+                          
                         </section>
                       )}
 
@@ -13334,7 +13360,7 @@ showToast(
                                     <button
                                       type="button"
                                       onClick={() => removeMeasurementReport(doc.id)}
-                                      className="shrink-0 text-xs font-semibold text-red-600 hover:text-red-700 px-2 py-1"
+                                      className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
                                     >
                                       Delete
                                     </button>
@@ -13631,7 +13657,7 @@ showToast(
                                       <button
                                         type="button"
                                         onClick={() => removeDraftSection(s.id)}
-                                        className="text-xs text-zinc-400 hover:text-zinc-700 shrink-0"
+                                        className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
                                       >
                                         Remove
                                       </button>
@@ -13775,7 +13801,7 @@ showToast(
                                         enterLeadEstimator(profileLead.id, 'estimate');
                                         showToast('Applied to estimate');
                                       }}
-                                      className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 transition-colors shrink-0"
+                                      className="btn-primary px-8 py-3 rounded-full text-sm font-semibold disabled:opacity-50"
                                     >
                                       Apply
                                     </button>
@@ -13783,9 +13809,9 @@ showToast(
                                   <button
                                     type="button"
                                     onClick={() => deleteRoofMeasurement(m.id)}
-                                    className="text-xs text-zinc-300 hover:text-zinc-500 shrink-0"
+                                    className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1 self-center"
                                   >
-                                    ✕
+                                    Delete
                                   </button>
                                 </div>
                               ))}
@@ -13809,7 +13835,7 @@ showToast(
                                     onClick={() =>
                                       setFinSectionMenuOpen((o) => !o)
                                     }
-                                    className="text-sm font-medium text-sky-700 hover:underline"
+                                    className="text-sm font-medium text-sky-600 hover:underline"
                                   >
                                     + Section
                                   </button>
@@ -13910,7 +13936,7 @@ showToast(
                                             ),
                                           }))
                                         }
-                                        className="text-xs font-medium text-sky-700"
+                                        className="text-xs font-medium text-sky-600"
                                       >
                                         + Line
                                       </button>
@@ -13924,7 +13950,7 @@ showToast(
                                             ),
                                           }))
                                         }
-                                        className="text-xs text-zinc-400 hover:text-red-600"
+                                        className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
                                       >
                                         Remove
                                       </button>
@@ -14030,7 +14056,7 @@ showToast(
                                                 })
                                               )
                                             }
-                                            className="text-xs text-zinc-400 hover:text-red-600"
+                                            className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1 self-center"
                                           >
                                             ✕
                                           </button>
@@ -14055,7 +14081,7 @@ showToast(
                                   <span className="font-semibold text-zinc-800">
                                     Grand total
                                   </span>
-                                  <span className="font-semibold text-zinc-900 tabular-nums">
+                                  <span className="font-semibold text-emerald-700 tabular-nums">
                                     $
                                     {jobSectionsTotal(
                                       financialWorksheet.sections
@@ -14068,11 +14094,11 @@ showToast(
                               )}
                             </div>
                             <div className="space-y-3">
-                              <div className="rounded-2xl border-2 border-sky-700 bg-white p-4">
+                              <div className="rounded-2xl border-2 border-sky-500 bg-white p-4">
                                 <div className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">
                                   Approved job value
                                 </div>
-                                <div className="text-xl font-semibold text-zinc-900 tabular-nums">
+                                <div className="text-xl font-semibold text-emerald-700 tabular-nums">
                                   $
                                   {(
                                     financialWorksheet.approvedJobValue || 0
@@ -14112,7 +14138,7 @@ showToast(
                                 <div className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">
                                   Balance due
                                 </div>
-                                <div className="text-lg font-semibold text-zinc-900 tabular-nums">
+                                <div className="text-lg font-semibold text-red-500/90 tabular-nums">
                                   $
                                   {(
                                     (financialWorksheet.approvedJobValue ||
@@ -14252,12 +14278,12 @@ showToast(
                       {profileTab === 'notes' && (
                         <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
                           <h2 className="text-lg font-semibold text-zinc-900 mb-1">
-                            Notes / timeline
+                            Messages
                           </h2>
                           <p className="text-sm text-zinc-500 mb-5">
                             Chronological activity for this lead.
                           </p>
-                          <div className="flex flex-col sm:flex-row gap-2 mb-6">
+                          <div className="flex flex-col sm:flex-row gap-2 mb-6 items-center">
                             <input
                               value={leadNoteDraft}
                               onChange={(e) => setLeadNoteDraft(e.target.value)}
@@ -14267,7 +14293,7 @@ showToast(
                                   addLeadNote();
                                 }
                               }}
-                              placeholder="Add a note about this lead..."
+                              placeholder="Add a message about this lead..."
                               className={`${fieldClass} flex-1`}
                             />
                             <button
@@ -14275,7 +14301,7 @@ showToast(
                               onClick={addLeadNote}
                               className="btn-primary px-6 py-3 rounded-2xl font-medium shrink-0"
                             >
-                              Add note
+                              Add message
                             </button>
                           </div>
                           <div className="space-y-3">
@@ -14289,29 +14315,29 @@ showToast(
                                   className="relative pl-6 border-l-2 border-zinc-200"
                                 >
                                   <div className="absolute -left-[7px] top-1.5 w-3 h-3 rounded-full bg-zinc-400 border-2 border-white shadow" />
-                                  <div className="bg-zinc-100 rounded-2xl p-4 text-sm">
-                                    <div className="flex items-start justify-between gap-2 mb-1">
-                                      <div className="text-zinc-500 text-xs font-medium">
+                                  <div className="bg-zinc-100 rounded-2xl p-4 text-sm flex items-center justify-between gap-3">
+                                    <div className="min-w-0 flex-1">
+                                      <div className="text-zinc-500 text-xs font-medium mb-1">
                                         {note.date}
                                       </div>
-                                      <button
-                                        type="button"
-                                        onClick={() => removeLeadNote(noteIndex)}
-                                        className="text-xs font-semibold text-red-600 hover:text-red-700 shrink-0"
-                                      >
-                                        Delete
-                                      </button>
+                                      <div className="whitespace-pre-wrap text-zinc-800">
+                                        {note.text}
+                                      </div>
                                     </div>
-                                    <div className="whitespace-pre-wrap text-zinc-800">
-                                      {note.text}
-                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => removeLeadNote(noteIndex)}
+                                      className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1 self-center"
+                                    >
+                                      Delete
+                                    </button>
                                   </div>
                                 </div>
                                 );
                               })
                             ) : (
                               <div className="text-zinc-400 py-10 text-center rounded-2xl border border-dashed border-zinc-200">
-                                No notes yet — add the first update above.
+                                No messages yet — add the first update above.
                               </div>
                             )}
                           </div>
@@ -14350,7 +14376,7 @@ showToast(
                                   <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
                                     <button
                                       type="button"
-                                      className="text-left min-w-0 flex-1"
+                                      className="text-left min-w-0 flex-1 items-center"
                                       onClick={() => loadEstimate(est)}
                                     >
                                       <div className="font-medium text-zinc-900">
@@ -14362,7 +14388,7 @@ showToast(
                                       </div>
                                     </button>
                                     <div className="flex items-center gap-3 shrink-0">
-                                      <div className="text-xl font-semibold text-zinc-900">
+                                      <div className="text-xl font-semibold text-emerald-700">
                                         $
                                         {(
                                           est.negotiatedPrice ||
@@ -14373,7 +14399,7 @@ showToast(
                                       <button
                                         type="button"
                                         onClick={() => removeLeadEstimate(est.id)}
-                                        className="text-xs font-semibold text-red-600 hover:text-red-700 px-2 py-1"
+                                        className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
                                       >
                                         Delete
                                       </button>
@@ -14392,12 +14418,12 @@ showToast(
 
                       {profileTab === 'photos' && (
                         <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
-                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-5">
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5 items-center">
                             <div>
                               <h2 className="text-lg font-semibold text-zinc-900">Photos</h2>
                             </div>
                             {profilePhotos.length > 0 && (
-                              <div className="text-sm font-medium text-zinc-600 bg-zinc-100 border border-zinc-200 rounded-xl px-3 py-1.5 self-start">
+                              <div className="text-sm font-medium text-zinc-500 bg-zinc-100 border border-zinc-200 rounded-xl px-3 py-1.5 self-start">
                                 {profilePhotos.length.toLocaleString()} photo
                                 {profilePhotos.length !== 1 ? 's' : ''}
                               </div>
@@ -14490,7 +14516,7 @@ showToast(
                                     photoCameraInputRef.current?.click();
                                   }
                                 }}
-                                className="px-5 py-2.5 rounded-2xl text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+                                className="btn-primary px-8 py-3 rounded-full text-sm font-semibold disabled:opacity-50"
                               >
                                 {photosUploading ? 'Working…' : 'Take photo'}
                               </button>
@@ -14500,7 +14526,7 @@ showToast(
                                   e.stopPropagation();
                                   openPhotoReportBuilder();
                                 }}
-                                className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-sky-300 bg-sky-50 text-sky-900 hover:bg-sky-100"
+                                className="btn-primary px-8 py-3 rounded-full text-sm font-semibold"
                               >
                                 Create report
                               </button>
@@ -14511,7 +14537,7 @@ showToast(
                                   e.stopPropagation();
                                   photoInputRef.current?.click();
                                 }}
-                                className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-medium disabled:opacity-50"
+                                className="btn-primary px-8 py-3 rounded-full text-sm font-semibold disabled:opacity-50"
                               >
                                 {photosUploading ? 'Working…' : 'Upload photos'}
                               </button>
@@ -14522,7 +14548,7 @@ showToast(
                             <div className="mt-6">
                               <div className="flex items-center justify-between mb-3">
                                 <div className="text-sm text-zinc-500">
-                                  Thumbnail grid · tap to enlarge · Remove to delete
+                                  Thumbnail grid · tap to enlarge · Delete to remove
                                 </div>
                               </div>
                               {/* Dense grid so hundreds of thumbs stay browsable */}
@@ -14547,10 +14573,10 @@ showToast(
                                         e.stopPropagation();
                                         removeLeadPhoto(photo.id);
                                       }}
-                                      className="absolute top-1 right-1 px-2 h-7 rounded-full bg-zinc-900/70 text-white text-[10px] font-medium leading-none opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity hover:bg-zinc-700 flex items-center"
-                                      aria-label={`Remove ${photo.name}`}
+                                      className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
+                                      aria-label={`Delete ${photo.name}`}
                                     >
-                                      Remove
+                                      Delete
                                     </button>
                                   </div>
                                 ))}
@@ -14594,7 +14620,7 @@ showToast(
                                 type="button"
                                 disabled={docsUploading}
                                 onClick={() => setDocAddMenuOpen((o) => !o)}
-                                className="px-5 py-2.5 rounded-2xl text-sm font-medium bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50"
+                                className="inline-flex items-center justify-center rounded-full border-2 border-sky-500 bg-white text-sky-600 hover:text-sky-600 hover:text-sky-700 hover:bg-sky-50 px-6 py-2.5 text-sm font-semibold transition"
                               >
                                 {docsUploading ? 'Uploading…' : '+ Add'}
                               </button>
@@ -14649,7 +14675,7 @@ showToast(
                                       }
                                     }}
                                   >
-                                    <div className="font-medium">{doc.name}</div>
+                                    <div className="font-medium text-zinc-800 hover:text-sky-600 transition-colors hover:underline">{doc.name}</div>
                                     <div className="text-xs text-zinc-500 mt-0.5">
                                       {doc.description}
                                     </div>
@@ -14690,7 +14716,7 @@ showToast(
                                           window.open(doc.url, '_blank', 'noopener,noreferrer');
                                         }
                                       }}
-                                      className="text-sm font-medium text-emerald-700 hover:underline truncate block text-left w-full"
+                                      className="text-sm font-medium hover:underline truncate block text-left w-full text-zinc-800 hover:text-sky-600 transition-colors"
                                     >
                                       {doc.name}
                                     </button>
@@ -14708,9 +14734,9 @@ showToast(
                                   <button
                                     type="button"
                                     onClick={() => removeLeadDocument(doc.id)}
-                                    className="text-xs text-zinc-500 hover:text-red-600 shrink-0 px-2 py-1"
+                                    className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
                                   >
-                                    Remove
+                                    Delete
                                   </button>
                                 </li>
                               ))}
@@ -14955,7 +14981,7 @@ showToast(
                     >
                       <button
                         type="button"
-                        className="absolute top-4 right-4 px-3 h-10 rounded-full bg-white/10 text-white text-sm font-medium hover:bg-white/20"
+                        className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1 self-center"
                         onClick={() => setLightboxPhoto(null)}
                         aria-label="Close"
                       >
