@@ -6614,6 +6614,7 @@ showToast(
     userCompany.trim() || DEFAULT_USER_PROFILE.company;
 
   const generatePDF = () => {
+    // Summit jsPDF type scale: title 18, subtitle 11, sections 12, body 10, total 14
     const client = resolveEstimatorClient();
     const doc = new jsPDF();
     const scopeItems = buildScopeOfWork();
@@ -6621,14 +6622,14 @@ showToast(
     const maxWidth = pageWidth - 40;
     const pmPhone = displayPhoneUS(userPhone) || userPhone;
 
-    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(18);
     doc.text(brandCompany, 20, 20);
-    doc.setFontSize(12);
-    doc.text('Professional Roofing Estimate', 20, 28);
-    doc.setFontSize(10);
-    doc.text(`Prepared ${estimateDate}`, 20, 34);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(`Prepared ${estimateDate}`, 20, 28);
 
-    doc.setFontSize(11);
+    doc.setFontSize(10);
     doc.text(`Client: ${client.fullName}`, 20, 46);
     doc.text(`Phone: ${client.phone || 'N/A'}`, 20, 52);
     doc.text(`Email: ${client.email || 'N/A'}`, 20, 58);
@@ -6639,9 +6640,11 @@ showToast(
     y += 10;
 
     // Project manager contact
+    doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
     doc.text('Your Project Manager', 20, y);
     y += 6;
+    doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
     doc.text(`${userName || 'Rep'} · ${userTitle || 'Project Manager'}`, 20, y);
     y += 5;
@@ -6650,9 +6653,11 @@ showToast(
     doc.text(`Email: ${userEmail || 'N/A'}`, 20, y);
     y += 12;
 
+    doc.setFont('helvetica', 'bold');
     doc.setFontSize(12);
     doc.text('Scope of Work', 20, y);
     y += 8;
+    doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
 
     scopeItems.forEach((item) => {
@@ -6665,6 +6670,7 @@ showToast(
         typeof item === 'object' && item && item.amount != null && item.amount > 0
           ? Math.round(item.amount)
           : null;
+      doc.setFont('helvetica', 'normal');
       doc.setFontSize(10);
       doc.setTextColor(30);
       const maxW = amount != null ? 140 : 170;
@@ -6672,6 +6678,7 @@ showToast(
       doc.text(lines, 20, y);
       if (amount != null) {
         doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
         doc.text(`$${amount.toLocaleString()}`, 190, y, { align: 'right' });
       }
       y += lines.length * 5 + 2;
@@ -6683,9 +6690,11 @@ showToast(
         doc.addPage();
         y = 20;
       }
+      doc.setFont('helvetica', 'bold');
       doc.setFontSize(12);
       doc.text('ADDITIONAL NOTES', 20, y);
       y += 8;
+      doc.setFont('helvetica', 'normal');
       doc.setFontSize(10);
       const noteLines = doc.splitTextToSize(notes, maxWidth);
       if (y + noteLines.length * 5 > 270) {
@@ -6702,13 +6711,15 @@ showToast(
       y = 20;
     }
 
+    doc.setFont('helvetica', 'bold');
     doc.setFontSize(14);
     doc.text('Total Investment', 20, y);
     doc.text(`$${estimatorTotalPrice.toLocaleString()}`, pageWidth - 20, y, { align: 'right' });
+    doc.setFont('helvetica', 'normal');
 
     if (bufferUsed > 0) {
       y += 8;
-      doc.setFontSize(11);
+      doc.setFontSize(10);
       doc.text(
         `Special discount applied — $${bufferUsed.toLocaleString()}`,
         20,
@@ -6717,7 +6728,7 @@ showToast(
     }
 
     y += 12;
-    doc.setFontSize(10);
+    doc.setFontSize(9);
     doc.text(
       'Pricing subject to change upon signed change order for unforeseen conditions. Valid for 30 days.',
       20,
@@ -6725,6 +6736,7 @@ showToast(
     );
 
     y += 10;
+    doc.setFontSize(10);
     doc.text(`Thank you for choosing ${brandCompany}.`, 20, y);
     y += 8;
     doc.setFontSize(9);
@@ -6765,7 +6777,6 @@ showToast(
 
           <div className="text-center mb-10">
             <div className="font-bold text-4xl tracking-tight">{brandCompany}</div>
-            <div className="text-zinc-500 mt-1">Professional Roofing Estimate</div>
             <div className="text-sm text-zinc-400 mt-1">Prepared {estimateDate}</div>
           </div>
 

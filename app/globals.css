@@ -412,3 +412,89 @@ html[data-theme="night"] .day-highlight {
   color: #38bdf8 !important;
   box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15) !important;
 }
+
+/* === Summit PDF / print type scale (cohesive with app) === */
+.estimate-preview,
+.printable-estimate,
+.summit-estimate-pdf {
+  font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  color: #0f172a; /* slate-900 */
+  line-height: 1.35;
+}
+
+.estimate-preview h1,
+.printable-estimate h1,
+.summit-estimate-pdf h1 {
+  font-size: 18pt;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+  margin: 0 0 6pt 0;
+}
+
+.estimate-preview h2,
+.printable-estimate h2,
+.summit-estimate-pdf h2 {
+  font-size: 10pt;
+  font-weight: 600;
+  color: #475569; /* slate-600 */
+  margin: 14pt 0 6pt 0;
+  padding-bottom: 3pt;
+  border-bottom: 1px solid #e2e8f0; /* slate-200 */
+}
+
+.estimate-preview h3,
+.printable-estimate h3,
+.summit-estimate-pdf h3 {
+  font-size: 9.5pt;
+  font-weight: 600;
+  color: #64748b; /* slate-500 */
+  margin: 10pt 0 4pt 0;
+}
+
+.estimate-preview p,
+.estimate-preview li,
+.estimate-preview td,
+.estimate-preview th,
+.printable-estimate p,
+.printable-estimate li,
+.printable-estimate td,
+.printable-estimate th,
+.summit-estimate-pdf p,
+.summit-estimate-pdf li,
+.summit-estimate-pdf td,
+.summit-estimate-pdf th {
+  font-size: 9.5pt;
+  line-height: 1.35;
+  color: #0f172a;
+}
+
+.estimate-preview .total-row,
+.printable-estimate .total-row,
+.summit-estimate-pdf .total-row,
+.estimate-totals,
+.pdf-totals {
+  font-size: 14pt;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.estimate-header {
+  border-bottom: 3px solid #059669; /* emerald-600 accent only */
+  padding-bottom: 8pt;
+  margin-bottom: 12pt;
+}
+
+@media print {
+  @page {
+    size: letter;
+    margin: 0.65in;
+  }
+  .estimate-preview,
+  .printable-estimate,
+  .summit-estimate-pdf {
+    font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: #0f172a;
+  }
+}
+
