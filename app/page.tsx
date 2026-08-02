@@ -633,7 +633,7 @@ const PRICING_GUIDE: {
 const SYSTEM_DOCUMENTS = [
   {
     id: 'takeoff',
-    name: 'Take-off / Inspection Sheet',
+    name: 'Take off sheet',
     description: '',
   },
   {
@@ -644,7 +644,7 @@ const SYSTEM_DOCUMENTS = [
   {
     id: 'mitigation',
     name: 'Mitigation invoice',
-    description: 'Personal LLC or Company',
+    description: '',
   },
 ] as const;
 
@@ -800,6 +800,63 @@ type MitigationPriceRow = {
   insurance_rate: number | null;
   cash_retail: number | null;
 };
+
+
+const MITIGATION_LINE_GROUPS: {
+  id: string;
+  label: string;
+  items: { itemKey: string; label: string }[];
+}[] = [
+  {
+    id: 'trips',
+    label: 'Trip charges',
+    items: [
+      { itemKey: 'trip_planned', label: 'Planned trip' },
+      { itemKey: 'trip_emergency', label: 'Emergency trip' },
+      { itemKey: 'trip_additional', label: 'Additional trip' },
+    ],
+  },
+  {
+    id: 'tarps',
+    label: 'Tarps',
+    items: [
+      { itemKey: 'tarp_6x8', label: 'Tarp 6×8' },
+      { itemKey: 'tarp_10x12', label: 'Tarp 10×12' },
+      { itemKey: 'tarp_20x20', label: 'Tarp 20×20' },
+      { itemKey: 'tarp_20x30', label: 'Tarp 20×30' },
+      { itemKey: 'tarp_30x30', label: 'Tarp 30×30' },
+    ],
+  },
+  {
+    id: 'obstruction',
+    label: 'Obstruction manipulation',
+    items: [
+      { itemKey: 'obstruction_hvac', label: 'Obstruction — HVAC' },
+      { itemKey: 'obstruction_pipe_jack', label: 'Obstruction — pipe jack' },
+      { itemKey: 'obstruction_vent', label: 'Obstruction — vent' },
+      { itemKey: 'obstruction_skylight', label: 'Obstruction — skylight' },
+      { itemKey: 'obstruction_other', label: 'Obstruction — other' },
+    ],
+  },
+  {
+    id: 'install',
+    label: 'Install',
+    items: [
+      { itemKey: 'install_standard', label: 'Standard tarp install' },
+      { itemKey: 'install_detach_reset', label: 'Detach & reset' },
+      { itemKey: 'install_multi', label: 'Multi-tarp install' },
+    ],
+  },
+  {
+    id: 'adders',
+    label: 'Adders',
+    items: [
+      { itemKey: 'battens', label: 'Battens' },
+      { itemKey: 'steep', label: 'Steep charge' },
+      { itemKey: 'two_story', label: 'Two-story' },
+    ],
+  },
+];
 
 type MitigationEntity = 'roslie' | 'prowest';
 
@@ -1052,7 +1109,7 @@ const PIPELINE_STAGE_STYLES: Record<
     cardAccent: '',
   },
   Approved: {
-    card: 'bg-white border-zinc-200 hover:border-sky-300/70 hover:shadow-sm transition-all',
+    card: 'bg-white border-zinc-200 hover:border-emerald-300/70 hover:shadow-sm transition-all',
     count: 'text-zinc-900',
     label: 'text-zinc-500',
     column: 'bg-zinc-100/80 border-zinc-200',
@@ -1088,7 +1145,7 @@ const PIPELINE_STAGE_STYLES: Record<
     cardAccent: '',
   },
   Closed: {
-    card: 'bg-white border-zinc-200 hover:border-sky-400/60 hover:shadow-sm transition-all',
+    card: 'bg-white border-zinc-200 hover:border-emerald-400/60 hover:shadow-sm transition-all',
     count: 'text-zinc-900',
     label: 'text-zinc-500',
     column: 'bg-zinc-100/80 border-zinc-300',
@@ -2155,8 +2212,8 @@ export default function SummitApp() {
 
   const mitigationInvoiceTitle = (entity: MitigationEntity) =>
     entity === 'prowest'
-      ? 'Mitigation invoice - company'
-      : 'Mitigation invoice - personal LLC';
+      ? 'Mitigation invoice'
+      : 'Mitigation invoice';
 
   /**
    * New invoice: always tied to a lead (same idea as estimates).
@@ -2176,6 +2233,81 @@ export default function SummitApp() {
     setShowEstimatePicker(true);
   };
 
+  
+  // Persist mitigation invoice workspace across refresh
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('summitMitigationWorkspace');
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed?.workspace === 'mitigation' && parsed?.draft) {
+        setSystemDocWorkspace('mitigation');
+        setMitigationDraft(parsed.draft);
+      }
+    } catch (e) {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      if (
+        systemDocWorkspace === 'mitigation' ||
+        systemDocWorkspace === 'mitigation_personal' ||
+        systemDocWorkspace === 'mitigation_company'
+      ) {
+        sessionStorage.setItem(
+          'summitMitigationWorkspace',
+          JSON.stringify({ workspace: 'mitigation', draft: mitigationDraft })
+        );
+      }
+    } catch (e) {}
+  }, [systemDocWorkspace, mitigationDraft]);
+
+  useEffect(() => {
+    try {
+      if (
+        systemDocWorkspace !== 'mitigation' &&
+        systemDocWorkspace !== 'mitigation_personal' &&
+        systemDocWorkspace !== 'mitigation_company'
+      ) {
+        // cleared workspace
+        if (mitigationDraft == null) {
+          sessionStorage.removeItem('summitMitigationWorkspace');
+        }
+      }
+    } catch (e) {}
+  }, [systemDocWorkspace, mitigationDraft]);
+
+  
+  
+  useEffect(() => {
+    if (systemDocWorkspace === 'takeoff' || systemDocWorkspace === 'pricing') {
+      try { setIsEditingLead(false); } catch (e) {}
+      try { setActiveTab('documents'); } catch (e) {}
+    }
+  }, [systemDocWorkspace]);
+
+  const openSystemDoc = (id: 'takeoff' | 'pricing') => {
+    setDocAddMenuOpen(false);
+    try {
+      setShowMitigationInvoice(false);
+    } catch (e) {}
+    setMitigationDraft(null);
+    // Close profile UI only — keep lead id so the lead is never dropped from state
+    try {
+      setIsEditingLead(false);
+    } catch (e) {}
+    try {
+      setActiveTab('documents');
+    } catch (e) {}
+    if (id === 'takeoff') {
+      setTakeoffForm(emptyTakeoff());
+      setTakeoffAssignOpen(false);
+      setTakeoffAssignSearch('');
+    }
+    setSystemDocPreview(null);
+    setSystemDocWorkspace(id);
+  };
+
   const openMitigationWorkspace = (
     _kind: 'personal' | 'company' = 'personal',
     fromLeadId?: number | null
@@ -2190,6 +2322,7 @@ export default function SummitApp() {
     if (leadId == null) {
       setSystemDocWorkspace(null);
       setMitigationDraft(null);
+    try { sessionStorage.removeItem('summitMitigationWorkspace'); } catch (e) {}
       setInvoicePickerMode(true);
       setEstimatePickerQuery('');
       setShowEstimatePicker(true);
@@ -2327,6 +2460,44 @@ export default function SummitApp() {
     if (!mitigationDraft) return;
     setMitigationDraft(repriceMitigationLines(mitigationDraft, mode));
   };
+
+  
+  const mitigationPriceForKey = (itemKey: string) => {
+    const aliases: Record<string, string[]> = {
+      trip_planned: ['trip_planned', 'trip', 'planned_trip', 'trip_standard'],
+      trip_emergency: ['trip_emergency', 'trip_after_hours', 'emergency_trip', 'after_hours_trip'],
+      trip_additional: ['trip_additional', 'trip_extra', 'additional_trip'],
+    };
+    const keys = aliases[itemKey] || [itemKey];
+    for (const k of keys) {
+      const row = mitigationPrices.find((r) => r.item_key === k);
+      if (row) return row;
+    }
+    return undefined;
+  };
+
+  const addMitigationCatalogLine = (itemKey: string, label: string) => {
+    if (!mitigationDraft) return;
+    const row = mitigationPriceForKey(itemKey);
+    const mode = mitigationDraft.rateMode || 'insurance';
+    const unit = row
+      ? mode === 'cash'
+        ? Number(row.cash_retail) || 0
+        : Number(row.insurance_rate) || 0
+      : 0;
+    const line: MitigationLineItem = {
+      id: `${Date.now()}-${itemKey}`,
+      itemKey,
+      label: row?.label || label,
+      qty: 1,
+      unitPrice: unit,
+      amount: unit,
+    };
+    setMitigationDraft({
+      ...mitigationDraft,
+      lines: [...mitigationDraft.lines, line],
+    });
+  };;
 
   const addMitigationLine = (itemKey: string) => {
     if (!mitigationDraft) return;
@@ -2558,6 +2729,7 @@ export default function SummitApp() {
       setShowMitigationInvoice(false);
       setSystemDocWorkspace(null);
       setMitigationDraft(null);
+    try { sessionStorage.removeItem('summitMitigationWorkspace'); } catch (e) {}
       if (currentLeadId != null) {
         setIsEditingLead(true);
         setProfileTab('documents');
@@ -8018,6 +8190,7 @@ showToast(
                   onClick={() => {
                     setSystemDocWorkspace(null);
                     setMitigationDraft(null);
+    try { sessionStorage.removeItem('summitMitigationWorkspace'); } catch (e) {}
                     setShowMitigationInvoice(false);
                     if (currentLeadId != null) {
                       setIsEditingLead(true);
@@ -8203,31 +8376,39 @@ showToast(
                 </div>
 
                 {/* LINE ITEMS */}
-                <div className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm">
+     
+
+                  
+           <div className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm">
                   <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-3">
                     Line Items
                   </div>
 
-                  <div className="flex flex-wrap gap-2 mb-5">
-                    {mitigationPrices.length === 0 ? (
-                      <p className="text-sm text-zinc-400">
-                        {mitigationPricesReady
-                          ? 'No mitigation items loaded — check Supabase mitigation_price_sheet'
-                          : 'Loading price sheet…'}
-                      </p>
-                    ) : (
-                      mitigationPrices.map((row) => (
-                        <button
-                          key={row.item_key}
-                          type="button"
-                          className="text-sm rounded-full border border-zinc-200 bg-white px-3.5 py-2 text-zinc-800 hover:border-blue-400 hover:bg-blue-50 hover:text-blue-800 transition-colors"
-                          onClick={() => addMitigationLine(row.item_key)}
-                        >
-                          {row.label}
-                        </button>
-                      ))
-                    )}
+                  <div className="space-y-5 mb-5">
+                    {MITIGATION_LINE_GROUPS.map((group) => (
+                      <div key={group.id}>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 mb-2">
+                          {group.label}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {group.items.map((it) => (
+                            <button
+                              key={it.itemKey}
+                              type="button"
+                              className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm text-zinc-800 hover:border-sky-500 hover:text-sky-700 transition-colors"
+                              onClick={() =>
+                                addMitigationCatalogLine(it.itemKey, it.label)
+                              }
+                            >
+                              {it.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
                   </div>
+
+
 
                   <div className="space-y-3">
                     {mitigationDraft.lines.length === 0 && (
@@ -8254,7 +8435,7 @@ showToast(
                             )
                           }
                         />
-                        <div className="w-24 text-right tabular-nums font-medium text-zinc-900">
+                        <div className="w-24 text-right tabular-nums font-medium text-emerald-700">
                           ${ln.amount.toLocaleString()}
                         </div>
                         <button
@@ -8275,7 +8456,7 @@ showToast(
                     <div className="text-base font-semibold text-zinc-600">
                       Total amount due
                     </div>
-                    <div className="text-3xl font-semibold text-zinc-900 tabular-nums">
+                    <div className="text-3xl font-semibold text-emerald-700 tabular-nums">
                       $
                       {mitigationDraft.lines
                         .reduce((s, l) => s + (l.amount || 0), 0)
@@ -8295,7 +8476,7 @@ showToast(
                     </button>
                     <button
                       type="button"
-                      className="w-full rounded-2xl bg-sky-600 hover:bg-sky-700 text-white font-medium py-3.5 text-base shadow-sm transition-colors"
+                      className="w-full rounded-2xl border-2 border-sky-500 bg-white hover:bg-sky-50 text-sky-700 font-medium py-3.5 text-base transition"
                       onClick={() =>
                         generateMitigationPdf({ download: false, save: true })
                       }
@@ -8773,7 +8954,7 @@ showToast(
                         className="flex justify-between text-sm py-1.5 border-b border-zinc-100 last:border-0"
                       >
                         <span className="text-zinc-500">{k}</span>
-                        <span className="font-medium tabular-nums text-zinc-900">{v}</span>
+                        <span className="font-medium tabular-nums text-emerald-700">{v}</span>
                       </div>
                     ))}
                     {measurement.sections?.map((s, i) => (
@@ -8886,7 +9067,7 @@ showToast(
                       className={`rounded-3xl border bg-white p-4 sm:p-5 text-center transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md ${
                         active
                           ? `border-zinc-800 ring-2 ${styles.ring} shadow-sm`
-                          : 'border-zinc-200 hover:border-sky-300'
+                          : styles.card
                       }`}
                       title={`View ${stage} leads`}
                     >
@@ -9318,7 +9499,7 @@ showToast(
                       const money = (n?: number) =>
                         n != null && n > 0 ? (
                           <span className="whitespace-nowrap">
-                            <span className="font-semibold text-zinc-900">
+                            <span className="font-semibold text-emerald-700">
                               ${Number(n).toLocaleString()}
                             </span>
                             {unit ? (
@@ -9384,7 +9565,7 @@ showToast(
               <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
                 <div>
                   <h1 className="text-xl font-semibold text-zinc-900">
-                    Take-off / Inspection Sheet
+                    Take off sheet
                   </h1>
                   <p className="text-sm text-zinc-500">
                     Fill now, then assign to a lead
@@ -10006,7 +10187,7 @@ showToast(
                   <div className="text-[11px] uppercase tracking-wide text-zinc-400 font-medium">
                     Avg estimate
                   </div>
-                  <div className="text-3xl font-semibold tabular-nums text-zinc-900 mt-1">
+                  <div className="text-3xl font-semibold tabular-nums text-emerald-700 mt-1">
                     ${avgDeal.toLocaleString()}
                   </div>
                   {closedCount > 0 && (
@@ -13253,15 +13434,7 @@ showToast(
                                 )}
                               </div>
                               <div className="flex items-center gap-2 shrink-0">
-                                {!hasProfileAddress && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setProfileTab('overview')}
-                                    className="text-lg font-semibold text-zinc-900 mb-4"
-                                  >
-                                    Edit lead
-                                  </button>
-                                )}
+                                
                                 {(showTracer || mapCenter) && hasProfileAddress && (
                                   <button
                                     type="button"
@@ -14611,6 +14784,11 @@ showToast(
                                 {docsUploading ? 'Uploading…' : '+ Add'}
                               </button>
                               
+      
+      
+      
+      
+      
       {docAddMenuOpen && (
         <div
           className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4"
@@ -14655,18 +14833,16 @@ showToast(
                 type="button"
                 className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
                 onClick={() => {
-                  setDocAddMenuOpen(false);
-                  setSystemDocWorkspace('takeoff');
+                  openSystemDoc('takeoff');
                 }}
               >
-                Take-off / Inspection Sheet
+                Take off sheet
               </button>
               <button
                 type="button"
                 className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
                 onClick={() => {
-                  setDocAddMenuOpen(false);
-                  setSystemDocWorkspace('pricing');
+                  openSystemDoc('pricing');
                 }}
               >
                 Company pricing
@@ -14675,6 +14851,11 @@ showToast(
           </div>
         </div>
       )}
+
+
+
+
+
 
                             </div>
                           </div>
