@@ -6881,7 +6881,7 @@ showToast(
     { key: 'paintingSf', label: 'Interior — painting SF / coats' },
     { key: 'ceilingHeight', label: 'Ceiling height' },
     { key: 'ceilingFans', label: 'Ceiling fans' },
-    { key: 'notes', label: 'Messages' },
+    { key: 'notes', label: 'Notes' },
   ];
 
   const saveTakeoff = (alsoDocument = false) => {
@@ -8196,12 +8196,22 @@ showToast(
               </div>
               <button
                 type="button"
-                className="shrink-0 rounded-2xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-900 font-medium px-5 py-3 text-sm shadow-sm"
-                onClick={() =>
-                  generateMitigationPdf({ download: true, save: false })
-                }
+                onClick={() => {
+                  setSystemDocWorkspace(null);
+                  setMitigationDraft(null);
+                  try {
+                    sessionStorage.removeItem('summitMitigationWorkspace');
+                  } catch (e) {}
+                  setShowMitigationInvoice(false);
+                  if (currentLeadId != null) {
+                    setIsEditingLead(true);
+                    setProfileTab('documents');
+                    setActiveTab('leads');
+                  }
+                }}
+                className="px-4 py-2 rounded-full border border-zinc-200 bg-white text-sm font-medium text-zinc-700 hover:border-zinc-300"
               >
-                Download PDF
+                Close
               </button>
             </div>
 
@@ -9110,7 +9120,7 @@ showToast(
       )}
 {systemDocWorkspace === 'takeoff' && (
           <div className="fixed inset-0 z-[85] bg-zinc-50 overflow-y-auto">
-            <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-28">
+            <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-20">
               <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
                 <div>
                   <button
@@ -9131,9 +9141,7 @@ showToast(
                   <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
                     Take off sheet
                   </h1>
-                  <p className="text-sm text-zinc-500 mt-1">
-                    Fill the sheet, then save to this lead or assign to another
-                  </p>
+                  
                 </div>
                 <button
                   type="button"
@@ -9147,28 +9155,15 @@ showToast(
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              <div className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm mb-6">
+              <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-4">
+                Take-off details
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {TAKEOFF_FIELD_LABELS.map(({ key, label }) =>
-                  key === 'notes' ? (
-                    <div key={key} className="md:col-span-2">
-                      <label className="text-xs text-zinc-500 mb-1 block">
-                        {label}
-                      </label>
-                      <textarea
-                        value={takeoffForm[key]}
-                        onChange={(e) =>
-                          setTakeoffForm((f) => ({
-                            ...f,
-                            [key]: e.target.value,
-                          }))
-                        }
-                        rows={3}
-                        className="w-full border border-zinc-200 rounded-xl px-3 py-2 text-sm text-zinc-900 bg-white"
-                      />
-                    </div>
-                  ) : (
+                  key === 'notes' ? null : (
                     <div key={key}>
-                      <label className="text-xs text-zinc-500 mb-1 block">
+                      <label className="text-sm text-zinc-500 mb-1.5 block">
                         {label}
                       </label>
                       <input
@@ -9179,18 +9174,35 @@ showToast(
                             [key]: e.target.value,
                           }))
                         }
-                        className="w-full border border-zinc-200 rounded-xl px-3 py-2 text-sm text-zinc-900 bg-white"
+                        className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base text-zinc-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
                       />
                     </div>
                   )
                 )}
               </div>
+              </div>
 
-                                          <div className="flex flex-col sm:flex-row gap-3 sticky bottom-4 pt-2">
+                                                        
+              <div className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm mb-6">
+                <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-4">
+                  Notes
+                </div>
+                <textarea
+                  value={takeoffForm.notes || ''}
+                  onChange={(e) =>
+                    setTakeoffForm((prev) => ({ ...prev, notes: e.target.value }))
+                  }
+                  rows={4}
+                  placeholder=""
+                  className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base text-zinc-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
                 <button
                   type="button"
+                  className="w-full rounded-2xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-800 font-medium py-3.5 text-base transition-colors"
                   onClick={() => {
-                    // Download as text file
                     const lines = Object.entries(takeoffForm || {}).map(
                       ([k, v]) => `${k}: ${v || ''}`
                     );
@@ -9204,13 +9216,13 @@ showToast(
                     a.click();
                     URL.revokeObjectURL(url);
                   }}
-                  className="flex-1 px-5 py-3 rounded-2xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-800 text-sm font-medium"
                 >
-                  Download
+                  Download PDF
                 </button>
                 {currentLeadId != null ? (
                   <button
                     type="button"
+                    className="w-full rounded-2xl border-2 border-sky-500 bg-white hover:bg-sky-50 text-sky-700 font-medium py-3.5 text-base transition"
                     onClick={() => {
                       saveTakeoff(true);
                       setSystemDocWorkspace(null);
@@ -9218,15 +9230,14 @@ showToast(
                       setProfileTab('documents');
                       setActiveTab('leads');
                     }}
-                    className="flex-1 px-5 py-3 rounded-2xl border-2 border-sky-500 bg-white hover:bg-sky-50 text-sky-700 text-sm font-medium"
                   >
                     Save to lead
                   </button>
                 ) : (
                   <button
                     type="button"
+                    className="w-full rounded-2xl border-2 border-sky-500 bg-white hover:bg-sky-50 text-sky-700 font-medium py-3.5 text-base transition"
                     onClick={() => setTakeoffAssignOpen(true)}
-                    className="flex-1 px-5 py-3 rounded-2xl border-2 border-sky-500 bg-white hover:bg-sky-50 text-sky-700 text-sm font-medium"
                   >
                     Assign to lead
                   </button>
@@ -14988,7 +14999,7 @@ showToast(
                             {TAKEOFF_FIELD_LABELS.map(({ key, label }) =>
                               key === 'notes' ? (
                                 <div key={key} className="md:col-span-2">
-                                  <label className="text-xs text-zinc-500 mb-1 block">
+                                  <label className="text-sm text-zinc-500 mb-1.5 block">
                                     {label}
                                   </label>
                                   <textarea
@@ -15005,7 +15016,7 @@ showToast(
                                 </div>
                               ) : (
                                 <div key={key}>
-                                  <label className="text-xs text-zinc-500 mb-1 block">
+                                  <label className="text-sm text-zinc-500 mb-1.5 block">
                                     {label}
                                   </label>
                                   <input
