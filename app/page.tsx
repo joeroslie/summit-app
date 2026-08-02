@@ -796,7 +796,7 @@ type MitigationPriceRow = {
   cash_retail: number | null;
 };
 
-type MitigationEntity = 'rosalie' | 'prowest';
+type MitigationEntity = 'roslie' | 'prowest';
 
 type MitigationLineItem = {
   id: string;
@@ -805,6 +805,22 @@ type MitigationLineItem = {
   qty: number;
   unitPrice: number;
   amount: number;
+};
+
+/** Saved invoice index (local; PDF also on lead documents). */
+type AppInvoice = {
+  id: string;
+  createdAt: string;
+  title: string;
+  entity: MitigationEntity;
+  rateMode: 'insurance' | 'cash';
+  leadId: number | null;
+  leadLabel: string;
+  job: string;
+  claimNumber: string;
+  total: number;
+  fileName: string;
+  url: string;
 };
 
 type MitigationInvoiceDraft = {
@@ -2020,6 +2036,7 @@ export default function SummitApp() {
   const [showMitigationInvoice, setShowMitigationInvoice] = useState(false);
   const [mitigationDraft, setMitigationDraft] =
     useState<MitigationInvoiceDraft | null>(null);
+  const [appInvoices, setAppInvoices] = useState<AppInvoice[]>([]);
   /** Manual override for pricing region (null = derive from job address) */
   const [pricingRegionOverride, setPricingRegionOverride] =
     useState<PricingRegion | null>(null);
@@ -2102,13 +2119,31 @@ export default function SummitApp() {
     return typeof v === 'number' && !Number.isNaN(v) ? v : 0;
   };
 
-  const startMitigationInvoice = (leadId?: number | null) => {
+  const persistAppInvoices = (next: AppInvoice[]) => {
+    setAppInvoices(next);
+    try {
+      localStorage.setItem('summitAppInvoices', JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const mitigationPayableTo = (entity: MitigationEntity) =>
+    entity === 'prowest' ? 'ProWest Roofing' : 'Roslie Consulting Firm LLC';
+
+  const mitigationInvoiceTitle = (entity: MitigationEntity) =>
+    entity === 'prowest'
+      ? 'Company mitigation invoice'
+      : 'Personal mitigation invoice';
+
+  const openMitigationInvoice = (
+    kind: 'personal' | 'company',
+    opts?: { blank?: boolean }
+  ) => {
     const lead =
-      leadId != null
-        ? leads.find((l) => l.id === leadId)
-        : currentLeadId != null
-          ? leads.find((l) => l.id === currentLeadId)
-          : null;
+      currentLeadId != null
+        ? leads.find((l) => l.id === currentLeadId)
+        : null;
     const name = lead
       ? [lead.clientFirstName, lead.clientLastName].filter(Boolean).join(' ')
       : '';
@@ -2117,8 +2152,10 @@ export default function SummitApp() {
           .filter(Boolean)
           .join(', ')
       : '';
-    setMitigationDraft({
-      entity: 'rosalie',
+    const entity: MitigationEntity =
+      kind === 'company' ? 'prowest' : 'roslie';
+    const draft: MitigationInvoiceDraft = {
+      entity,
       rateMode: 'insurance',
       invoiceFor: name,
       location: addr,
@@ -2128,8 +2165,236 @@ export default function SummitApp() {
       lines: [],
       notes:
         'Work performed to mitigate any further damages.\nPrice includes materials, labor and roof access / set up.\nPlease forward to Insurance Company for reimbursement.',
-    });
+    };
+    setMitigationDraft(draft);
+    if (opts?.blank) {
+      // blank PDF only (company library / quick download)
+      setTimeout(() => generateMitigationPdf({ blank: true, entity }), 0);
+      return;
+    }
     setShowMitigationInvoice(true);
+  };
+
+  /** Alias used by phase-1 entry points */
+  const startMitigationInvoice = (leadId?: number | null) => {
+    if (leadId != null && leadId !== currentLeadId) {
+      setCurrentLeadId(leadId);
+    }
+    openMitigationInvoice('personal');
+  };
+
+  const addMitigationLine = (itemKey: string) => {
+    if (!mitigationDraft) return;
+    const row = mitigationPrices.find((r) => r.item_key === itemKey);
+    if (!row) return;
+    const unit =
+      mitigationDraft.rateMode === 'cash'
+        ? Number(row.cash_retail) || 0
+        : Number(row.insurance_rate) || 0;
+    const line: MitigationLineItem = {
+      id: `${Date.now()}-${itemKey}`,
+      itemKey,
+      label: row.label,
+      qty: 1,
+      unitPrice: unit,
+      amount: unit,
+    };
+    setMitigationDraft({
+      ...mitigationDraft,
+      lines: [...mitigationDraft.lines, line],
+    });
+  };
+
+  const updateMitigationLineQty = (id: string, qty: number) => {
+    if (!mitigationDraft) return;
+    const q = Math.max(0, qty);
+    setMitigationDraft({
+      ...mitigationDraft,
+      lines: mitigationDraft.lines.map((ln) =>
+        ln.id === id ? { ...ln, qty: q, amount: q * ln.unitPrice } : ln
+      ),
+    });
+  };
+
+  const removeMitigationLine = (id: string) => {
+    if (!mitigationDraft) return;
+    setMitigationDraft({
+      ...mitigationDraft,
+      lines: mitigationDraft.lines.filter((ln) => ln.id !== id),
+    });
+  };
+
+  const generateMitigationPdf = (opts?: {
+    blank?: boolean;
+    entity?: MitigationEntity;
+  }) => {
+    const entity: MitigationEntity =
+      opts?.entity || mitigationDraft?.entity || 'roslie';
+    const d = mitigationDraft;
+    const doc = new jsPDF();
+    const title = mitigationInvoiceTitle(entity);
+    const payable = mitigationPayableTo(entity);
+    let y = 20;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(18);
+    doc.text('INVOICE', 105, y, { align: 'center' });
+    y += 8;
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'normal');
+    doc.text(title, 105, y, { align: 'center' });
+    y += 12;
+    doc.setFontSize(10);
+    doc.text(
+      `Invoice for: ${opts?.blank ? '—' : d?.invoiceFor || '—'}`,
+      14,
+      y
+    );
+    doc.text(`Payable to: ${payable}`, 110, y);
+    y += 6;
+    doc.text(
+      `Date: ${d?.date || new Date().toLocaleDateString()}`,
+      14,
+      y
+    );
+    y += 6;
+    doc.text(
+      `Location: ${opts?.blank ? '—' : d?.location || '—'}`,
+      14,
+      y
+    );
+    y += 6;
+    doc.text(`Job: ${opts?.blank ? '—' : d?.job || '—'}`, 14, y);
+    doc.text(
+      `Claim Number: ${opts?.blank ? '—' : d?.claimNumber || '—'}`,
+      110,
+      y
+    );
+    y += 12;
+    doc.setFont('helvetica', 'bold');
+    doc.text('Description', 14, y);
+    doc.text('Price', 196, y, { align: 'right' });
+    y += 3;
+    doc.setDrawColor(210);
+    doc.line(14, y, 196, y);
+    y += 8;
+    doc.setFont('helvetica', 'normal');
+    let total = 0;
+    if (opts?.blank || !d?.lines?.length) {
+      doc.setTextColor(140);
+      doc.text(
+        opts?.blank
+          ? '(Blank template — fill as needed)'
+          : '(No line items)',
+        14,
+        y
+      );
+      doc.setTextColor(0);
+      y += 10;
+    } else {
+      for (const line of d.lines) {
+        const label =
+          line.qty !== 1 ? `${line.label} × ${line.qty}` : line.label;
+        const wrapped = doc.splitTextToSize(label, 150);
+        doc.text(wrapped, 14, y);
+        doc.text(`$${Number(line.amount).toLocaleString()}`, 196, y, {
+          align: 'right',
+        });
+        total += Number(line.amount) || 0;
+        y += Math.max(7, wrapped.length * 5);
+        if (y > 250) {
+          doc.addPage();
+          y = 20;
+        }
+      }
+    }
+    y += 4;
+    const notesText =
+      d?.notes ||
+      'Work performed to mitigate any further damages.\nPrice includes materials, labor and roof access / set up.\nPlease forward to Insurance Company for reimbursement.';
+    for (const n of notesText.split('\n')) {
+      doc.text(n, 14, y);
+      y += 5;
+    }
+    y += 8;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.text('Total Amount Due:', 14, y);
+    doc.text(opts?.blank ? '—' : `$${total.toLocaleString()}`, 196, y, {
+      align: 'right',
+    });
+    y += 14;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    if (entity === 'prowest') {
+      doc.text('ProWest Roofing', 14, y);
+      y += 5;
+      doc.text('Licensed contractor', 14, y);
+    } else {
+      doc.text('Joe Roslie', 14, y);
+      y += 5;
+      doc.text('Owner | Roslie Consulting Firm LLC', 14, y);
+    }
+    y += 5;
+    doc.text('(253) 381-2035', 14, y);
+    y += 12;
+    doc.text('Authorized Signature', 14, y);
+    doc.line(14, y + 6, 80, y + 6);
+
+    const fileName = `${title.replace(/\s+/g, '_')}_${
+      opts?.blank ? 'BLANK' : d?.job || 'draft'
+    }.pdf`;
+    const blob = doc.output('blob');
+    const url = URL.createObjectURL(blob);
+    doc.save(fileName);
+
+    if (opts?.blank) {
+      showToast('Blank template downloaded');
+      return;
+    }
+
+    if (currentLeadId != null) {
+      const lead = leads.find((l) => l.id === currentLeadId);
+      const leadLabel = lead
+        ? [lead.clientFirstName, lead.clientLastName]
+            .filter(Boolean)
+            .join(' ') ||
+          lead.jobNumber ||
+          'Lead'
+        : 'Lead';
+      const docEntry: LeadDocument = {
+        id: `inv-${Date.now()}`,
+        name: fileName,
+        url,
+        mimeType: 'application/pdf',
+        createdAt: new Date().toISOString(),
+      };
+      const updated = leads.map((l) =>
+        l.id === currentLeadId
+          ? { ...l, documents: [...(l.documents || []), docEntry] }
+          : l
+      );
+      persistLeads(updated);
+
+      const inv: AppInvoice = {
+        id: docEntry.id,
+        createdAt: new Date().toISOString(),
+        title,
+        entity,
+        rateMode: d?.rateMode || 'insurance',
+        leadId: currentLeadId,
+        leadLabel,
+        job: d?.job || '',
+        claimNumber: d?.claimNumber || '',
+        total,
+        fileName,
+        url,
+      };
+      persistAppInvoices([inv, ...appInvoices]);
+      showToast('Invoice saved to lead Documents + Invoices');
+    } else {
+      showToast('PDF downloaded');
+    }
+    setShowMitigationInvoice(false);
   };
 
   // Prices from Supabase `price_sheet` (cached; prefer item_key__region)
@@ -2512,6 +2777,17 @@ export default function SummitApp() {
             /* ignore */
           }
         }
+      }
+
+      // App invoices index (mitigation PDFs)
+      try {
+        const rawInv = localStorage.getItem('summitAppInvoices');
+        if (rawInv) {
+          const parsed = JSON.parse(rawInv);
+          if (Array.isArray(parsed)) setAppInvoices(parsed as AppInvoice[]);
+        }
+      } catch {
+        /* ignore */
       }
 
       // App trash is always local (leads + media soft-deletes)
@@ -7551,6 +7827,207 @@ showToast(
 
   return (
     <div className="min-h-screen bg-zinc-100 text-zinc-900">
+      {showMitigationInvoice && mitigationDraft && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto border border-zinc-200 p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <div className="text-lg font-semibold text-zinc-900">
+                  {mitigationDraft.entity === 'prowest'
+                    ? 'Company mitigation invoice'
+                    : 'Personal mitigation invoice'}
+                </div>
+                <div className="text-xs text-zinc-500">
+                  {mitigationDraft.entity === 'prowest'
+                    ? 'ProWest Roofing · typically $1,000+'
+                    : 'Roslie Consulting Firm LLC · typically under $1,000'}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="text-sm text-zinc-500 hover:text-zinc-800"
+                onClick={() => setShowMitigationInvoice(false)}
+              >
+                Close
+              </button>
+            </div>
+            <div className="flex gap-2 mb-3">
+              <button
+                type="button"
+                className={`flex-1 rounded-xl border px-3 py-2 text-sm ${
+                  mitigationDraft.entity === 'roslie'
+                    ? 'border-emerald-500 bg-emerald-50'
+                    : 'border-zinc-200'
+                }`}
+                onClick={() =>
+                  setMitigationDraft({ ...mitigationDraft, entity: 'roslie' })
+                }
+              >
+                Personal
+              </button>
+              <button
+                type="button"
+                className={`flex-1 rounded-xl border px-3 py-2 text-sm ${
+                  mitigationDraft.entity === 'prowest'
+                    ? 'border-emerald-500 bg-emerald-50'
+                    : 'border-zinc-200'
+                }`}
+                onClick={() =>
+                  setMitigationDraft({ ...mitigationDraft, entity: 'prowest' })
+                }
+              >
+                Company
+              </button>
+            </div>
+            <div className="flex gap-2 mb-4">
+              <button
+                type="button"
+                className={`flex-1 rounded-xl border px-3 py-2 text-sm ${
+                  mitigationDraft.rateMode === 'insurance'
+                    ? 'border-sky-400 bg-sky-50'
+                    : 'border-zinc-200'
+                }`}
+                onClick={() =>
+                  setMitigationDraft({
+                    ...mitigationDraft,
+                    rateMode: 'insurance',
+                  })
+                }
+              >
+                Insurance rates
+              </button>
+              <button
+                type="button"
+                className={`flex-1 rounded-xl border px-3 py-2 text-sm ${
+                  mitigationDraft.rateMode === 'cash'
+                    ? 'border-sky-400 bg-sky-50'
+                    : 'border-zinc-200'
+                }`}
+                onClick={() =>
+                  setMitigationDraft({ ...mitigationDraft, rateMode: 'cash' })
+                }
+              >
+                Retail rates
+              </button>
+            </div>
+            <div className="grid gap-2 mb-4 text-sm">
+              <input
+                className="border border-zinc-200 rounded-xl px-3 py-2"
+                placeholder="Invoice for"
+                value={mitigationDraft.invoiceFor}
+                onChange={(e) =>
+                  setMitigationDraft({
+                    ...mitigationDraft,
+                    invoiceFor: e.target.value,
+                  })
+                }
+              />
+              <input
+                className="border border-zinc-200 rounded-xl px-3 py-2"
+                placeholder="Location"
+                value={mitigationDraft.location}
+                onChange={(e) =>
+                  setMitigationDraft({
+                    ...mitigationDraft,
+                    location: e.target.value,
+                  })
+                }
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  className="border border-zinc-200 rounded-xl px-3 py-2"
+                  placeholder="Job #"
+                  value={mitigationDraft.job}
+                  onChange={(e) =>
+                    setMitigationDraft({
+                      ...mitigationDraft,
+                      job: e.target.value,
+                    })
+                  }
+                />
+                <input
+                  className="border border-zinc-200 rounded-xl px-3 py-2"
+                  placeholder="Claim #"
+                  value={mitigationDraft.claimNumber}
+                  onChange={(e) =>
+                    setMitigationDraft({
+                      ...mitigationDraft,
+                      claimNumber: e.target.value,
+                    })
+                  }
+                />
+              </div>
+            </div>
+            <div className="mb-2 text-xs font-semibold text-zinc-500 uppercase tracking-wide">
+              Add line
+            </div>
+            <div className="flex flex-wrap gap-2 mb-4 max-h-28 overflow-y-auto">
+              {mitigationPrices.length === 0 ? (
+                <p className="text-xs text-zinc-400">
+                  {mitigationPricesReady
+                    ? 'No mitigation items loaded — check Supabase mitigation_price_sheet'
+                    : 'Loading price sheet…'}
+                </p>
+              ) : (
+                mitigationPrices.map((row) => (
+                  <button
+                    key={row.item_key}
+                    type="button"
+                    className="text-xs rounded-full border border-zinc-200 px-2.5 py-1 hover:border-emerald-400"
+                    onClick={() => addMitigationLine(row.item_key)}
+                  >
+                    {row.label}
+                  </button>
+                ))
+              )}
+            </div>
+            <div className="space-y-2 mb-4">
+              {mitigationDraft.lines.map((ln) => (
+                <div key={ln.id} className="flex items-center gap-2 text-sm">
+                  <div className="flex-1 truncate">{ln.label}</div>
+                  <input
+                    type="number"
+                    className="w-16 border border-zinc-200 rounded-lg px-2 py-1"
+                    value={ln.qty}
+                    onChange={(e) =>
+                      updateMitigationLineQty(
+                        ln.id,
+                        parseFloat(e.target.value) || 0
+                      )
+                    }
+                  />
+                  <div className="w-20 text-right tabular-nums">
+                    ${ln.amount.toLocaleString()}
+                  </div>
+                  <button
+                    type="button"
+                    className="text-xs text-red-600"
+                    onClick={() => removeMitigationLine(ln.id)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-between border-t border-zinc-100 pt-3 mb-4">
+              <div className="text-sm font-semibold">Total</div>
+              <div className="text-lg font-semibold tabular-nums">
+                $
+                {mitigationDraft.lines
+                  .reduce((s, l) => s + (l.amount || 0), 0)
+                  .toLocaleString()}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="w-full rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2.5 text-sm"
+              onClick={() => generateMitigationPdf()}
+            >
+              Download PDF &amp; save to Documents
+            </button>
+          </div>
+        </div>
+      )}
       {toastMessage && (
         <div className="fixed bottom-20 sm:bottom-6 left-1/2 -translate-x-1/2 z-[80] px-6 py-3 bg-zinc-900/95 text-white rounded-2xl shadow-md ring-1 ring-white/10 text-sm font-medium">
           {toastMessage}
@@ -8232,9 +8709,7 @@ showToast(
                 <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
                   Invoices
                 </h1>
-                <p className="text-zinc-500 mt-1">
-                  All invoices
-                </p>
+                <p className="text-zinc-500 mt-1">All invoices</p>
               </div>
               <div className="flex items-center gap-2">
                 <label className="inline-flex items-center justify-center rounded-2xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-800 hover:border-sky-300 hover:text-sky-900 cursor-pointer transition">
@@ -8247,7 +8722,7 @@ showToast(
                       const f = e.target.files?.[0];
                       if (f) {
                         showToast(
-                          'Invoice upload — wire to storage in phase 2'
+                          'Upload to Invoices — storage wire next'
                         );
                       }
                       e.target.value = '';
@@ -8260,17 +8735,61 @@ showToast(
               <div className="px-4 py-3 border-b border-zinc-100 text-xs font-semibold text-zinc-500 uppercase tracking-wide grid grid-cols-12 gap-2">
                 <div className="col-span-3">Date</div>
                 <div className="col-span-3">Lead / job</div>
-                <div className="col-span-2">Entity</div>
+                <div className="col-span-2">Type</div>
                 <div className="col-span-2">Total</div>
                 <div className="col-span-2 text-right">Actions</div>
               </div>
-              <div className="p-8 text-center text-sm text-zinc-500">
-                No invoices yet. Create a mitigation invoice from a lead&apos;s
-                Documents, or upload a PDF above.
-              </div>
+              {appInvoices.length === 0 ? (
+                <div className="p-8 text-center text-sm text-zinc-500">
+                  No invoices yet. Create one from a lead&apos;s Documents.
+                </div>
+              ) : (
+                <ul className="divide-y divide-zinc-100">
+                  {appInvoices.map((inv) => (
+                    <li
+                      key={inv.id}
+                      className="px-4 py-3 grid grid-cols-12 gap-2 items-center text-sm"
+                    >
+                      <div className="col-span-3 text-zinc-600">
+                        {new Date(inv.createdAt).toLocaleDateString()}
+                      </div>
+                      <div className="col-span-3 truncate">
+                        {inv.leadLabel}
+                        {inv.job ? ` · ${inv.job}` : ''}
+                      </div>
+                      <div className="col-span-2 truncate text-zinc-600">
+                        {inv.title}
+                      </div>
+                      <div className="col-span-2 tabular-nums">
+                        ${Number(inv.total).toLocaleString()}
+                      </div>
+                      <div className="col-span-2 flex justify-end gap-2">
+                        <a
+                          className="text-xs text-sky-700 hover:underline"
+                          href={inv.url}
+                          download={inv.fileName}
+                        >
+                          Download
+                        </a>
+                        <button
+                          type="button"
+                          className="text-xs text-red-600"
+                          onClick={() =>
+                            persistAppInvoices(
+                              appInvoices.filter((x) => x.id !== inv.id)
+                            )
+                          }
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
             <p className="text-xs text-zinc-400 mt-3">
-              Delete moves to trash (recoverable). Download exports the file.
+              Delete removes from this list. Download exports the file.
             </p>
           </div>
         )}
@@ -8401,6 +8920,26 @@ showToast(
               System templates you can fill and assign to a job, or add from a
               lead’s Documents tab.
             </p>
+            <div className="flex flex-wrap gap-2 mb-4">
+              <button
+                type="button"
+                className="text-xs rounded-full border border-dashed border-zinc-300 px-3 py-1.5 text-zinc-700 hover:border-emerald-400"
+                onClick={() =>
+                  openMitigationInvoice('personal', { blank: true })
+                }
+              >
+                Blank personal mitigation template
+              </button>
+              <button
+                type="button"
+                className="text-xs rounded-full border border-dashed border-zinc-300 px-3 py-1.5 text-zinc-700 hover:border-emerald-400"
+                onClick={() =>
+                  openMitigationInvoice('company', { blank: true })
+                }
+              >
+                Blank company mitigation template
+              </button>
+            </div>
             <div className="space-y-3">
               {SYSTEM_DOCUMENTS.map((doc) => (
                 <button
@@ -13754,6 +14293,23 @@ showToast(
                                 {profileDocuments.length !== 1 ? 's' : ''}
                               </div>
                             )}
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 mb-4">
+                            <button
+                              type="button"
+                              className="text-xs rounded-full border border-zinc-200 px-3 py-1.5 hover:border-emerald-400"
+                              onClick={() => openMitigationInvoice('personal')}
+                            >
+                              Personal mitigation invoice
+                            </button>
+                            <button
+                              type="button"
+                              className="text-xs rounded-full border border-zinc-200 px-3 py-1.5 hover:border-emerald-400"
+                              onClick={() => openMitigationInvoice('company')}
+                            >
+                              Company mitigation invoice
+                            </button>
                           </div>
 
                           <input
