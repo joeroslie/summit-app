@@ -8164,7 +8164,7 @@ showToast(
                     Invoices
                   </div>
                   <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
-                    Mitigation and job invoices
+                    All invoices
                   </p>
                 </div>
 
@@ -8233,7 +8233,7 @@ showToast(
                   Invoices
                 </h1>
                 <p className="text-zinc-500 mt-1">
-                  All job invoices. Create from a lead, or upload here.
+                  All invoices
                 </p>
               </div>
               <div className="flex items-center gap-2">
