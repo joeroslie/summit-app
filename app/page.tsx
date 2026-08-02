@@ -2277,14 +2277,6 @@ export default function SummitApp() {
     } catch (e) {}
   }, [systemDocWorkspace, mitigationDraft]);
 
-  
-  
-  useEffect(() => {
-    if (systemDocWorkspace === 'takeoff' || systemDocWorkspace === 'pricing') {
-      try { setIsEditingLead(false); } catch (e) {}
-      try { setActiveTab('documents'); } catch (e) {}
-    }
-  }, [systemDocWorkspace]);
 
   const openSystemDoc = (id: 'takeoff' | 'pricing') => {
     setDocAddMenuOpen(false);
@@ -2292,10 +2284,7 @@ export default function SummitApp() {
       setShowMitigationInvoice(false);
     } catch (e) {}
     setMitigationDraft(null);
-    // Close profile UI only — keep lead id so the lead is never dropped from state
-    try {
-      setIsEditingLead(false);
-    } catch (e) {}
+    // Keep lead profile open — do not setIsEditingLead(false)
     try {
       setActiveTab('documents');
     } catch (e) {}
@@ -9015,6 +9004,308 @@ showToast(
             : `tab-${activeTab}`
         }
       >
+        
+        {/* System docs: available from lead profile + documents hub */}
+{systemDocWorkspace === 'pricing' && (
+        <div className="fixed inset-0 z-[85] bg-zinc-50 overflow-y-auto">
+          <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-20">
+            <div className="flex items-center justify-between gap-3 mb-4 sticky top-0 bg-zinc-50/95 backdrop-blur py-3 z-10">
+              <div>
+                <h1 className="text-xl font-semibold text-zinc-900">Company pricing</h1>
+                <p className="text-xs text-zinc-500">Cost · Sell PHX · Sell Tuc/North</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSystemDocWorkspace(null)}
+                className="text-sm font-medium text-emerald-700 shrink-0"
+              >
+                Close
+              </button>
+            </div>
+            <div className="grid grid-cols-1 gap-4">
+              {PRICING_GUIDE.map((section) => (
+                <section
+                  key={section.title}
+                  className="rounded-2xl border border-zinc-200 bg-white overflow-hidden"
+                >
+                  <div className="px-3 py-2 border-b border-zinc-100 bg-zinc-50">
+                    <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-600">
+                      {section.title}
+                    </h2>
+                  </div>
+                  <div className="divide-y divide-zinc-50">
+                    {section.rows.map((row, idx) => {
+                      const live =
+                        row.key && priceSheet && priceSheet[row.key] != null
+                          ? Number(priceSheet[row.key])
+                          : null;
+                      const sellPhx = live != null && live > 0 ? live : row.sellPhx;
+                      const liveCost =
+                        row.key != null
+                          ? getCost(row.key, row.cost ?? 0)
+                          : row.cost ?? 0;
+                      const unit = row.unit || '';
+                      const money = (n?: number) =>
+                        n != null && n > 0 ? (
+                          <span className="whitespace-nowrap">
+                            <span className="font-semibold text-emerald-700">
+                              ${Number(n).toLocaleString()}
+                            </span>
+                            {unit ? (
+                              <span className="text-[10px] text-zinc-400 ml-0.5">{unit}</span>
+                            ) : null}
+                          </span>
+                        ) : null;
+                      return (
+                        <div
+                          key={`${section.title}-${idx}`}
+                          className="px-3 py-2 flex items-start justify-between gap-3"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-zinc-900 leading-snug">
+                              {row.label}
+                            </div>
+                            {row.note && (
+                              <div className="text-[11px] text-zinc-400 leading-snug mt-0.5">
+                                {row.note}
+                              </div>
+                            )}
+                          </div>
+                          <div className="text-right shrink-0 text-xs leading-snug space-y-0.5">
+                            {liveCost > 0 && (
+                              <div className="text-zinc-500">
+                                C{' '}
+                                <span className="font-medium text-zinc-700">
+                                  ${Number(liveCost).toLocaleString()}
+                                </span>
+                                {unit ? (
+                                  <span className="text-[10px] text-zinc-400 ml-0.5">
+                                    {unit}
+                                  </span>
+                                ) : null}
+                              </div>
+                            )}
+                            {sellPhx != null && sellPhx > 0 && (
+                              <div>
+                                <span className="text-zinc-400">PHX </span>
+                                {money(sellPhx)}
+                              </div>
+                            )}
+                            {row.sellTuc != null && row.sellTuc > 0 && (
+                              <div>
+                                <span className="text-zinc-400">Tuc </span>
+                                {money(row.sellTuc)}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+{systemDocWorkspace === 'takeoff' && (
+          <div className="fixed inset-0 z-[85] bg-zinc-50 overflow-y-auto">
+            <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-28">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSystemDocWorkspace(null);
+                      setTakeoffAssignOpen(false);
+                      if (currentLeadId != null) {
+                        setIsEditingLead(true);
+                        setProfileTab('documents');
+                        setActiveTab('leads');
+                      }
+                    }}
+                    className="text-sm text-zinc-500 hover:text-zinc-800 mb-2 inline-flex items-center gap-1"
+                  >
+                    ← Back to documents
+                  </button>
+                  <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
+                    Take off sheet
+                  </h1>
+                  <p className="text-sm text-zinc-500 mt-1">
+                    Fill the sheet, then save to this lead or assign to another
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSystemDocWorkspace(null);
+                    setTakeoffAssignOpen(false);
+                  }}
+                  className="text-sm text-zinc-600 hover:text-zinc-900 px-3 py-1.5 rounded-xl border border-zinc-200 bg-white"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                {TAKEOFF_FIELD_LABELS.map(({ key, label }) =>
+                  key === 'notes' ? (
+                    <div key={key} className="md:col-span-2">
+                      <label className="text-xs text-zinc-500 mb-1 block">
+                        {label}
+                      </label>
+                      <textarea
+                        value={takeoffForm[key]}
+                        onChange={(e) =>
+                          setTakeoffForm((f) => ({
+                            ...f,
+                            [key]: e.target.value,
+                          }))
+                        }
+                        rows={3}
+                        className="w-full border border-zinc-200 rounded-xl px-3 py-2 text-sm text-zinc-900 bg-white"
+                      />
+                    </div>
+                  ) : (
+                    <div key={key}>
+                      <label className="text-xs text-zinc-500 mb-1 block">
+                        {label}
+                      </label>
+                      <input
+                        value={takeoffForm[key]}
+                        onChange={(e) =>
+                          setTakeoffForm((f) => ({
+                            ...f,
+                            [key]: e.target.value,
+                          }))
+                        }
+                        className="w-full border border-zinc-200 rounded-xl px-3 py-2 text-sm text-zinc-900 bg-white"
+                      />
+                    </div>
+                  )
+                )}
+              </div>
+
+                                          <div className="flex flex-col sm:flex-row gap-3 sticky bottom-4 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Download as text file
+                    const lines = Object.entries(takeoffForm || {}).map(
+                      ([k, v]) => `${k}: ${v || ''}`
+                    );
+                    const blob = new Blob([lines.join('\n')], {
+                      type: 'text/plain',
+                    });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `takeoff-${currentLeadId || 'draft'}.txt`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="flex-1 px-5 py-3 rounded-2xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-800 text-sm font-medium"
+                >
+                  Download
+                </button>
+                {currentLeadId != null ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      saveTakeoff(true);
+                      setSystemDocWorkspace(null);
+                      setIsEditingLead(true);
+                      setProfileTab('documents');
+                      setActiveTab('leads');
+                    }}
+                    className="flex-1 px-5 py-3 rounded-2xl border-2 border-sky-500 bg-white hover:bg-sky-50 text-sky-700 text-sm font-medium"
+                  >
+                    Save to lead
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setTakeoffAssignOpen(true)}
+                    className="flex-1 px-5 py-3 rounded-2xl border-2 border-sky-500 bg-white hover:bg-sky-50 text-sky-700 text-sm font-medium"
+                  >
+                    Assign to lead
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {takeoffAssignOpen && (
+              <div className="fixed inset-0 z-[90] bg-black/40 flex items-end sm:items-center justify-center p-4">
+                <div className="bg-white rounded-3xl w-full max-w-md max-h-[80vh] overflow-hidden flex flex-col shadow-lg">
+                  <div className="p-4 border-b border-zinc-100">
+                    <div className="font-semibold text-zinc-900 mb-2">
+                      Assign to lead
+                    </div>
+                    <input
+                      value={takeoffAssignSearch}
+                      onChange={(e) => setTakeoffAssignSearch(e.target.value)}
+                      placeholder="Search name, job #, address…"
+                      className="w-full border border-zinc-200 rounded-xl px-3 py-2 text-sm"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="overflow-y-auto flex-1 p-2">
+                    {leads
+                      .filter((l) => {
+                        const q = takeoffAssignSearch.trim().toLowerCase();
+                        if (!q) return true;
+                        const hay = [
+                          l.clientFirstName,
+                          l.clientLastName,
+                          l.jobNumber,
+                          l.clientAddress,
+                          l.clientCity,
+                          l.clientPhone,
+                        ]
+                          .join(' ')
+                          .toLowerCase();
+                        return hay.includes(q);
+                      })
+                      .slice(0, 50)
+                      .map((l) => (
+                        <button
+                          key={l.id}
+                          type="button"
+                          onClick={() => assignTakeoffToLead(l.id)}
+                          className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-sky-50 text-sm"
+                        >
+                          <div className="font-medium text-zinc-900">
+                            {[l.clientFirstName, l.clientLastName]
+                              .filter(Boolean)
+                              .join(' ') || 'Untitled lead'}
+                          </div>
+                          <div className="text-xs text-zinc-500">
+                            {l.jobNumber || 'No job #'}
+                            {l.clientAddress ? ` · ${l.clientAddress}` : ''}
+                          </div>
+                        </button>
+                      ))}
+                    {leads.length === 0 && (
+                      <p className="text-sm text-zinc-500 px-3 py-4">
+                        No leads yet — use New lead + assign.
+                      </p>
+                    )}
+                  </div>
+                  <div className="p-3 border-t border-zinc-100">
+                    <button
+                      type="button"
+                      onClick={() => setTakeoffAssignOpen(false)}
+                      className="text-sm text-zinc-500 hover:text-zinc-800"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {isEditingLead && currentLeadId ? null : (
         <>
         {activeTab === 'home' && (() => {
@@ -9455,262 +9746,6 @@ showToast(
           </div>
         )}
 
-
-
-        {systemDocWorkspace === 'pricing' && (
-        <div className="fixed inset-0 z-[85] bg-zinc-50 overflow-y-auto">
-          <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-20">
-            <div className="flex items-center justify-between gap-3 mb-4 sticky top-0 bg-zinc-50/95 backdrop-blur py-3 z-10">
-              <div>
-                <h1 className="text-xl font-semibold text-zinc-900">Company pricing</h1>
-                <p className="text-xs text-zinc-500">Cost · Sell PHX · Sell Tuc/North</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSystemDocWorkspace(null)}
-                className="text-sm font-medium text-emerald-700 shrink-0"
-              >
-                Close
-              </button>
-            </div>
-            <div className="grid grid-cols-1 gap-4">
-              {PRICING_GUIDE.map((section) => (
-                <section
-                  key={section.title}
-                  className="rounded-2xl border border-zinc-200 bg-white overflow-hidden"
-                >
-                  <div className="px-3 py-2 border-b border-zinc-100 bg-zinc-50">
-                    <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-600">
-                      {section.title}
-                    </h2>
-                  </div>
-                  <div className="divide-y divide-zinc-50">
-                    {section.rows.map((row, idx) => {
-                      const live =
-                        row.key && priceSheet && priceSheet[row.key] != null
-                          ? Number(priceSheet[row.key])
-                          : null;
-                      const sellPhx = live != null && live > 0 ? live : row.sellPhx;
-                      const liveCost =
-                        row.key != null
-                          ? getCost(row.key, row.cost ?? 0)
-                          : row.cost ?? 0;
-                      const unit = row.unit || '';
-                      const money = (n?: number) =>
-                        n != null && n > 0 ? (
-                          <span className="whitespace-nowrap">
-                            <span className="font-semibold text-emerald-700">
-                              ${Number(n).toLocaleString()}
-                            </span>
-                            {unit ? (
-                              <span className="text-[10px] text-zinc-400 ml-0.5">{unit}</span>
-                            ) : null}
-                          </span>
-                        ) : null;
-                      return (
-                        <div
-                          key={`${section.title}-${idx}`}
-                          className="px-3 py-2 flex items-start justify-between gap-3"
-                        >
-                          <div className="min-w-0">
-                            <div className="text-sm font-medium text-zinc-900 leading-snug">
-                              {row.label}
-                            </div>
-                            {row.note && (
-                              <div className="text-[11px] text-zinc-400 leading-snug mt-0.5">
-                                {row.note}
-                              </div>
-                            )}
-                          </div>
-                          <div className="text-right shrink-0 text-xs leading-snug space-y-0.5">
-                            {liveCost > 0 && (
-                              <div className="text-zinc-500">
-                                C{' '}
-                                <span className="font-medium text-zinc-700">
-                                  ${Number(liveCost).toLocaleString()}
-                                </span>
-                                {unit ? (
-                                  <span className="text-[10px] text-zinc-400 ml-0.5">
-                                    {unit}
-                                  </span>
-                                ) : null}
-                              </div>
-                            )}
-                            {sellPhx != null && sellPhx > 0 && (
-                              <div>
-                                <span className="text-zinc-400">PHX </span>
-                                {money(sellPhx)}
-                              </div>
-                            )}
-                            {row.sellTuc != null && row.sellTuc > 0 && (
-                              <div>
-                                <span className="text-zinc-400">Tuc </span>
-                                {money(row.sellTuc)}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-{systemDocWorkspace === 'takeoff' && (
-          <div className="fixed inset-0 z-[85] bg-zinc-50 overflow-y-auto">
-            <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-28">
-              <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
-                <div>
-                  <h1 className="text-xl font-semibold text-zinc-900">
-                    Take off sheet
-                  </h1>
-                  <p className="text-sm text-zinc-500">
-                    Fill now, then assign to a lead
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSystemDocWorkspace(null);
-                    setTakeoffAssignOpen(false);
-                  }}
-                  className="text-sm text-zinc-600 hover:text-zinc-900 px-3 py-1.5 rounded-xl border border-zinc-200 bg-white"
-                >
-                  Close
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                {TAKEOFF_FIELD_LABELS.map(({ key, label }) =>
-                  key === 'notes' ? (
-                    <div key={key} className="md:col-span-2">
-                      <label className="text-xs text-zinc-500 mb-1 block">
-                        {label}
-                      </label>
-                      <textarea
-                        value={takeoffForm[key]}
-                        onChange={(e) =>
-                          setTakeoffForm((f) => ({
-                            ...f,
-                            [key]: e.target.value,
-                          }))
-                        }
-                        rows={3}
-                        className="w-full border border-zinc-200 rounded-xl px-3 py-2 text-sm text-zinc-900 bg-white"
-                      />
-                    </div>
-                  ) : (
-                    <div key={key}>
-                      <label className="text-xs text-zinc-500 mb-1 block">
-                        {label}
-                      </label>
-                      <input
-                        value={takeoffForm[key]}
-                        onChange={(e) =>
-                          setTakeoffForm((f) => ({
-                            ...f,
-                            [key]: e.target.value,
-                          }))
-                        }
-                        className="w-full border border-zinc-200 rounded-xl px-3 py-2 text-sm text-zinc-900 bg-white"
-                      />
-                    </div>
-                  )
-                )}
-              </div>
-
-              <div className="flex flex-wrap gap-2 sticky bottom-4">
-                <button
-                  type="button"
-                  onClick={() => setTakeoffAssignOpen(true)}
-                  className="px-4 py-2.5 rounded-xl bg-sky-600 text-white text-sm font-medium hover:bg-sky-700"
-                >
-                  Assign to lead
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void assignTakeoffToNewLead()}
-                  className="px-4 py-2.5 rounded-xl border border-zinc-200 bg-white text-sm font-medium text-zinc-800 hover:border-sky-300"
-                >
-                  New lead + assign
-                </button>
-              </div>
-            </div>
-
-            {takeoffAssignOpen && (
-              <div className="fixed inset-0 z-[90] bg-black/40 flex items-end sm:items-center justify-center p-4">
-                <div className="bg-white rounded-3xl w-full max-w-md max-h-[80vh] overflow-hidden flex flex-col shadow-lg">
-                  <div className="p-4 border-b border-zinc-100">
-                    <div className="font-semibold text-zinc-900 mb-2">
-                      Assign to lead
-                    </div>
-                    <input
-                      value={takeoffAssignSearch}
-                      onChange={(e) => setTakeoffAssignSearch(e.target.value)}
-                      placeholder="Search name, job #, address…"
-                      className="w-full border border-zinc-200 rounded-xl px-3 py-2 text-sm"
-                      autoFocus
-                    />
-                  </div>
-                  <div className="overflow-y-auto flex-1 p-2">
-                    {leads
-                      .filter((l) => {
-                        const q = takeoffAssignSearch.trim().toLowerCase();
-                        if (!q) return true;
-                        const hay = [
-                          l.clientFirstName,
-                          l.clientLastName,
-                          l.jobNumber,
-                          l.clientAddress,
-                          l.clientCity,
-                          l.clientPhone,
-                        ]
-                          .join(' ')
-                          .toLowerCase();
-                        return hay.includes(q);
-                      })
-                      .slice(0, 50)
-                      .map((l) => (
-                        <button
-                          key={l.id}
-                          type="button"
-                          onClick={() => assignTakeoffToLead(l.id)}
-                          className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-sky-50 text-sm"
-                        >
-                          <div className="font-medium text-zinc-900">
-                            {[l.clientFirstName, l.clientLastName]
-                              .filter(Boolean)
-                              .join(' ') || 'Untitled lead'}
-                          </div>
-                          <div className="text-xs text-zinc-500">
-                            {l.jobNumber || 'No job #'}
-                            {l.clientAddress ? ` · ${l.clientAddress}` : ''}
-                          </div>
-                        </button>
-                      ))}
-                    {leads.length === 0 && (
-                      <p className="text-sm text-zinc-500 px-3 py-4">
-                        No leads yet — use New lead + assign.
-                      </p>
-                    )}
-                  </div>
-                  <div className="p-3 border-t border-zinc-100">
-                    <button
-                      type="button"
-                      onClick={() => setTakeoffAssignOpen(false)}
-                      className="text-sm text-zinc-500 hover:text-zinc-800"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
 
         {activeTab === 'calendar' && (() => {
           const openJobs = leads.filter(
@@ -14471,7 +14506,7 @@ showToast(
                             <button
                               type="button"
                               onClick={addLeadNote}
-                              className="btn-primary px-6 py-3 rounded-2xl font-medium shrink-0"
+                              className="btn-primary px-8 py-3 rounded-full text-sm font-semibold shrink-0"
                             >
                               Add message
                             </button>
@@ -14779,7 +14814,7 @@ showToast(
                                 type="button"
                                 disabled={docsUploading}
                                 onClick={() => setDocAddMenuOpen((o) => !o)}
-                                className="inline-flex items-center justify-center rounded-full border-2 border-sky-500 bg-white text-sky-600 hover:text-sky-600 hover:text-sky-700 hover:bg-sky-50 px-6 py-2.5 text-sm font-semibold transition"
+                                className="inline-flex items-center justify-center btn-primary px-8 py-3 rounded-full text-sm font-semibold disabled:opacity-50"
                               >
                                 {docsUploading ? 'Uploading…' : '+ Add'}
                               </button>
@@ -14936,7 +14971,7 @@ showToast(
                               <button
                                 type="button"
                                 onClick={() => saveTakeoff(false)}
-                                className="px-4 py-2 rounded-xl bg-sky-600 text-white text-sm font-medium hover:bg-sky-700"
+                                className="px-4 py-2 rounded-xl border-2 border-sky-500 bg-white text-sky-700 text-sm font-medium hover:bg-sky-50"
                               >
                                 Save take-off
                               </button>
