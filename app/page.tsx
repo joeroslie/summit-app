@@ -634,12 +634,12 @@ const SYSTEM_DOCUMENTS = [
   {
     id: 'takeoff',
     name: 'Take-off / Inspection Sheet',
-    description: 'Roof accessories, vents, flashings, interior notes',
+    description: '',
   },
   {
     id: 'pricing',
     name: 'Company pricing',
-    description: 'Sell rates and your costs for field reference',
+    description: '',
   },
   {
     id: 'mitigation',
@@ -8489,7 +8489,7 @@ showToast(
                 {!invoicePickerMode && (
                 <section>
                   <h3 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
-                    Saved estimates
+                    Estimates
                   </h3>
                   {estimateItems.length === 0 ? (
                     <p className="text-sm text-zinc-400 px-1 py-2">
@@ -13102,15 +13102,10 @@ showToast(
 
                       {profileTab === 'pipeline' && (
                         <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
-                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
-                            <div>
-                              <h2 className="text-lg font-semibold text-zinc-900">
+                          <div className="flex items-center justify-between gap-3 mb-3">
+                            <h2 className="text-lg font-semibold text-zinc-900 mb-4">
                                 Pipeline
                               </h2>
-                              <p className="text-sm text-zinc-500 mt-1">
-                                Track job progress from first contact through close-out.
-                              </p>
-                            </div>
                             <button
                               type="button"
                               onClick={advanceJobMilestone}
@@ -13234,10 +13229,15 @@ showToast(
                         );
 
                         return (
+                        <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
+                          <h2 className="text-lg font-semibold text-zinc-900 mb-4">
+                            Measurements
+                          </h2>
+
                         <div className="w-full space-y-5">
                           {/* Read-only property address from lead profile */}
                           <div className="rounded-2xl border border-zinc-100 bg-zinc-100/80 px-4 py-3.5">
-                            <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-center justify-between gap-3 mb-4">
                               <div className="min-w-0 text-left">
                                 <p className="text-[11px] font-medium uppercase tracking-wider text-zinc-400">
                                   Property
@@ -13257,7 +13257,7 @@ showToast(
                                   <button
                                     type="button"
                                     onClick={() => setProfileTab('overview')}
-                                    className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 transition-colors"
+                                    className="text-lg font-semibold text-zinc-900 mb-4"
                                   >
                                     Edit lead
                                   </button>
@@ -13818,15 +13818,17 @@ showToast(
                             </div>
                           )}
                         </div>
-                        );
+                        
+                        </section>);
                       })()}
 
                       {profileTab === 'financial' && (
+                        <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
                         <div className="space-y-4">
                           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                             <div className="lg:col-span-2 space-y-3">
-                              <div className="flex items-center justify-between gap-3">
-                                <h2 className="text-sm font-semibold text-zinc-900">
+                              <div className="flex items-center justify-between gap-3 mb-4">
+                                <h2 className="text-lg font-semibold text-zinc-900 mb-4">
                                   Worksheet
                                 </h2>
                                 <div className="relative">
@@ -14170,16 +14172,15 @@ showToast(
                             </div>
                           </div>
                         </div>
+                        </section>
                       )}
 
                       {profileTab === 'insurance' && (
                         <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
-                          <h2 className="text-lg font-semibold text-zinc-900 mb-1">
+                          <h2 className="text-lg font-semibold text-zinc-900 mb-4">
                             Insurance claim
                           </h2>
-                          <p className="text-sm text-zinc-500 mb-5">
-                            Full claim details for this property.
-                          </p>
+                          
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div>
                               <div className={labelClass}>Insurance company</div>
@@ -14277,12 +14278,10 @@ showToast(
 
                       {profileTab === 'notes' && (
                         <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
-                          <h2 className="text-lg font-semibold text-zinc-900 mb-1">
+                          <h2 className="text-lg font-semibold text-zinc-900 mb-4">
                             Messages
                           </h2>
-                          <p className="text-sm text-zinc-500 mb-5">
-                            Chronological activity for this lead.
-                          </p>
+                          
                           <div className="flex flex-col sm:flex-row gap-2 mb-6 items-center">
                             <input
                               value={leadNoteDraft}
@@ -14346,16 +14345,10 @@ showToast(
 
                       {profileTab === 'estimates' && (
                         <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
-                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
-                            <div>
-                              <h2 className="text-lg font-semibold text-zinc-900">
-                                Saved estimates
+                          <div className="flex items-center justify-between gap-3 mb-3">
+                            <h2 className="text-lg font-semibold text-zinc-900 mb-4">
+                                Estimates
                               </h2>
-                              <p className="text-sm text-zinc-500 mt-0.5">
-                                Estimates use this lead&apos;s contact info. Create or open one
-                                below.
-                              </p>
-                            </div>
                             <button
                               type="button"
                               onClick={() =>
@@ -14418,10 +14411,8 @@ showToast(
 
                       {profileTab === 'photos' && (
                         <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
-                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5 items-center">
-                            <div>
-                              <h2 className="text-lg font-semibold text-zinc-900">Photos</h2>
-                            </div>
+                          <div className="flex items-center justify-between gap-3 mb-3">
+                            <h2 className="text-lg font-semibold text-zinc-900 mb-4">Photos</h2>
                             {profilePhotos.length > 0 && (
                               <div className="text-sm font-medium text-zinc-500 bg-zinc-100 border border-zinc-200 rounded-xl px-3 py-1.5 self-start">
                                 {profilePhotos.length.toLocaleString()} photo
@@ -14606,15 +14597,10 @@ showToast(
                             }}
                           />
 
-                          <div className="flex items-start justify-between gap-3 mb-5">
-                            <div>
-                              <h2 className="text-lg font-semibold text-zinc-900">
+                          <div className="flex items-center justify-between gap-3 mb-3">
+                            <h2 className="text-lg font-semibold text-zinc-900 mb-4">
                                 Documents
                               </h2>
-                              <p className="text-sm text-zinc-500 mt-0.5">
-                                Contracts, insurance letters, PDFs…
-                              </p>
-                            </div>
                             <div className="relative shrink-0">
                               <button
                                 type="button"
@@ -14624,65 +14610,72 @@ showToast(
                               >
                                 {docsUploading ? 'Uploading…' : '+ Add'}
                               </button>
-                              {docAddMenuOpen && (
-                              <div className="absolute right-0 mt-2 w-64 rounded-2xl border border-zinc-200 bg-white shadow-lg z-20 py-1">
-                                <button
-                                  type="button"
-                                  className="w-full text-left px-4 py-2.5 text-sm text-zinc-800 hover:bg-sky-50"
-                                  onClick={() => {
-                                    setDocAddMenuOpen(false);
-                                    docInputRef.current?.click();
-                                  }}
-                                >
-                                  Upload file
-                                </button>
-                                <div className="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wide text-zinc-400">
-                                  From system
-                                </div>
-                                <button
-                                  type="button"
-                                  className="w-full text-left px-4 py-2.5 text-sm text-zinc-800 hover:bg-sky-50"
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    setDocAddMenuOpen(false);
-                                    openMitigationWorkspace('personal');
-                                  }}
-                                >
-                                  <div className="font-medium">
-                                    Mitigation invoice
-                                  </div>
-                                  <div className="text-xs text-zinc-500 mt-0.5">
-                                    Choose personal LLC or company on the form
-                                  </div>
-                                </button>
-                                {SYSTEM_DOCUMENTS.filter(
-                                  (doc) => doc.id !== 'mitigation'
-                                ).map((doc) => (
-                                  <button
-                                    key={doc.id}
-                                    type="button"
-                                    className="w-full text-left px-4 py-2.5 text-sm text-zinc-800 hover:bg-sky-50"
-                                    onClick={() => {
-                                      setDocAddMenuOpen(false);
-                                      if (doc.id === 'takeoff') {
-                                        setProfileTab('takeoff');
-                                        showToast(
-                                          'Fill the Take-off sheet, then Save + add to Documents'
-                                        );
-                                      } else if (doc.id === 'pricing') {
-                                        setSystemDocWorkspace('pricing');
-                                      }
-                                    }}
-                                  >
-                                    <div className="font-medium text-zinc-800 hover:text-sky-600 transition-colors hover:underline">{doc.name}</div>
-                                    <div className="text-xs text-zinc-500 mt-0.5">
-                                      {doc.description}
-                                    </div>
-                                  </button>
-                                ))}
-                              </div>
-                            )}
+                              
+      {docAddMenuOpen && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setDocAddMenuOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl bg-white border border-zinc-200 shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100">
+              <div className="text-base font-semibold text-zinc-900">Add document</div>
+              <button
+                type="button"
+                className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
+                onClick={() => setDocAddMenuOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+            <div className="p-2">
+              <button
+                type="button"
+                className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
+                onClick={() => {
+                  setDocAddMenuOpen(false);
+                  docInputRef.current?.click();
+                }}
+              >
+                Upload file
+              </button>
+              <button
+                type="button"
+                className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
+                onClick={() => {
+                  setDocAddMenuOpen(false);
+                  openMitigationWorkspace('personal');
+                }}
+              >
+                Mitigation invoice
+              </button>
+              <button
+                type="button"
+                className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
+                onClick={() => {
+                  setDocAddMenuOpen(false);
+                  setSystemDocWorkspace('takeoff');
+                }}
+              >
+                Take-off / Inspection Sheet
+              </button>
+              <button
+                type="button"
+                className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
+                onClick={() => {
+                  setDocAddMenuOpen(false);
+                  setSystemDocWorkspace('pricing');
+                }}
+              >
+                Company pricing
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
                             </div>
                           </div>
 
@@ -14692,7 +14685,7 @@ showToast(
                                 No documents yet
                               </p>
                               <p className="text-sm text-zinc-500 mt-2">
-                                PDFs and signed paperwork will appear here.
+                                Use + Add to upload a file or pick a company document.
                               </p>
                             </div>
                           ) : (
