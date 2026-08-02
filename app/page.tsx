@@ -641,6 +641,11 @@ const SYSTEM_DOCUMENTS = [
     name: 'Company pricing',
     description: 'Sell rates and your costs for field reference',
   },
+  {
+    id: 'mitigation',
+    name: 'Mitigation invoice',
+    description: 'Personal LLC or Company',
+  },
 ] as const;
 
 type TakeoffSheet = {
@@ -1920,7 +1925,12 @@ export default function SummitApp() {
   const [docAddMenuOpen, setDocAddMenuOpen] = useState(false);
   const [systemDocPreview, setSystemDocPreview] = useState<string | null>(null);
   const [systemDocWorkspace, setSystemDocWorkspace] = useState<
-    null | 'takeoff' | 'pricing'
+    | null
+    | 'takeoff'
+    | 'pricing'
+    | 'mitigation'
+    | 'mitigation_personal'
+    | 'mitigation_company'
   >(null);
   const [takeoffAssignOpen, setTakeoffAssignOpen] = useState(false);
   const [takeoffAssignSearch, setTakeoffAssignSearch] = useState('');
@@ -1959,6 +1969,8 @@ export default function SummitApp() {
   const [showMeasureAddressModal, setShowMeasureAddressModal] = useState(false);
   /** Home / nav: pick a lead (or saved estimate) before opening estimator */
   const [showEstimatePicker, setShowEstimatePicker] = useState(false);
+  /** When true, estimate picker is used to choose a lead for a new mitigation invoice */
+  const [invoicePickerMode, setInvoicePickerMode] = useState(false);
   const [estimatePickerQuery, setEstimatePickerQuery] = useState('');
   const [measureAddrStreet, setMeasureAddrStreet] = useState('');
   const [measureAddrCity, setMeasureAddrCity] = useState('');
@@ -2133,8 +2145,107 @@ export default function SummitApp() {
 
   const mitigationInvoiceTitle = (entity: MitigationEntity) =>
     entity === 'prowest'
-      ? 'Company mitigation invoice'
-      : 'Personal mitigation invoice';
+      ? 'Mitigation invoice - company'
+      : 'Mitigation invoice - personal LLC';
+
+  /**
+   * New invoice: always tied to a lead (same idea as estimates).
+   * Only skip the picker when the lead profile is currently open.
+   */
+  const startNewInvoice = () => {
+    setDocAddMenuOpen(false);
+    setShowProfessionalEstimate(false);
+    setShowMeasureAddressModal(false);
+    if (isEditingLead && currentLeadId != null) {
+      openMitigationWorkspace('personal', currentLeadId);
+      return;
+    }
+    // No open lead profile → force lead picker (never open blank invoice)
+    setInvoicePickerMode(true);
+    setEstimatePickerQuery('');
+    setShowEstimatePicker(true);
+  };
+
+  const openMitigationWorkspace = (
+    _kind: 'personal' | 'company' = 'personal',
+    fromLeadId?: number | null
+  ) => {
+    const leadId =
+      fromLeadId != null
+        ? fromLeadId
+        : currentLeadId != null
+          ? currentLeadId
+          : null;
+    // Hard require a lead — never show the form without one
+    if (leadId == null) {
+      setSystemDocWorkspace(null);
+      setMitigationDraft(null);
+      setInvoicePickerMode(true);
+      setEstimatePickerQuery('');
+      setShowEstimatePicker(true);
+      showToast('Select or create a lead first, then create the invoice');
+      return;
+    }
+    const lead = leads.find((l) => l.id === leadId) || null;
+    if (!lead) {
+      showToast('Lead not found');
+      setInvoicePickerMode(true);
+      setShowEstimatePicker(true);
+      return;
+    }
+    const name = [lead.clientFirstName, lead.clientLastName]
+      .filter(Boolean)
+      .join(' ');
+    const addr = [
+      lead.clientAddress,
+      lead.clientCity,
+      lead.clientState,
+      lead.clientZip,
+    ]
+      .filter(Boolean)
+      .join(', ');
+    setCurrentLeadId(leadId);
+    const draft: MitigationInvoiceDraft = {
+      entity: 'roslie',
+      rateMode: 'insurance',
+      invoiceFor: name,
+      location: addr,
+      job: lead.jobNumber || '',
+      claimNumber: '',
+      date: new Date().toLocaleDateString(),
+      lines: [],
+      notes:
+        'Work performed to mitigate any further damages.\nPrice includes materials, labor and roof access / set up.\nPlease forward to Insurance Company for reimbursement.',
+    };
+    setMitigationDraft(draft);
+    setSystemDocWorkspace('mitigation');
+    setShowMitigationInvoice(false);
+    setDocAddMenuOpen(false);
+    setInvoicePickerMode(false);
+    setShowEstimatePicker(false);
+    // Leave lead chrome so the full-page overlay is not gated off.
+    // Do not change activeTab — stay on Invoices/leads/etc. under the overlay.
+    setIsEditingLead(false);
+  };
+
+  // If workspace is set without a draft (e.g. stale state), re-init with lead
+  useEffect(() => {
+    if (
+      (systemDocWorkspace === 'mitigation' ||
+        systemDocWorkspace === 'mitigation_personal' ||
+        systemDocWorkspace === 'mitigation_company') &&
+      !mitigationDraft
+    ) {
+      if (currentLeadId != null) {
+        openMitigationWorkspace('personal', currentLeadId);
+      } else {
+        setSystemDocWorkspace(null);
+        setInvoicePickerMode(true);
+        setShowEstimatePicker(true);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- init draft once when workspace opens empty
+  }, [systemDocWorkspace]);
 
   const openMitigationInvoice = (
     kind: 'personal' | 'company',
@@ -2172,7 +2283,9 @@ export default function SummitApp() {
       setTimeout(() => generateMitigationPdf({ blank: true, entity }), 0);
       return;
     }
-    setShowMitigationInvoice(true);
+    // Full-page workspace (not popup)
+    setSystemDocWorkspace('mitigation');
+    setShowMitigationInvoice(false);
   };
 
   /** Alias used by phase-1 entry points */
@@ -2180,7 +2293,29 @@ export default function SummitApp() {
     if (leadId != null && leadId !== currentLeadId) {
       setCurrentLeadId(leadId);
     }
-    openMitigationInvoice('personal');
+    openMitigationWorkspace('personal');
+  };
+
+  const repriceMitigationLines = (
+    draft: MitigationInvoiceDraft,
+    mode: 'insurance' | 'cash'
+  ): MitigationInvoiceDraft => {
+    const lines = (draft.lines || []).map((ln) => {
+      const row = mitigationPrices.find((r) => r.item_key === ln.itemKey);
+      const unit = row
+        ? mode === 'cash'
+          ? Number(row.cash_retail) || 0
+          : Number(row.insurance_rate) || 0
+        : ln.unitPrice;
+      const qty = Number(ln.qty) || 0;
+      return { ...ln, unitPrice: unit, amount: qty * unit };
+    });
+    return { ...draft, rateMode: mode, lines };
+  };
+
+  const setMitigationRateMode = (mode: 'insurance' | 'cash') => {
+    if (!mitigationDraft) return;
+    setMitigationDraft(repriceMitigationLines(mitigationDraft, mode));
   };
 
   const addMitigationLine = (itemKey: string) => {
@@ -2227,10 +2362,21 @@ export default function SummitApp() {
   const generateMitigationPdf = (opts?: {
     blank?: boolean;
     entity?: MitigationEntity;
+    /** Browser file download */
+    download?: boolean;
+    /** Append PDF to lead Documents + Invoices index */
+    save?: boolean;
   }) => {
     const entity: MitigationEntity =
       opts?.entity || mitigationDraft?.entity || 'roslie';
     const d = mitigationDraft;
+    const blank = opts?.blank === true;
+    // Explicit flags from UI; blank template = download only
+    // Legacy no-opts call: both download + save
+    const legacyBoth =
+      !blank && opts?.download === undefined && opts?.save === undefined;
+    const wantDownload = blank || opts?.download === true || legacyBoth;
+    const wantSave = !blank && (opts?.save === true || legacyBoth);
     const doc = new jsPDF();
     const title = mitigationInvoiceTitle(entity);
     const payable = mitigationPayableTo(entity);
@@ -2341,18 +2487,25 @@ export default function SummitApp() {
     doc.line(14, y + 6, 80, y + 6);
 
     const fileName = `${title.replace(/\s+/g, '_')}_${
-      opts?.blank ? 'BLANK' : d?.job || 'draft'
+      blank ? 'BLANK' : d?.job || 'draft'
     }.pdf`;
     const blob = doc.output('blob');
     const url = URL.createObjectURL(blob);
-    doc.save(fileName);
 
-    if (opts?.blank) {
+    if (wantDownload) {
+      doc.save(fileName);
+    }
+
+    if (blank) {
       showToast('Blank template downloaded');
       return;
     }
 
-    if (currentLeadId != null) {
+    if (wantSave) {
+      if (currentLeadId == null) {
+        showToast('Select a lead before saving the invoice');
+        return;
+      }
       const lead = leads.find((l) => l.id === currentLeadId);
       const leadLabel = lead
         ? [lead.clientFirstName, lead.clientLastName]
@@ -2390,11 +2543,17 @@ export default function SummitApp() {
         url,
       };
       persistAppInvoices([inv, ...appInvoices]);
-      showToast('Invoice saved to lead Documents + Invoices');
-    } else {
+      showToast('Saved to lead Documents + Invoices');
+      // Close form only — do not navigate into lead Documents
+      setShowMitigationInvoice(false);
+      setSystemDocWorkspace(null);
+      setMitigationDraft(null);
+      return;
+    }
+
+    if (wantDownload) {
       showToast('PDF downloaded');
     }
-    setShowMitigationInvoice(false);
   };
 
   // Prices from Supabase `price_sheet` (cached; prefer item_key__region)
@@ -4025,6 +4184,7 @@ export default function SummitApp() {
   const openEstimatePicker = (mode?: EstimateWorkspace) => {
     setShowProfessionalEstimate(false);
     setShowMeasureAddressModal(false);
+    setInvoicePickerMode(false);
     if (mode) setEstimatePickerMode(mode);
     setEstimatePickerQuery('');
     setShowEstimatePicker(true);
@@ -7827,207 +7987,308 @@ showToast(
 
   return (
     <div className="min-h-screen bg-zinc-100 text-zinc-900">
-      {showMitigationInvoice && mitigationDraft && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto border border-zinc-200 p-5">
-            <div className="flex items-center justify-between mb-3">
+
+      {(systemDocWorkspace === 'mitigation' ||
+        systemDocWorkspace === 'mitigation_personal' ||
+        systemDocWorkspace === 'mitigation_company') && (
+        <div className="fixed inset-0 z-[90] bg-zinc-50 overflow-y-auto">
+          <div className="page-shell !py-8 sm:!py-10">
+            <div className="mb-8 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
               <div>
-                <div className="text-lg font-semibold text-zinc-900">
-                  {mitigationDraft.entity === 'prowest'
-                    ? 'Company mitigation invoice'
-                    : 'Personal mitigation invoice'}
-                </div>
-                <div className="text-xs text-zinc-500">
-                  {mitigationDraft.entity === 'prowest'
-                    ? 'ProWest Roofing · typically $1,000+'
-                    : 'Roslie Consulting Firm LLC · typically under $1,000'}
-                </div>
-              </div>
-              <button
-                type="button"
-                className="text-sm text-zinc-500 hover:text-zinc-800"
-                onClick={() => setShowMitigationInvoice(false)}
-              >
-                Close
-              </button>
-            </div>
-            <div className="flex gap-2 mb-3">
-              <button
-                type="button"
-                className={`flex-1 rounded-xl border px-3 py-2 text-sm ${
-                  mitigationDraft.entity === 'roslie'
-                    ? 'border-emerald-500 bg-emerald-50'
-                    : 'border-zinc-200'
-                }`}
-                onClick={() =>
-                  setMitigationDraft({ ...mitigationDraft, entity: 'roslie' })
-                }
-              >
-                Personal
-              </button>
-              <button
-                type="button"
-                className={`flex-1 rounded-xl border px-3 py-2 text-sm ${
-                  mitigationDraft.entity === 'prowest'
-                    ? 'border-emerald-500 bg-emerald-50'
-                    : 'border-zinc-200'
-                }`}
-                onClick={() =>
-                  setMitigationDraft({ ...mitigationDraft, entity: 'prowest' })
-                }
-              >
-                Company
-              </button>
-            </div>
-            <div className="flex gap-2 mb-4">
-              <button
-                type="button"
-                className={`flex-1 rounded-xl border px-3 py-2 text-sm ${
-                  mitigationDraft.rateMode === 'insurance'
-                    ? 'border-sky-400 bg-sky-50'
-                    : 'border-zinc-200'
-                }`}
-                onClick={() =>
-                  setMitigationDraft({
-                    ...mitigationDraft,
-                    rateMode: 'insurance',
-                  })
-                }
-              >
-                Insurance rates
-              </button>
-              <button
-                type="button"
-                className={`flex-1 rounded-xl border px-3 py-2 text-sm ${
-                  mitigationDraft.rateMode === 'cash'
-                    ? 'border-sky-400 bg-sky-50'
-                    : 'border-zinc-200'
-                }`}
-                onClick={() =>
-                  setMitigationDraft({ ...mitigationDraft, rateMode: 'cash' })
-                }
-              >
-                Retail rates
-              </button>
-            </div>
-            <div className="grid gap-2 mb-4 text-sm">
-              <input
-                className="border border-zinc-200 rounded-xl px-3 py-2"
-                placeholder="Invoice for"
-                value={mitigationDraft.invoiceFor}
-                onChange={(e) =>
-                  setMitigationDraft({
-                    ...mitigationDraft,
-                    invoiceFor: e.target.value,
-                  })
-                }
-              />
-              <input
-                className="border border-zinc-200 rounded-xl px-3 py-2"
-                placeholder="Location"
-                value={mitigationDraft.location}
-                onChange={(e) =>
-                  setMitigationDraft({
-                    ...mitigationDraft,
-                    location: e.target.value,
-                  })
-                }
-              />
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  className="border border-zinc-200 rounded-xl px-3 py-2"
-                  placeholder="Job #"
-                  value={mitigationDraft.job}
-                  onChange={(e) =>
-                    setMitigationDraft({
-                      ...mitigationDraft,
-                      job: e.target.value,
-                    })
-                  }
-                />
-                <input
-                  className="border border-zinc-200 rounded-xl px-3 py-2"
-                  placeholder="Claim #"
-                  value={mitigationDraft.claimNumber}
-                  onChange={(e) =>
-                    setMitigationDraft({
-                      ...mitigationDraft,
-                      claimNumber: e.target.value,
-                    })
-                  }
-                />
-              </div>
-            </div>
-            <div className="mb-2 text-xs font-semibold text-zinc-500 uppercase tracking-wide">
-              Add line
-            </div>
-            <div className="flex flex-wrap gap-2 mb-4 max-h-28 overflow-y-auto">
-              {mitigationPrices.length === 0 ? (
-                <p className="text-xs text-zinc-400">
-                  {mitigationPricesReady
-                    ? 'No mitigation items loaded — check Supabase mitigation_price_sheet'
-                    : 'Loading price sheet…'}
-                </p>
-              ) : (
-                mitigationPrices.map((row) => (
-                  <button
-                    key={row.item_key}
-                    type="button"
-                    className="text-xs rounded-full border border-zinc-200 px-2.5 py-1 hover:border-emerald-400"
-                    onClick={() => addMitigationLine(row.item_key)}
-                  >
-                    {row.label}
-                  </button>
-                ))
-              )}
-            </div>
-            <div className="space-y-2 mb-4">
-              {mitigationDraft.lines.map((ln) => (
-                <div key={ln.id} className="flex items-center gap-2 text-sm">
-                  <div className="flex-1 truncate">{ln.label}</div>
-                  <input
-                    type="number"
-                    className="w-16 border border-zinc-200 rounded-lg px-2 py-1"
-                    value={ln.qty}
-                    onChange={(e) =>
-                      updateMitigationLineQty(
-                        ln.id,
-                        parseFloat(e.target.value) || 0
-                      )
+                <button
+                  type="button"
+                  className="text-sm text-zinc-500 hover:text-zinc-800 mb-4"
+                  onClick={() => {
+                    setSystemDocWorkspace(null);
+                    setMitigationDraft(null);
+                    setShowMitigationInvoice(false);
+                    if (currentLeadId != null) {
+                      setIsEditingLead(true);
+                      setProfileTab('documents');
+                      setActiveTab('leads');
                     }
-                  />
-                  <div className="w-20 text-right tabular-nums">
-                    ${ln.amount.toLocaleString()}
+                  }}
+                >
+                  ← Back to documents
+                </button>
+                <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
+                  Mitigation invoice
+                </h1>
+              </div>
+              <button
+                type="button"
+                className="shrink-0 rounded-2xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-900 font-medium px-5 py-3 text-sm"
+                onClick={() =>
+                  generateMitigationPdf({ download: true, save: false })
+                }
+              >
+                Download PDF
+              </button>
+            </div>
+
+            {!mitigationDraft ? (
+              <div className="text-base text-zinc-500">Loading…</div>
+            ) : (
+              <div className="space-y-6">
+                {/* Entity — match estimate product cards */}
+                <div className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
+                  <div className="text-sm font-semibold text-zinc-500 mb-3 tracking-wide">
+                    BILLING ENTITY
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMitigationDraft({
+                          ...mitigationDraft,
+                          entity: 'roslie',
+                        });
+                        setSystemDocWorkspace('mitigation');
+                      }}
+                      className={`text-left rounded-2xl border-2 p-4 transition ${
+                        mitigationDraft.entity === 'roslie'
+                          ? 'border-zinc-900 bg-zinc-50'
+                          : 'border-zinc-200 hover:border-zinc-300'
+                      }`}
+                    >
+                      <div className="font-semibold text-zinc-900 text-base">
+                        Personal
+                      </div>
+                      <div className="text-sm text-zinc-500 mt-1">
+                        Billed through personal LLC
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMitigationDraft({
+                          ...mitigationDraft,
+                          entity: 'prowest',
+                        });
+                        setSystemDocWorkspace('mitigation');
+                      }}
+                      className={`text-left rounded-2xl border-2 p-4 transition ${
+                        mitigationDraft.entity === 'prowest'
+                          ? 'border-zinc-900 bg-zinc-50'
+                          : 'border-zinc-200 hover:border-zinc-300'
+                      }`}
+                    >
+                      <div className="font-semibold text-zinc-900 text-base">
+                        Company
+                      </div>
+                      <div className="text-sm text-zinc-500 mt-1">
+                        Billed through companies LLC
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Rate mode */}
+                <div className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
+                  <div className="text-sm font-semibold text-zinc-500 mb-3 tracking-wide">
+                    PRICING
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setMitigationRateMode('insurance')}
+                      className={`text-left rounded-2xl border-2 p-4 transition ${
+                        mitigationDraft.rateMode === 'insurance'
+                          ? 'border-zinc-900 bg-zinc-50'
+                          : 'border-zinc-200 hover:border-zinc-300'
+                      }`}
+                    >
+                      <div className="font-semibold text-zinc-900 text-base">
+                        Insurance rates
+                      </div>
+                      <div className="text-sm text-zinc-500 mt-1">
+                        Billed to insurance carrier
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMitigationRateMode('cash')}
+                      className={`text-left rounded-2xl border-2 p-4 transition ${
+                        mitigationDraft.rateMode === 'cash'
+                          ? 'border-zinc-900 bg-zinc-50'
+                          : 'border-zinc-200 hover:border-zinc-300'
+                      }`}
+                    >
+                      <div className="font-semibold text-zinc-900 text-base">
+                        Retail rates
+                      </div>
+                      <div className="text-sm text-zinc-500 mt-1">
+                        Cash pricing
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Job fields */}
+                <div className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6 space-y-4">
+                  <div className="text-sm font-semibold text-zinc-500 tracking-wide">
+                    JOB DETAILS
+                  </div>
+                  <div>
+                    <label className="text-sm text-zinc-600">Invoice for</label>
+                    <input
+                      className="mt-1.5 w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base text-zinc-900"
+                      value={mitigationDraft.invoiceFor}
+                      onChange={(e) =>
+                        setMitigationDraft({
+                          ...mitigationDraft,
+                          invoiceFor: e.target.value,
+                        })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm text-zinc-600">Location</label>
+                    <input
+                      className="mt-1.5 w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base text-zinc-900"
+                      value={mitigationDraft.location}
+                      onChange={(e) =>
+                        setMitigationDraft({
+                          ...mitigationDraft,
+                          location: e.target.value,
+                        })
+                      }
+                    />
+                  </div>
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-sm text-zinc-600">Job #</label>
+                      <input
+                        className="mt-1.5 w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base text-zinc-900"
+                        value={mitigationDraft.job}
+                        onChange={(e) =>
+                          setMitigationDraft({
+                            ...mitigationDraft,
+                            job: e.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm text-zinc-600">Claim number</label>
+                      <input
+                        className="mt-1.5 w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base text-zinc-900"
+                        value={mitigationDraft.claimNumber}
+                        onChange={(e) =>
+                          setMitigationDraft({
+                            ...mitigationDraft,
+                            claimNumber: e.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Lines */}
+                <div className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
+                  <div className="text-sm font-semibold text-zinc-500 tracking-wide mb-3">
+                    LINE ITEMS
+                  </div>
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {mitigationPrices.length === 0 ? (
+                      <p className="text-sm text-zinc-400">
+                        {mitigationPricesReady
+                          ? 'No mitigation items loaded — check Supabase mitigation_price_sheet'
+                          : 'Loading price sheet…'}
+                      </p>
+                    ) : (
+                      mitigationPrices.map((row) => (
+                        <button
+                          key={row.item_key}
+                          type="button"
+                          className="text-sm rounded-2xl border border-zinc-200 px-3 py-2 text-zinc-800 hover:border-zinc-400 hover:bg-zinc-50"
+                          onClick={() => addMitigationLine(row.item_key)}
+                        >
+                          {row.label}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                  <div className="space-y-3">
+                    {mitigationDraft.lines.length === 0 && (
+                      <div className="text-base text-zinc-400 py-8 text-center border border-dashed border-zinc-200 rounded-2xl">
+                        Add tarp size and adders above
+                      </div>
+                    )}
+                    {mitigationDraft.lines.map((ln) => (
+                      <div
+                        key={ln.id}
+                        className="flex flex-wrap items-center gap-3 text-base bg-zinc-50 rounded-2xl px-4 py-3"
+                      >
+                        <div className="flex-1 min-w-[8rem] font-medium text-zinc-900">
+                          {ln.label}
+                        </div>
+                        <input
+                          type="number"
+                          className="w-20 border border-zinc-200 rounded-xl px-3 py-2 bg-white text-base"
+                          value={ln.qty}
+                          onChange={(e) =>
+                            updateMitigationLineQty(
+                              ln.id,
+                              parseFloat(e.target.value) || 0
+                            )
+                          }
+                        />
+                        <div className="w-24 text-right tabular-nums font-medium text-zinc-900">
+                          ${ln.amount.toLocaleString()}
+                        </div>
+                        <button
+                          type="button"
+                          className="text-sm text-zinc-500 hover:text-red-600"
+                          onClick={() => removeMitigationLine(ln.id)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Total + separate Download / Save actions */}
+                <div className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="text-base font-semibold text-zinc-600">
+                      Total amount due
+                    </div>
+                    <div className="text-3xl font-semibold text-zinc-900 tabular-nums">
+                      $
+                      {mitigationDraft.lines
+                        .reduce((s, l) => s + (l.amount || 0), 0)
+                        .toLocaleString()}
+                    </div>
                   </div>
                   <button
                     type="button"
-                    className="text-xs text-red-600"
-                    onClick={() => removeMitigationLine(ln.id)}
+                    className="w-full rounded-2xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-900 font-medium py-3.5 text-base"
+                    onClick={() =>
+                      generateMitigationPdf({ download: true, save: false })
+                    }
                   >
-                    Remove
+                    Download PDF
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-white font-medium py-3.5 text-base"
+                    onClick={() =>
+                      generateMitigationPdf({ download: false, save: true })
+                    }
+                  >
+                    Save to lead
                   </button>
                 </div>
-              ))}
-            </div>
-            <div className="flex justify-between border-t border-zinc-100 pt-3 mb-4">
-              <div className="text-sm font-semibold">Total</div>
-              <div className="text-lg font-semibold tabular-nums">
-                $
-                {mitigationDraft.lines
-                  .reduce((s, l) => s + (l.amount || 0), 0)
-                  .toLocaleString()}
               </div>
-            </div>
-            <button
-              type="button"
-              className="w-full rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2.5 text-sm"
-              onClick={() => generateMitigationPdf()}
-            >
-              Download PDF &amp; save to Documents
-            </button>
+            )}
           </div>
         </div>
       )}
+
+
       {toastMessage && (
         <div className="fixed bottom-20 sm:bottom-6 left-1/2 -translate-x-1/2 z-[80] px-6 py-3 bg-zinc-900/95 text-white rounded-2xl shadow-md ring-1 ring-white/10 text-sm font-medium">
           {toastMessage}
@@ -8087,19 +8348,26 @@ showToast(
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h2 className="text-xl font-semibold text-zinc-900">
-                      {estimatePickerMode === 'internal'
-                        ? 'Open Internal'
-                        : 'New estimate'}
+                      {invoicePickerMode
+                        ? 'New invoice'
+                        : estimatePickerMode === 'internal'
+                          ? 'Open Internal'
+                          : 'New estimate'}
                     </h2>
                     <p className="text-sm text-zinc-500 mt-1">
-                      {estimatePickerMode === 'internal'
-                        ? 'Choose a lead for cost, commission, and buffer.'
-                        : 'Choose a lead — contact info is pulled into the estimate.'}
+                      {invoicePickerMode
+                        ? 'Choose a lead — contact and job info fill the invoice.'
+                        : estimatePickerMode === 'internal'
+                          ? 'Choose a lead for cost, commission, and buffer.'
+                          : 'Choose a lead — contact info is pulled into the estimate.'}
                     </p>
                   </div>
                   <button
                     type="button"
-                    onClick={() => setShowEstimatePicker(false)}
+                    onClick={() => {
+                      setShowEstimatePicker(false);
+                      setInvoicePickerMode(false);
+                    }}
                     className="text-sm font-medium text-zinc-500 hover:text-zinc-800 px-2 py-1"
                   >
                     Close
@@ -8108,7 +8376,11 @@ showToast(
                 <input
                   value={estimatePickerQuery}
                   onChange={(e) => setEstimatePickerQuery(e.target.value)}
-                  placeholder="Search leads or estimates…"
+                  placeholder={
+                    invoicePickerMode
+                      ? 'Search leads…'
+                      : 'Search leads or estimates…'
+                  }
                   className="mt-4 w-full border border-zinc-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:border-zinc-400"
                   autoFocus
                 />
@@ -8130,6 +8402,7 @@ showToast(
                         type="button"
                         onClick={() => {
                           setShowEstimatePicker(false);
+                          setInvoicePickerMode(false);
                           createNewLead();
                         }}
                         className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold"
@@ -8152,6 +8425,10 @@ showToast(
                             <button
                               type="button"
                               onClick={() => {
+                                if (invoicePickerMode) {
+                                  openMitigationWorkspace('personal', lead.id);
+                                  return;
+                                }
                                 setShowEstimatePicker(false);
                                 startNewEstimate({
                                   fromLeadId: lead.id,
@@ -8169,7 +8446,7 @@ showToast(
                                     {[lead.clientAddress, lead.clientCity]
                                       .filter(Boolean)
                                       .join(', ') || 'No address'}
-                                    {estCount > 0
+                                    {!invoicePickerMode && estCount > 0
                                       ? ` · ${estCount} estimate${estCount === 1 ? '' : 's'}`
                                       : ''}
                                   </div>
@@ -8186,6 +8463,7 @@ showToast(
                   )}
                 </section>
 
+                {!invoicePickerMode && (
                 <section>
                   <h3 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-2">
                     Saved estimates
@@ -8230,12 +8508,16 @@ showToast(
                     </ul>
                   )}
                 </section>
+                )}
               </div>
 
               <div className="px-5 py-3 border-t border-zinc-100 shrink-0 flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setShowEstimatePicker(false)}
+                  onClick={() => {
+                    setShowEstimatePicker(false);
+                    setInvoicePickerMode(false);
+                  }}
                   className="flex-1 py-2.5 rounded-2xl text-sm font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
                 >
                   Cancel
@@ -8244,6 +8526,7 @@ showToast(
                   type="button"
                   onClick={() => {
                     setShowEstimatePicker(false);
+                    setInvoicePickerMode(false);
                     createNewLead();
                   }}
                   className="flex-1 py-2.5 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50"
@@ -8712,23 +8995,13 @@ showToast(
                 <p className="text-zinc-500 mt-1">All invoices</p>
               </div>
               <div className="flex items-center gap-2">
-                <label className="inline-flex items-center justify-center rounded-2xl border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-800 hover:border-sky-300 hover:text-sky-900 cursor-pointer transition">
-                  Upload invoice
-                  <input
-                    type="file"
-                    accept="application/pdf,image/*"
-                    className="hidden"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) {
-                        showToast(
-                          'Upload to Invoices — storage wire next'
-                        );
-                      }
-                      e.target.value = '';
-                    }}
-                  />
-                </label>
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-center rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-white px-4 py-2.5 text-sm font-medium transition"
+                  onClick={() => startNewInvoice()}
+                >
+                  New invoice
+                </button>
               </div>
             </div>
             <div className="bg-white border border-zinc-200 rounded-3xl overflow-hidden">
@@ -8741,7 +9014,8 @@ showToast(
               </div>
               {appInvoices.length === 0 ? (
                 <div className="p-8 text-center text-sm text-zinc-500">
-                  No invoices yet. Create one from a lead&apos;s Documents.
+                  No invoices yet. New invoice asks you to select or create a lead
+                  first.
                 </div>
               ) : (
                 <ul className="divide-y divide-zinc-100">
@@ -8912,7 +9186,7 @@ showToast(
         })()}
 
         {activeTab === 'documents' && (
-          <div className="pb-8 w-full max-w-3xl">
+          <div className="pb-8 w-full">
             <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
               Documents
             </h1>
@@ -8920,32 +9194,16 @@ showToast(
               System templates you can fill and assign to a job, or add from a
               lead’s Documents tab.
             </p>
-            <div className="flex flex-wrap gap-2 mb-4">
-              <button
-                type="button"
-                className="text-xs rounded-full border border-dashed border-zinc-300 px-3 py-1.5 text-zinc-700 hover:border-emerald-400"
-                onClick={() =>
-                  openMitigationInvoice('personal', { blank: true })
-                }
-              >
-                Blank personal mitigation template
-              </button>
-              <button
-                type="button"
-                className="text-xs rounded-full border border-dashed border-zinc-300 px-3 py-1.5 text-zinc-700 hover:border-emerald-400"
-                onClick={() =>
-                  openMitigationInvoice('company', { blank: true })
-                }
-              >
-                Blank company mitigation template
-              </button>
-            </div>
             <div className="space-y-3">
               {SYSTEM_DOCUMENTS.map((doc) => (
                 <button
                   key={doc.id}
                   type="button"
                   onClick={() => {
+                    if (doc.id === 'mitigation') {
+                      startNewInvoice();
+                      return;
+                    }
                     if (doc.id === 'takeoff') {
                       setTakeoffForm(emptyTakeoff());
                       setSystemDocWorkspace('takeoff');
@@ -8964,12 +9222,10 @@ showToast(
                 </button>
               ))}
             </div>
-            <p className="text-xs text-zinc-400 mt-6">
-              Open Take-off or Company pricing here, or on a lead use Documents →
-              + Add → From system.
-            </p>
           </div>
         )}
+
+
 
         {systemDocWorkspace === 'pricing' && (
         <div className="fixed inset-0 z-[85] bg-zinc-50 overflow-y-auto">
@@ -12238,36 +12494,16 @@ showToast(
               );
               const isFinalMilestone = leadCategory === 'Closed';
 
-              const tabs: { id: ProfileTab; label: string; count?: number }[] = [
+              const tabs: { id: ProfileTab; label: string }[] = [
                 { id: 'overview', label: 'Overview' },
                 { id: 'pipeline', label: 'Pipeline' },
-                {
-                  id: 'measurements',
-                  label: 'Measurements',
-                  count: profileMeasurements.length,
-                },
+                { id: 'measurements', label: 'Measurements' },
                 { id: 'financial', label: 'Financial' },
                 { id: 'insurance', label: 'Insurance' },
-                {
-                  id: 'notes',
-                  label: 'Notes',
-                  count: profileNotes.length,
-                },
-                {
-                  id: 'estimates',
-                  label: 'Estimates',
-                  count: profileEstimates.length,
-                },
-                {
-                  id: 'photos',
-                  label: 'Photos',
-                  count: profilePhotos.length,
-                },
-                {
-                  id: 'documents',
-                  label: 'Documents',
-                  count: profileDocuments.length,
-                },
+                { id: 'notes', label: 'Notes' },
+                { id: 'estimates', label: 'Estimates' },
+                { id: 'photos', label: 'Photos' },
+                { id: 'documents', label: 'Documents' },
               ];
 
               const fieldClass =
@@ -12318,17 +12554,6 @@ showToast(
                                 }`}
                               >
                                 {tab.label}
-                                {typeof tab.count === 'number' && tab.count > 0 && (
-                                  <span
-                                    className={`ml-1.5 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 rounded-full text-xs ${
-                                      active
-                                        ? 'bg-zinc-700 text-white'
-                                        : 'bg-zinc-200 text-zinc-700'
-                                    }`}
-                                  >
-                                    {tab.count}
-                                  </span>
-                                )}
                               </button>
                             );
                           })}
@@ -14278,40 +14503,6 @@ showToast(
 
                       {profileTab === 'documents' && (
                         <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
-                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-5">
-                            <div>
-                              <h2 className="text-lg font-semibold text-zinc-900">
-                                Documents
-                              </h2>
-                              <p className="text-sm text-zinc-500 mt-0.5">
-                                Contracts, insurance letters, PDFs…
-                              </p>
-                            </div>
-                            {profileDocuments.length > 0 && (
-                              <div className="text-sm font-medium text-zinc-600 bg-zinc-100 border border-zinc-200 rounded-xl px-3 py-1.5 self-start">
-                                {profileDocuments.length.toLocaleString()} document
-                                {profileDocuments.length !== 1 ? 's' : ''}
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="flex flex-wrap gap-2 mb-4">
-                            <button
-                              type="button"
-                              className="text-xs rounded-full border border-zinc-200 px-3 py-1.5 hover:border-emerald-400"
-                              onClick={() => openMitigationInvoice('personal')}
-                            >
-                              Personal mitigation invoice
-                            </button>
-                            <button
-                              type="button"
-                              className="text-xs rounded-full border border-zinc-200 px-3 py-1.5 hover:border-emerald-400"
-                              onClick={() => openMitigationInvoice('company')}
-                            >
-                              Company mitigation invoice
-                            </button>
-                          </div>
-
                           <input
                             ref={docInputRef}
                             type="file"
@@ -14326,17 +14517,26 @@ showToast(
                             }}
                           />
 
-                          <div className="mb-4 relative">
-                            <button
-                              type="button"
-                              disabled={docsUploading}
-                              onClick={() => setDocAddMenuOpen((o) => !o)}
-                              className="px-5 py-2.5 rounded-2xl text-sm font-medium bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50"
-                            >
-                              {docsUploading ? 'Uploading…' : '+ Add'}
-                            </button>
-                            {docAddMenuOpen && (
-                              <div className="absolute left-0 sm:left-auto sm:right-0 mt-2 w-64 rounded-2xl border border-zinc-200 bg-white shadow-lg z-20 py-1">
+                          <div className="flex items-start justify-between gap-3 mb-5">
+                            <div>
+                              <h2 className="text-lg font-semibold text-zinc-900">
+                                Documents
+                              </h2>
+                              <p className="text-sm text-zinc-500 mt-0.5">
+                                Contracts, insurance letters, PDFs…
+                              </p>
+                            </div>
+                            <div className="relative shrink-0">
+                              <button
+                                type="button"
+                                disabled={docsUploading}
+                                onClick={() => setDocAddMenuOpen((o) => !o)}
+                                className="px-5 py-2.5 rounded-2xl text-sm font-medium bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50"
+                              >
+                                {docsUploading ? 'Uploading…' : '+ Add'}
+                              </button>
+                              {docAddMenuOpen && (
+                              <div className="absolute right-0 mt-2 w-64 rounded-2xl border border-zinc-200 bg-white shadow-lg z-20 py-1">
                                 <button
                                   type="button"
                                   className="w-full text-left px-4 py-2.5 text-sm text-zinc-800 hover:bg-sky-50"
@@ -14350,7 +14550,26 @@ showToast(
                                 <div className="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wide text-zinc-400">
                                   From system
                                 </div>
-                                {SYSTEM_DOCUMENTS.map((doc) => (
+                                <button
+                                  type="button"
+                                  className="w-full text-left px-4 py-2.5 text-sm text-zinc-800 hover:bg-sky-50"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    setDocAddMenuOpen(false);
+                                    openMitigationWorkspace('personal');
+                                  }}
+                                >
+                                  <div className="font-medium">
+                                    Mitigation invoice
+                                  </div>
+                                  <div className="text-xs text-zinc-500 mt-0.5">
+                                    Choose personal LLC or company on the form
+                                  </div>
+                                </button>
+                                {SYSTEM_DOCUMENTS.filter(
+                                  (doc) => doc.id !== 'mitigation'
+                                ).map((doc) => (
                                   <button
                                     key={doc.id}
                                     type="button"
@@ -14362,6 +14581,8 @@ showToast(
                                         showToast(
                                           'Fill the Take-off sheet, then Save + add to Documents'
                                         );
+                                      } else if (doc.id === 'pricing') {
+                                        setSystemDocWorkspace('pricing');
                                       }
                                     }}
                                   >
@@ -14373,6 +14594,7 @@ showToast(
                                 ))}
                               </div>
                             )}
+                            </div>
                           </div>
 
                           {profileDocuments.length === 0 ? (
