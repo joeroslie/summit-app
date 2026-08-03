@@ -801,15 +801,23 @@ type MitigationPriceRow = {
   cash_retail: number | null;
 };
 
+/** Mitigation cost from Supabase mitigation_cost_sheet (internal calc twin) */
+type MitigationCostRow = {
+  item_key: string;
+  label: string;
+  category: string;
+  unit: string | null;
+  cost: number | null;
+  notes: string | null;
+  sort_order: number | null;
+};
 
 const MITIGATION_LINE_GROUPS: {
-  id: string;
-  label: string;
+  group: string;
   items: { itemKey: string; label: string }[];
 }[] = [
   {
-    id: 'trips',
-    label: 'Trip charges',
+    group: 'Trip charges',
     items: [
       { itemKey: 'trip_planned', label: 'Planned trip' },
       { itemKey: 'trip_emergency', label: 'Emergency trip' },
@@ -817,46 +825,137 @@ const MITIGATION_LINE_GROUPS: {
     ],
   },
   {
-    id: 'tarps',
-    label: 'Tarps',
+    group: 'Tarps',
     items: [
       { itemKey: 'tarp_6x8', label: 'Tarp 6×8' },
+      { itemKey: 'tarp_8x10', label: 'Tarp 8×10' },
       { itemKey: 'tarp_10x12', label: 'Tarp 10×12' },
-      { itemKey: 'tarp_20x20', label: 'Tarp 20×20' },
+      { itemKey: 'tarp_12x16', label: 'Tarp 12×16' },
+      { itemKey: 'tarp_16x20', label: 'Tarp 16×20' },
       { itemKey: 'tarp_20x30', label: 'Tarp 20×30' },
-      { itemKey: 'tarp_30x30', label: 'Tarp 30×30' },
+      { itemKey: 'tarp_30x50', label: 'Tarp 30×50' },
+      { itemKey: 'tarp_40x60', label: 'Tarp 40×60' },
     ],
   },
   {
-    id: 'obstruction',
-    label: 'Obstruction manipulation',
+    group: 'Obstruction',
     items: [
-      { itemKey: 'obstruction_hvac', label: 'Obstruction — HVAC' },
-      { itemKey: 'obstruction_pipe_jack', label: 'Obstruction — pipe jack' },
-      { itemKey: 'obstruction_vent', label: 'Obstruction — vent' },
-      { itemKey: 'obstruction_skylight', label: 'Obstruction — skylight' },
-      { itemKey: 'obstruction_other', label: 'Obstruction — other' },
+      { itemKey: 'obstruction', label: 'Obstruction manipulation' },
     ],
   },
   {
-    id: 'install',
-    label: 'Install',
+    group: 'Install',
     items: [
-      { itemKey: 'install_standard', label: 'Standard tarp install' },
-      { itemKey: 'install_detach_reset', label: 'Detach & reset' },
-      { itemKey: 'install_multi', label: 'Multi-tarp install' },
+      { itemKey: 'eave_rake_install', label: 'Eave / rake install' },
+      { itemKey: 'ridge_install', label: 'Ridge install' },
+      { itemKey: 'valley_install', label: 'Valley install' },
+      { itemKey: 'fascia_wrap', label: 'Fascia wrap / tuck' },
     ],
   },
   {
-    id: 'adders',
-    label: 'Adders',
+    group: 'Adders',
     items: [
-      { itemKey: 'battens', label: 'Battens' },
-      { itemKey: 'steep', label: 'Steep charge' },
-      { itemKey: 'two_story', label: 'Two-story' },
+      { itemKey: 'batten_furring_1x2x8', label: 'Batten — furring 1×2×8' },
+      { itemKey: 'batten_pt_1x2x8', label: 'Batten — PT 1×2×8' },
+      { itemKey: 'batten_select_1x2x8', label: 'Batten — select KD 1×2×8' },
+      { itemKey: 'steep_7_12', label: 'Steep charge 7/12+' },
+      { itemKey: 'two_plus_story', label: '2+ story' },
+      { itemKey: 'adder_extreme_heat', label: 'Extreme heat' },
     ],
   },
 ];
+
+
+type MitigationCatalogItem = { itemKey: string; label: string };
+
+/** Estimate-style select + Add for non-tarp groups */
+function MitigationGroupAddRow({
+  items,
+  onAdd,
+}: {
+  items: { itemKey: string; label: string }[];
+  onAdd: (itemKey: string, label: string) => void;
+}) {
+  const [key, setKey] = useState('');
+  return (
+    <div className="flex items-center gap-2">
+      <select
+        value={key}
+        onChange={(e) => setKey(e.target.value)}
+        className="min-w-0 flex-1 border border-zinc-200 rounded-2xl px-3 py-2.5 text-sm text-zinc-900 bg-white"
+      >
+        <option value="">Select…</option>
+        {items.map((it) => (
+          <option key={it.itemKey} value={it.itemKey}>
+            {it.label}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        disabled={!key}
+        onClick={() => {
+          const it = items.find((i) => i.itemKey === key);
+          if (!it) return;
+          onAdd(it.itemKey, it.label);
+          setKey('');
+        }}
+        className="shrink-0 rounded-full bg-sky-500 text-white text-sm font-semibold px-5 py-2.5 hover:bg-sky-600 disabled:opacity-40 transition-colors"
+      >
+        Add
+      </button>
+    </div>
+  );
+}
+
+/** Tarp size + blue/brown type (cost only) + Add */
+function MitigationTarpAddRow({
+  items,
+  onAdd,
+}: {
+  items: { itemKey: string; label: string }[];
+  onAdd: (itemKey: string, label: string, tarpType: 'blue' | 'brown') => void;
+}) {
+  const [key, setKey] = useState('');
+  const [tarpType, setTarpType] = useState<'blue' | 'brown'>('blue');
+  return (
+    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+      <select
+        value={key}
+        onChange={(e) => setKey(e.target.value)}
+        className="min-w-0 flex-1 border border-zinc-200 rounded-2xl px-3 py-2.5 text-sm text-zinc-900 bg-white"
+      >
+        <option value="">Size…</option>
+        {items.map((it) => (
+          <option key={it.itemKey} value={it.itemKey}>
+            {it.label}
+          </option>
+        ))}
+      </select>
+      <select
+        value={tarpType}
+        onChange={(e) => setTarpType(e.target.value as 'blue' | 'brown')}
+        className="min-w-0 sm:w-40 border border-zinc-200 rounded-2xl px-3 py-2.5 text-sm text-zinc-900 bg-white"
+      >
+        <option value="blue">Blue medium</option>
+        <option value="brown">Brown heavy</option>
+      </select>
+      <button
+        type="button"
+        disabled={!key}
+        onClick={() => {
+          const it = items.find((i) => i.itemKey === key);
+          if (!it) return;
+          onAdd(it.itemKey, it.label, tarpType);
+          setKey('');
+        }}
+        className="shrink-0 rounded-full bg-sky-500 text-white text-sm font-semibold px-5 py-2.5 hover:bg-sky-600 disabled:opacity-40 transition-colors"
+      >
+        Add
+      </button>
+    </div>
+  );
+}
 
 type MitigationEntity = 'roslie' | 'prowest';
 
@@ -867,6 +966,8 @@ type MitigationLineItem = {
   qty: number;
   unitPrice: number;
   amount: number;
+  /** Tarp material type — cost only, never on PDF */
+  tarpType?: 'blue' | 'brown' | null;
 };
 
 /** Saved invoice index (local; PDF also on lead documents). */
@@ -2112,6 +2213,11 @@ export default function SummitApp() {
     []
   );
   const [mitigationPricesReady, setMitigationPricesReady] = useState(false);
+  /** Mitigation cost sheet (internal calc twin of sell rates) */
+  const [mitigationCosts, setMitigationCosts] = useState<MitigationCostRow[]>(
+    []
+  );
+  const [mitigationCostsReady, setMitigationCostsReady] = useState(false);
   const [showMitigationInvoice, setShowMitigationInvoice] = useState(false);
   const [mitigationDraft, setMitigationDraft] =
     useState<MitigationInvoiceDraft | null>(null);
@@ -2465,7 +2571,44 @@ export default function SummitApp() {
     return undefined;
   };
 
-  const addMitigationCatalogLine = (itemKey: string, label: string) => {
+  const mitigationCostForKey = (itemKey: string): number | null => {
+    if (!itemKey) return null;
+    const row = mitigationCosts.find((r) => r.item_key === itemKey);
+    if (!row || row.cost == null || Number.isNaN(Number(row.cost))) return null;
+    return Number(row.cost);
+  };
+
+  const mitigationCostKeyForLine = (line: {
+    itemKey: string;
+    tarpType?: 'blue' | 'brown' | null;
+  }) => {
+    if (
+      line.itemKey?.startsWith('tarp_') &&
+      (line.tarpType === 'blue' || line.tarpType === 'brown')
+    ) {
+      // sell key tarp_6x8 → cost key tarp_blue_6x8 / tarp_brown_6x8
+      const size = line.itemKey.replace(/^tarp_/, '');
+      return `tarp_${line.tarpType}_${size}`;
+    }
+    return line.itemKey;
+  };
+
+  const mitigationLineCost = (line: {
+    itemKey: string;
+    qty: number;
+    tarpType?: 'blue' | 'brown' | null;
+  }) => {
+    const key = mitigationCostKeyForLine(line);
+    const unit = mitigationCostForKey(key);
+    if (unit == null) return null;
+    return unit * (Number(line.qty) || 0);
+  };
+
+  const addMitigationCatalogLine = (
+    itemKey: string,
+    label: string,
+    tarpType?: 'blue' | 'brown' | null,
+  ) => {
     if (!mitigationDraft) return;
     const row = mitigationPriceForKey(itemKey);
     const mode = mitigationDraft.rateMode || 'insurance';
@@ -2474,19 +2617,27 @@ export default function SummitApp() {
         ? Number(row.cash_retail) || 0
         : Number(row.insurance_rate) || 0
       : 0;
+    const isTarp = itemKey.startsWith('tarp_');
+    const typeLabel =
+      isTarp && tarpType === 'brown'
+        ? ' (brown)'
+        : isTarp && tarpType === 'blue'
+          ? ' (blue)'
+          : '';
     const line: MitigationLineItem = {
-      id: `${Date.now()}-${itemKey}`,
+      id: `${Date.now()}-${itemKey}-${tarpType || 'x'}`,
       itemKey,
-      label: row?.label || label,
+      label: `${row?.label || label}${typeLabel}`,
       qty: 1,
       unitPrice: unit,
       amount: unit,
+      tarpType: isTarp ? tarpType || 'blue' : null,
     };
     setMitigationDraft({
       ...mitigationDraft,
       lines: [...mitigationDraft.lines, line],
     });
-  };;
+  };
 
   const addMitigationLine = (itemKey: string) => {
     if (!mitigationDraft) return;
@@ -3608,10 +3759,59 @@ export default function SummitApp() {
             }
             setMitigationPricesReady(true);
           });
+
+        // mitigation costs (internal only — never on invoice/PDF)
+        void (async () => {
+          try {
+            const { data, error } = await supabase
+              .from('mitigation_cost_sheet')
+              .select(
+                'item_key, label, category, unit, cost, notes, sort_order'
+              )
+              .eq('active', true)
+              .order('sort_order', { ascending: true });
+            if (error) throw error;
+            setMitigationCosts(
+              Array.isArray(data)
+                ? data.map(
+                    (r: {
+                      item_key?: string;
+                      label?: string;
+                      category?: string;
+                      unit?: string | null;
+                      cost?: number | null;
+                      notes?: string | null;
+                      sort_order?: number | null;
+                    }) => ({
+                      item_key: String(r.item_key || ''),
+                      label: String(r.label || r.item_key || ''),
+                      category: String(r.category || ''),
+                      unit: r.unit == null ? null : String(r.unit),
+                      cost: r.cost == null ? null : Number(r.cost),
+                      notes: r.notes == null ? null : String(r.notes),
+                      sort_order:
+                        r.sort_order == null ? null : Number(r.sort_order),
+                    })
+                  )
+                : []
+            );
+            console.log(
+              'Loaded',
+              Array.isArray(data) ? data.length : 0,
+              'mitigation costs from Supabase'
+            );
+          } catch (e) {
+            console.error('mitigation_cost_sheet fetch', e);
+            setMitigationCosts([]);
+          } finally {
+            setMitigationCostsReady(true);
+          }
+        })();
       } else {
         setPricesReady(true);
         setCostsReady(true);
         setMitigationPricesReady(true);
+        setMitigationCostsReady(true);
       }
 
       setEstimateDate(
@@ -8380,31 +8580,138 @@ showToast(
                   
            <div className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm">
                   <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-3">
-                    Line Items
+                    Line items
                   </div>
 
-                  <div className="space-y-5 mb-5">
-                    {MITIGATION_LINE_GROUPS.map((group) => (
-                      <div key={group.id}>
-                        <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 mb-2">
-                          {group.label}
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {group.items.map((it) => (
-                            <button
-                              key={it.itemKey}
-                              type="button"
-                              className="rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm text-zinc-800 hover:border-sky-500 hover:text-sky-700 transition-colors"
-                              onClick={() =>
-                                addMitigationCatalogLine(it.itemKey, it.label)
+                  {/* Catalog */}
+                  <div className="space-y-4 mb-6">
+                    {/* Row: Trip | Install */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4">
+                      {(['Trip charges', 'Install'] as const).map((name) => {
+                        const group = MITIGATION_LINE_GROUPS.find(
+                          (g) => g.group === name
+                        );
+                        if (!group) return null;
+                        return (
+                          <div key={name} className="space-y-1.5 min-w-0">
+                            <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
+                              {group.group}
+                            </div>
+                            <MitigationGroupAddRow
+                              items={group.items}
+                              onAdd={(itemKey, label) =>
+                                addMitigationCatalogLine(itemKey, label)
                               }
-                            >
-                              {it.label}
-                            </button>
-                          ))}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Tarps — full width so size + type + Add share one row */}
+                    {(() => {
+                      const group = MITIGATION_LINE_GROUPS.find(
+                        (g) => g.group === 'Tarps'
+                      );
+                      if (!group) return null;
+                      return (
+                        <div className="space-y-1.5">
+                          <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
+                            {group.group}
+                          </div>
+                          <MitigationTarpAddRow
+                            items={group.items}
+                            onAdd={(itemKey, label, tarpType) =>
+                              addMitigationCatalogLine(
+                                itemKey,
+                                label,
+                                tarpType
+                              )
+                            }
+                          />
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })()}
+
+                    {/* Row: Adders | Obstruction */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4">
+                      {(() => {
+                        const group = MITIGATION_LINE_GROUPS.find(
+                          (g) => g.group === 'Adders'
+                        );
+                        if (!group) return null;
+                        return (
+                          <div className="space-y-1.5 min-w-0">
+                            <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
+                              {group.group}
+                            </div>
+                            <MitigationGroupAddRow
+                              items={group.items}
+                              onAdd={(itemKey, label) =>
+                                addMitigationCatalogLine(itemKey, label)
+                              }
+                            />
+                          </div>
+                        );
+                      })()}
+
+                      {(() => {
+                        const group = MITIGATION_LINE_GROUPS.find(
+                          (g) => g.group === 'Obstruction'
+                        );
+                        if (!group) return null;
+                        const it = group.items[0];
+                        const on = !!mitigationDraft?.lines.some(
+                          (l) => l.itemKey === it.itemKey
+                        );
+                        return (
+                          <div className="space-y-1.5 min-w-0">
+                            <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
+                              {group.group}
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!on)
+                                    addMitigationCatalogLine(
+                                      it.itemKey,
+                                      it.label
+                                    );
+                                }}
+                                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-colors ${
+                                  on
+                                    ? 'bg-sky-500 text-white'
+                                    : 'border-2 border-sky-500 bg-white text-sky-600 hover:bg-sky-500 hover:text-white'
+                                }`}
+                              >
+                                Yes
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (on && mitigationDraft) {
+                                    setMitigationDraft({
+                                      ...mitigationDraft,
+                                      lines: mitigationDraft.lines.filter(
+                                        (l) => l.itemKey !== it.itemKey
+                                      ),
+                                    });
+                                  }
+                                }}
+                                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-colors ${
+                                  !on
+                                    ? 'bg-sky-500 text-white'
+                                    : 'border-2 border-sky-500 bg-white text-sky-600 hover:bg-sky-500 hover:text-white'
+                                }`}
+                              >
+                                No
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
                   </div>
 
 
@@ -8466,7 +8773,7 @@ showToast(
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <button
                       type="button"
-                      className="w-full rounded-2xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-800 font-medium py-3.5 text-base transition-colors"
+                      className="w-full shrink-0 rounded-full border-2 border-sky-500 bg-white text-sky-600 text-sm font-semibold px-5 py-2.5 hover:bg-sky-500 hover:text-white transition-colors"
                       onClick={() =>
                         generateMitigationPdf({ download: true, save: false })
                       }
@@ -8475,7 +8782,7 @@ showToast(
                     </button>
                     <button
                       type="button"
-                      className="w-full rounded-2xl border-2 border-sky-500 bg-white hover:bg-sky-50 text-sky-700 font-medium py-3.5 text-base transition"
+                      className="w-full shrink-0 rounded-full bg-sky-500 text-white text-sm font-semibold px-5 py-2.5 hover:bg-sky-600 disabled:opacity-40 transition-colors"
                       onClick={() =>
                         generateMitigationPdf({ download: false, save: true })
                       }
