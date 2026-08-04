@@ -900,7 +900,7 @@ function MitigationGroupAddRow({
           onAdd(it.itemKey, it.label);
           setKey('');
         }}
-        className="shrink-0 rounded-full bg-sky-500 text-white text-sm font-semibold px-5 py-2.5 hover:bg-sky-600 disabled:opacity-40 transition-colors"
+        className="shrink-0 rounded-full border-2 border-sky-500 bg-white text-sky-700 text-sm font-semibold px-5 py-2.5 hover:bg-sky-50 disabled:opacity-40 transition-colors"
       >
         Add
       </button>
@@ -949,7 +949,7 @@ function MitigationTarpAddRow({
           onAdd(it.itemKey, it.label, tarpType);
           setKey('');
         }}
-        className="shrink-0 rounded-full bg-sky-500 text-white text-sm font-semibold px-5 py-2.5 hover:bg-sky-600 disabled:opacity-40 transition-colors"
+        className="shrink-0 rounded-full border-2 border-sky-500 bg-white text-sky-700 text-sm font-semibold px-5 py-2.5 hover:bg-sky-50 disabled:opacity-40 transition-colors"
       >
         Add
       </button>
@@ -8679,10 +8679,10 @@ showToast(
                                       it.label
                                     );
                                 }}
-                                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-colors ${
+                                className={`rounded-2xl border-2 px-5 py-2.5 text-sm font-semibold transition ${
                                   on
-                                    ? 'bg-sky-500 text-white'
-                                    : 'border-2 border-sky-500 bg-white text-sky-600 hover:bg-sky-500 hover:text-white'
+                                    ? 'border-sky-500 bg-sky-50 text-sky-800'
+                                    : 'border-zinc-200 bg-white text-zinc-700 hover:border-sky-300'
                                 }`}
                               >
                                 Yes
@@ -8699,10 +8699,10 @@ showToast(
                                     });
                                   }
                                 }}
-                                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-colors ${
+                                className={`rounded-2xl border-2 px-5 py-2.5 text-sm font-semibold transition ${
                                   !on
-                                    ? 'bg-sky-500 text-white'
-                                    : 'border-2 border-sky-500 bg-white text-sky-600 hover:bg-sky-500 hover:text-white'
+                                    ? 'border-sky-500 bg-sky-50 text-sky-800'
+                                    : 'border-zinc-200 bg-white text-zinc-700 hover:border-sky-300'
                                 }`}
                               >
                                 No
@@ -8773,7 +8773,7 @@ showToast(
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <button
                       type="button"
-                      className="w-full shrink-0 rounded-full border-2 border-sky-500 bg-white text-sky-600 text-sm font-semibold px-5 py-2.5 hover:bg-sky-500 hover:text-white transition-colors"
+                      className="w-full rounded-2xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-800 font-medium py-3.5 text-base transition-colors"
                       onClick={() =>
                         generateMitigationPdf({ download: true, save: false })
                       }
@@ -8782,7 +8782,7 @@ showToast(
                     </button>
                     <button
                       type="button"
-                      className="w-full shrink-0 rounded-full bg-sky-500 text-white text-sm font-semibold px-5 py-2.5 hover:bg-sky-600 disabled:opacity-40 transition-colors"
+                      className="w-full rounded-2xl border-2 border-sky-500 bg-white hover:bg-sky-50 text-sky-700 font-medium py-3.5 text-base transition"
                       onClick={() =>
                         generateMitigationPdf({ download: false, save: true })
                       }
