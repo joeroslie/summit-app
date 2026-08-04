@@ -70,6 +70,19 @@ html[data-theme="night"] {
   --color-zinc-900: oklch(96.7% 0.001 286.375);
   --color-zinc-950: oklch(98.5% 0 0);
 
+  /* Slate inverted too (Trash + a few screens used slate; was unreadable in night) */
+  --color-slate-50: oklch(14.1% 0.005 285.823);
+  --color-slate-100: oklch(18% 0.005 286);
+  --color-slate-200: oklch(27.4% 0.006 286.033);
+  --color-slate-300: oklch(37% 0.013 285.805);
+  --color-slate-400: oklch(55.2% 0.016 285.938);
+  --color-slate-500: oklch(70.5% 0.015 286.067);
+  --color-slate-600: oklch(78% 0.01 286);
+  --color-slate-700: oklch(87.1% 0.006 286.286);
+  --color-slate-800: oklch(92% 0.004 286.32);
+  --color-slate-900: oklch(96.7% 0.001 286.375);
+  --color-slate-950: oklch(98.5% 0 0);
+
   /* Soft washes → deep tinted panels */
   --color-emerald-50: oklch(22% 0.04 160);
   --color-emerald-100: oklch(26% 0.05 160);
@@ -191,6 +204,12 @@ button,
   box-shadow: none !important;
   background: transparent !important;
   color: #0ea5e9 !important;
+}
+/* Larger twin for full-width footers (takeoff / mitigation) */
+.btn-primary.btn-primary-lg {
+  padding: 14px 32px !important;
+  font-size: 1rem !important;
+  font-weight: 600 !important;
 }
 /* Night: slightly brighter outline */
 html[data-theme="night"] .btn-primary {

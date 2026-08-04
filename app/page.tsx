@@ -59,6 +59,8 @@ type AppTab =
   | 'settings';
 /** Customer estimate form vs internal financials (inside lead profile). */
 type EstimateWorkspace = 'estimate' | 'internal';
+/** Mitigation invoice form vs internal margin calc (no buffer). */
+type MitigationWorkspace = 'invoice' | 'internal';
 
 /** Primary app destinations (sidebar). Estimator stays lead-profile only. */
 const APP_TABS: AppTab[] = [
@@ -74,6 +76,12 @@ const APP_TABS: AppTab[] = [
 ];
 
 const NEGOTIATION_BUFFER_CAP = 3500;
+/** Mitigation discount room off list sell total (small field discounts). */
+const MITIGATION_BUFFER_CAP = 500;
+/** Desktop sidebar widths — expanded labels vs icon rail */
+const SIDEBAR_WIDTH_EXPANDED = '15.5rem';
+const SIDEBAR_WIDTH_COLLAPSED = '4.25rem';
+const SIDEBAR_COLLAPSED_KEY = 'summitSidebarCollapsed';
 
 const DEFAULT_USER_PROFILE = {
   name: 'Joe Roslie',
@@ -840,21 +848,31 @@ const MITIGATION_LINE_GROUPS: {
   {
     group: 'Obstruction',
     items: [
-      { itemKey: 'obstruction', label: 'Obstruction manipulation' },
+      { itemKey: 'obst_pipe_jack', label: 'Pipejack' },
+      { itemKey: 'obst_ttop_vent', label: 'T-Top vent' },
+      { itemKey: 'obst_hvac', label: 'HVAC unit' },
+      { itemKey: 'obst_skylight', label: 'Skylight' },
     ],
   },
   {
     group: 'Install',
     items: [
-      { itemKey: 'eave_rake_install', label: 'Eave / rake install' },
-      { itemKey: 'ridge_install', label: 'Ridge install' },
-      { itemKey: 'valley_install', label: 'Valley install' },
-      { itemKey: 'fascia_wrap', label: 'Fascia wrap / tuck' },
+      { itemKey: 'ridge_install', label: 'On ridge' },
+      { itemKey: 'valley_install', label: 'In valley' },
+      { itemKey: 'hip_install', label: 'Around hip' },
+      { itemKey: 'eave_install', label: 'On eave' },
+      { itemKey: 'rake_install', label: 'On rake' },
+      { itemKey: 'shingle_tuck', label: 'Shingle tuck' },
+      // Fascia edges — same dropdown, distinct from location “On eave / On rake”
+      { itemKey: 'fascia_wrap:eave', label: 'Fascia wrap on eave' },
+      { itemKey: 'fascia_wrap:rake', label: 'Fascia wrap on rake' },
+      { itemKey: 'fascia_wrap:eave_rake', label: 'Fascia wrap on eave and rake' },
     ],
   },
   {
     group: 'Adders',
     items: [
+      { itemKey: 'sandbag_25lb', label: 'Sandbag (25 lb)' },
       { itemKey: 'batten_furring_1x2x8', label: 'Batten — furring 1×2×8' },
       { itemKey: 'batten_pt_1x2x8', label: 'Batten — PT 1×2×8' },
       { itemKey: 'batten_select_1x2x8', label: 'Batten — select KD 1×2×8' },
@@ -867,6 +885,109 @@ const MITIGATION_LINE_GROUPS: {
 
 
 type MitigationCatalogItem = { itemKey: string; label: string };
+
+/** Fascia wrap edge — not a qty; eave+rake bills 2× rate, labeled clearly. */
+type FasciaEdge = 'eave' | 'rake' | 'eave_rake';
+
+/** Customer-facing description for mitigation lines (UI + printable PDF). */
+function formatMitigationLineDescription(line: {
+  itemKey: string;
+  label?: string;
+  qty?: number;
+  tarpType?: 'blue' | 'brown' | null;
+  fasciaEdge?: FasciaEdge | null;
+}): string {
+  const key = line.itemKey || '';
+  const qty = Number(line.qty) || 1;
+  const qtyPrefix = qty !== 1 ? `${qty}× ` : '';
+
+  if (key.startsWith('tarp_')) {
+    const size = key.replace(/^tarp_/, '').replace(/x/gi, '×');
+    const material =
+      line.tarpType === 'brown'
+        ? 'brown heavy'
+        : line.tarpType === 'blue'
+          ? 'blue medium'
+          : 'tarp';
+    return `Installed ${qtyPrefix}${size} ${material} tarp`;
+  }
+
+  if (key.startsWith('batten_')) {
+    const batten =
+      key.includes('furring')
+        ? 'furring 1×2×8 battens'
+        : key.includes('pt')
+          ? 'PT 1×2×8 battens'
+          : key.includes('select')
+            ? 'select KD 1×2×8 battens'
+            : 'battens';
+    return `Secured tarp from high winds with ${qtyPrefix}${batten}`;
+  }
+
+  if (key === 'fascia_wrap') {
+    const where =
+      line.fasciaEdge === 'eave'
+        ? ' on eave'
+        : line.fasciaEdge === 'rake'
+          ? ' on rake'
+          : line.fasciaEdge === 'eave_rake'
+            ? ' on eave and rake'
+            : '';
+    return `Fascia wrap${where}`;
+  }
+
+  if (key === 'hip_install') {
+    return qty === 1 ? 'Installed around 1 hip' : `Installed around ${qty} hips`;
+  }
+
+  if (key === 'shingle_tuck') {
+    return qty !== 1 ? `Shingle tuck × ${qty}` : 'Shingle tuck';
+  }
+
+  if (key === 'sandbag_25lb') {
+    return qty !== 1
+      ? `Sandbags — 25 lb × ${qty}`
+      : 'Sandbag — 25 lb';
+  }
+
+  if (key.startsWith('obst_') || key === 'obstruction') {
+    const kind: Record<string, string> = {
+      obst_pipe_jack: 'pipejack',
+      obst_pipe: 'pipejack', // legacy
+      obst_jack: 'pipejack', // legacy
+      obst_ttop_vent: 'T-Top vent',
+      obst_vent: 'vent',
+      obst_hvac: 'HVAC unit',
+      obst_skylight: 'skylight',
+      obst_other: 'other',
+      obstruction: 'obstruction',
+    };
+    const what = kind[key] || 'obstruction';
+    const base =
+      key === 'obstruction'
+        ? 'Obstruction manipulation'
+        : `Obstruction manipulation — ${what}`;
+    return qty !== 1 ? `${base} × ${qty}` : base;
+  }
+
+  const narrative: Record<string, string> = {
+    trip_planned: 'Planned service trip',
+    trip_emergency: 'Emergency service trip',
+    trip_additional: 'Additional service trip',
+    eave_install: 'Installed on eave',
+    rake_install: 'Installed on rake',
+    // Legacy combined key (older invoices)
+    eave_rake_install: 'Installed on eave / rake',
+    ridge_install: 'Installed on ridge',
+    valley_install: 'Installed in valley',
+    steep_7_12: 'Steep charge 7/12+',
+    two_plus_story: '2+ story access',
+    adder_extreme_heat: 'Extreme heat adder',
+  };
+
+  const base = narrative[key] || line.label || key;
+  return qty !== 1 ? `${base} × ${qty}` : base;
+}
 
 /** Estimate-style select + Add for non-tarp groups */
 function MitigationGroupAddRow({
@@ -884,7 +1005,7 @@ function MitigationGroupAddRow({
         onChange={(e) => setKey(e.target.value)}
         className="min-w-0 flex-1 border border-zinc-200 rounded-2xl px-3 py-2.5 text-sm text-zinc-900 bg-white"
       >
-        <option value="">Select…</option>
+        <option value="">Select</option>
         {items.map((it) => (
           <option key={it.itemKey} value={it.itemKey}>
             {it.label}
@@ -893,20 +1014,29 @@ function MitigationGroupAddRow({
       </select>
       <button
         type="button"
-        disabled={!key}
         onClick={() => {
           const it = items.find((i) => i.itemKey === key);
           if (!it) return;
           onAdd(it.itemKey, it.label);
           setKey('');
         }}
-        className="shrink-0 rounded-full border-2 border-sky-500 bg-white text-sky-700 text-sm font-semibold px-5 py-2.5 hover:bg-sky-50 disabled:opacity-40 transition-colors"
+        className="btn-primary shrink-0 px-8 py-3 rounded-full text-sm font-semibold"
       >
         Add
       </button>
     </div>
   );
 }
+
+/** Brown heavy only stocked through 20×30 — 30×50 / 40×60 are blue only. */
+const BROWN_TARP_SIZES = new Set([
+  'tarp_6x8',
+  'tarp_8x10',
+  'tarp_10x12',
+  'tarp_12x16',
+  'tarp_16x20',
+  'tarp_20x30',
+]);
 
 /** Tarp size + blue/brown type (cost only) + Add */
 function MitigationTarpAddRow({
@@ -917,39 +1047,55 @@ function MitigationTarpAddRow({
   onAdd: (itemKey: string, label: string, tarpType: 'blue' | 'brown') => void;
 }) {
   const [key, setKey] = useState('');
-  const [tarpType, setTarpType] = useState<'blue' | 'brown'>('blue');
+  const [tarpType, setTarpType] = useState<'' | 'blue' | 'brown'>('');
+  const sizeOptions =
+    tarpType === 'brown'
+      ? items.filter((it) => BROWN_TARP_SIZES.has(it.itemKey))
+      : items;
   return (
     <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+      <select
+        value={tarpType}
+        onChange={(e) => {
+          const next = e.target.value as '' | 'blue' | 'brown';
+          setTarpType(next);
+          // Clear size if it isn't available for brown
+          if (
+            next === 'brown' &&
+            key &&
+            !BROWN_TARP_SIZES.has(key)
+          ) {
+            setKey('');
+          }
+        }}
+        className="min-w-0 sm:w-40 border border-zinc-200 rounded-2xl px-3 py-2.5 text-sm text-zinc-900 bg-white"
+      >
+        <option value="">Color</option>
+        <option value="blue">Blue medium</option>
+        <option value="brown">Brown heavy</option>
+      </select>
       <select
         value={key}
         onChange={(e) => setKey(e.target.value)}
         className="min-w-0 flex-1 border border-zinc-200 rounded-2xl px-3 py-2.5 text-sm text-zinc-900 bg-white"
       >
-        <option value="">Size…</option>
-        {items.map((it) => (
+        <option value="">Size</option>
+        {sizeOptions.map((it) => (
           <option key={it.itemKey} value={it.itemKey}>
             {it.label}
           </option>
         ))}
       </select>
-      <select
-        value={tarpType}
-        onChange={(e) => setTarpType(e.target.value as 'blue' | 'brown')}
-        className="min-w-0 sm:w-40 border border-zinc-200 rounded-2xl px-3 py-2.5 text-sm text-zinc-900 bg-white"
-      >
-        <option value="blue">Blue medium</option>
-        <option value="brown">Brown heavy</option>
-      </select>
       <button
         type="button"
-        disabled={!key}
         onClick={() => {
-          const it = items.find((i) => i.itemKey === key);
-          if (!it) return;
+          const it = sizeOptions.find((i) => i.itemKey === key);
+          if (!it || !tarpType) return;
           onAdd(it.itemKey, it.label, tarpType);
           setKey('');
+          setTarpType('');
         }}
-        className="shrink-0 rounded-full border-2 border-sky-500 bg-white text-sky-700 text-sm font-semibold px-5 py-2.5 hover:bg-sky-50 disabled:opacity-40 transition-colors"
+        className="btn-primary shrink-0 px-8 py-3 rounded-full text-sm font-semibold"
       >
         Add
       </button>
@@ -968,7 +1114,47 @@ type MitigationLineItem = {
   amount: number;
   /** Tarp material type — cost only, never on PDF */
   tarpType?: 'blue' | 'brown' | null;
+  /** Ties install/fascia/tuck to a tarp job; null = house-level (trip, adders, etc.) */
+  groupId?: string | null;
+  /** Display name for tarp group on UI/PDF (e.g. Tarp 1) */
+  groupLabel?: string | null;
+  /** Fascia wrap edge selection */
+  fasciaEdge?: FasciaEdge | null;
 };
+
+/** Keys that belong under a tarp group (not house-level). */
+const MITIGATION_TARP_SCOPED_KEYS = new Set([
+  'ridge_install',
+  'valley_install',
+  'hip_install',
+  'eave_install',
+  'rake_install',
+  'eave_rake_install',
+  'shingle_tuck',
+  'fascia_wrap',
+]);
+
+function fasciaEdgeMultiplier(_edge?: FasciaEdge | null): number {
+  // eave+rake uses dedicated sell rate (fascia_wrap_eave_rake), not 2×
+  return 1;
+}
+
+function mitigationFasciaPriceKey(fasciaEdge?: FasciaEdge | null): string {
+  return fasciaEdge === 'eave_rake' ? 'fascia_wrap_eave_rake' : 'fascia_wrap';
+}
+
+function mitigationLineAmount(
+  unitPrice: number,
+  qty: number,
+  itemKey: string,
+  fasciaEdge?: FasciaEdge | null
+): number {
+  const q = Number(qty) || 0;
+  const unit = Number(unitPrice) || 0;
+  if (itemKey === 'fascia_wrap')
+    return unit * fasciaEdgeMultiplier(fasciaEdge) * (q || 1);
+  return unit * q;
+}
 
 /** Saved invoice index (local; PDF also on lead documents). */
 type AppInvoice = {
@@ -996,6 +1182,10 @@ type MitigationInvoiceDraft = {
   date: string;
   lines: MitigationLineItem[];
   notes: string;
+  /** Obstruction Yes/No — null until user picks (neither pre-selected). */
+  obstructionChoice?: 'yes' | 'no' | null;
+  /** Negotiated total (list sell minus buffer discount). null = use line sell total. */
+  negotiatedTotal?: number | null;
 };
 
 const VALLEY_CITIES = [
@@ -1793,15 +1983,15 @@ function mapDbLeadToApp(row: Record<string, unknown>): Lead {
 
   const fullName = String(row.name ?? row.client_name ?? '').trim();
   const nameParts = fullName ? fullName.split(/\s+/) : [];
-  const firstName =
+  let firstName =
     String(
       d.clientFirstName ??
         row.client_first_name ??
         row.first_name ??
         nameParts[0] ??
         ''
-    ) || 'Unknown';
-  const lastName = String(
+    ) || '';
+  let lastName = String(
     d.clientLastName ??
       row.client_last_name ??
       row.last_name ??
@@ -1849,6 +2039,45 @@ function mapDbLeadToApp(row: Record<string, unknown>): Lead {
       email = String(row.email ?? row.client_email ?? '');
     }
   }
+
+  // Recover wiped identity from nested estimate (e.g. name became "Unknown")
+  const nestedEst =
+    Array.isArray(d.estimates) && d.estimates.length > 0
+      ? (d.estimates[0] as Record<string, unknown>)
+      : null;
+  if (
+    nestedEst &&
+    (!firstName ||
+      firstName === 'Unknown' ||
+      (!lastName && String(nestedEst.clientLastName || '').trim()))
+  ) {
+    const ef = String(nestedEst.clientFirstName || '').trim();
+    const el = String(nestedEst.clientLastName || '').trim();
+    if (ef && ef !== 'Unknown') firstName = ef;
+    if (el) lastName = el;
+    if (!address) address = String(nestedEst.clientAddress || '');
+    if (!city) city = String(nestedEst.clientCity || '');
+    if (!state) state = String(nestedEst.clientState || '');
+    if (!zip) zip = String(nestedEst.clientZip || '');
+    if (!email) email = String(nestedEst.clientEmail || '');
+  }
+  if (!firstName) firstName = 'Unknown';
+
+  const phoneFromDetails = String(d.clientPhone ?? '').trim();
+  const phoneFromEst = nestedEst
+    ? String(nestedEst.clientPhone || '').trim()
+    : '';
+  const phone =
+    phoneFromDetails ||
+    phoneFromEst ||
+    String(row.phone ?? row.client_phone ?? '');
+
+  const jobFromEst = nestedEst
+    ? String(nestedEst.clientJobNumber || '').trim()
+    : '';
+  const jobNumber = String(
+    row.job_number ?? d.jobNumber ?? row.jobNumber ?? jobFromEst ?? ''
+  );
 
   const stageRaw = String(row.stage ?? row.category ?? row.pipeline_stage ?? '');
   const stageMap: Record<string, PipelineStage> = {
@@ -1903,10 +2132,10 @@ function mapDbLeadToApp(row: Record<string, unknown>): Lead {
     clientCity: city,
     clientState: state,
     clientZip: zip,
-    clientPhone: String(d.clientPhone ?? row.phone ?? row.client_phone ?? ''),
+    clientPhone: phone,
     clientEmail: email,
     company: String(row.company ?? d.company ?? ''),
-    jobNumber: String(row.job_number ?? d.jobNumber ?? row.jobNumber ?? ''),
+    jobNumber,
     additionalEmails: Array.isArray(d.additionalEmails)
       ? (d.additionalEmails as string[])
       : [],
@@ -2219,8 +2448,18 @@ export default function SummitApp() {
   );
   const [mitigationCostsReady, setMitigationCostsReady] = useState(false);
   const [showMitigationInvoice, setShowMitigationInvoice] = useState(false);
+  /** Preview twin of estimate “See Estimate” */
+  const [showMitigationPreview, setShowMitigationPreview] = useState(false);
+  const [mitigationWorkspace, setMitigationWorkspace] =
+    useState<MitigationWorkspace>('invoice');
+  const [showMitigationCostBreakdown, setShowMitigationCostBreakdown] =
+    useState(false);
   const [mitigationDraft, setMitigationDraft] =
     useState<MitigationInvoiceDraft | null>(null);
+  /** Which tarp group receives the next install / fascia / tuck */
+  const [activeTarpGroupId, setActiveTarpGroupId] = useState<string | null>(
+    null
+  );
   const [appInvoices, setAppInvoices] = useState<AppInvoice[]>([]);
   /** Manual override for pricing region (null = derive from job address) */
   const [pricingRegionOverride, setPricingRegionOverride] =
@@ -2276,6 +2515,9 @@ export default function SummitApp() {
   const [googleEventsLoading, setGoogleEventsLoading] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  /** Desktop: icon rail vs full labels. Mobile uses drawer (`sidebarOpen`). */
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const sidebarDocPrevCollapsed = useRef<boolean | null>(null);
   const [sidebarProfileOpen, setSidebarProfileOpen] = useState(false);
   /** Estimate picker opens estimate vs internal workspace after lead pick */
   const [estimatePickerMode, setEstimatePickerMode] =
@@ -2313,8 +2555,59 @@ export default function SummitApp() {
     }
   };
 
+  /** Remove invoice from Invoices index (+ matching lead doc / Storage when possible). */
+  const removeAppInvoice = (invoiceId: string) => {
+    const inv = appInvoices.find((i) => i.id === invoiceId);
+    if (!inv) return;
+    if (
+      !confirm(
+        `Remove invoice for “${inv.leadLabel || 'lead'}” from Invoices?`
+      )
+    ) {
+      return;
+    }
+
+    persistAppInvoices(appInvoices.filter((i) => i.id !== invoiceId));
+
+    // Drop matching document on the lead (if lead still exists)
+    if (inv.leadId != null) {
+      const updated = leads.map((l) => {
+        if (l.id !== inv.leadId) return l;
+        const docs = l.documents || [];
+        const nextDocs = docs.filter(
+          (d) => d.id !== inv.id && d.url !== inv.url
+        );
+        if (nextDocs.length === docs.length) return l;
+        return { ...l, documents: nextDocs };
+      });
+      const changed = updated.some((l, i) => l !== leads[i]);
+      if (changed) persistLeads(updated);
+    }
+
+    // Purge Storage object for durable PDFs
+    if (supabaseEnabled && supabase && inv.url) {
+      try {
+        const marker = '/lead-docs/';
+        const idx = inv.url.indexOf(marker);
+        if (idx >= 0) {
+          const objectPath = decodeURIComponent(
+            inv.url.slice(idx + marker.length).split('?')[0]
+          );
+          void supabase.storage.from('lead-docs').remove([objectPath]);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    showToast('Invoice removed');
+  };
+
+  const mitigationPersonalBrand = () =>
+    userCompany.trim() || 'Roslie Consulting Firm LLC';
+
   const mitigationPayableTo = (entity: MitigationEntity) =>
-    entity === 'prowest' ? 'ProWest Roofing' : 'Roslie Consulting Firm LLC';
+    entity === 'prowest' ? 'ProWest Roofing' : mitigationPersonalBrand();
 
   const mitigationInvoiceTitle = (entity: MitigationEntity) =>
     entity === 'prowest'
@@ -2453,9 +2746,13 @@ export default function SummitApp() {
       date: new Date().toLocaleDateString(),
       lines: [],
       notes:
-        'Work performed to mitigate any further damages.\nPrice includes materials, labor and roof access / set up.\nPlease forward to Insurance Company for reimbursement.',
+        'Work performed to mitigate any further damages.\nLabor is included — price covers materials, labor, and roof access / set up.\nPlease forward to Insurance Company for reimbursement.',
     };
     setMitigationDraft(draft);
+    setMitigationWorkspace('invoice');
+    setShowMitigationCostBreakdown(false);
+    setActiveTarpGroupId(null);
+    setShowMitigationPreview(false);
     setSystemDocWorkspace('mitigation');
     setShowMitigationInvoice(false);
     setDocAddMenuOpen(false);
@@ -2513,9 +2810,10 @@ export default function SummitApp() {
       date: new Date().toLocaleDateString(),
       lines: [],
       notes:
-        'Work performed to mitigate any further damages.\nPrice includes materials, labor and roof access / set up.\nPlease forward to Insurance Company for reimbursement.',
+        'Work performed to mitigate any further damages.\nLabor is included — price covers materials, labor, and roof access / set up.\nPlease forward to Insurance Company for reimbursement.',
     };
     setMitigationDraft(draft);
+    setActiveTarpGroupId(null);
     if (opts?.blank) {
       // blank PDF only (company library / quick download)
       setTimeout(() => generateMitigationPdf({ blank: true, entity }), 0);
@@ -2539,14 +2837,29 @@ export default function SummitApp() {
     mode: 'insurance' | 'cash'
   ): MitigationInvoiceDraft => {
     const lines = (draft.lines || []).map((ln) => {
-      const row = mitigationPrices.find((r) => r.item_key === ln.itemKey);
+      const priceKey =
+        ln.itemKey === 'fascia_wrap'
+          ? mitigationFasciaPriceKey(ln.fasciaEdge)
+          : ln.itemKey;
+      const row = mitigationPriceForKey(priceKey);
       const unit = row
         ? mode === 'cash'
           ? Number(row.cash_retail) || 0
           : Number(row.insurance_rate) || 0
         : ln.unitPrice;
       const qty = Number(ln.qty) || 0;
-      return { ...ln, unitPrice: unit, amount: qty * unit };
+      return {
+        ...ln,
+        unitPrice: unit,
+        amount: mitigationLineAmount(unit, qty, ln.itemKey, ln.fasciaEdge),
+        label: formatMitigationLineDescription({
+          itemKey: ln.itemKey,
+          label: ln.label,
+          qty,
+          tarpType: ln.tarpType,
+          fasciaEdge: ln.fasciaEdge,
+        }),
+      };
     });
     return { ...draft, rateMode: mode, lines };
   };
@@ -2560,8 +2873,24 @@ export default function SummitApp() {
   const mitigationPriceForKey = (itemKey: string) => {
     const aliases: Record<string, string[]> = {
       trip_planned: ['trip_planned', 'trip', 'planned_trip', 'trip_standard'],
-      trip_emergency: ['trip_emergency', 'trip_after_hours', 'emergency_trip', 'after_hours_trip'],
+      trip_emergency: [
+        'trip_emergency',
+        'trip_after_hours',
+        'emergency_trip',
+        'after_hours_trip',
+      ],
       trip_additional: ['trip_additional', 'trip_extra', 'additional_trip'],
+      eave_install: ['eave_install', 'eave_rake_install'],
+      rake_install: ['rake_install', 'eave_rake_install'],
+      hip_install: ['hip_install', 'eave_rake_install', 'ridge_install'],
+      // Only used if shingle_tuck row missing — prefer dedicated $100/$75 after SQL
+      shingle_tuck: ['shingle_tuck'],
+      obst_pipe_jack: ['obst_pipe_jack', 'obstruction'],
+      obst_ttop_vent: ['obst_ttop_vent', 'obst_vent', 'obstruction'],
+      obst_hvac: ['obst_hvac', 'obstruction'],
+      obst_skylight: ['obst_skylight', 'obstruction'],
+      sandbag_25lb: ['sandbag_25lb'],
+      fascia_wrap_eave_rake: ['fascia_wrap_eave_rake', 'fascia_wrap'],
     };
     const keys = aliases[itemKey] || [itemKey];
     for (const k of keys) {
@@ -2604,44 +2933,161 @@ export default function SummitApp() {
     return unit * (Number(line.qty) || 0);
   };
 
+  const mitigationSellTotal = (mitigationDraft?.lines || []).reduce(
+    (s, l) => s + (Number(l.amount) || 0),
+    0
+  );
+  const mitigationCostTotal = (mitigationDraft?.lines || []).reduce((s, l) => {
+    const c = mitigationLineCost(l);
+    return s + (c == null ? 0 : c);
+  }, 0);
+  /** List sell (line items) vs negotiated (after buffer discount). */
+  const mitigationListSell = mitigationSellTotal;
+  const mitigationNegotiated =
+    mitigationDraft?.negotiatedTotal != null &&
+    Number.isFinite(Number(mitigationDraft.negotiatedTotal))
+      ? Number(mitigationDraft.negotiatedTotal)
+      : mitigationListSell;
+  const mitigationBufferUsed = Math.max(
+    0,
+    mitigationListSell - mitigationNegotiated
+  );
+  const mitigationBufferRemaining = Math.max(
+    0,
+    MITIGATION_BUFFER_CAP - mitigationBufferUsed
+  );
+  const mitigationBufferUsedPct = Math.min(
+    100,
+    Math.round((mitigationBufferUsed / MITIGATION_BUFFER_CAP) * 100)
+  );
+  /** Margin uses negotiated sell (what customer pays). */
+  const mitigationMargin = mitigationNegotiated - mitigationCostTotal;
+
+  const applyMitigationNegotiatedTotal = () => {
+    if (!mitigationDraft) return;
+    const floor = Math.max(0, mitigationListSell - MITIGATION_BUFFER_CAP);
+    const next = Math.round(
+      Math.min(
+        mitigationListSell,
+        Math.max(floor, Number(mitigationDraft.negotiatedTotal) || 0)
+      )
+    );
+    setMitigationDraft({ ...mitigationDraft, negotiatedTotal: next });
+    showToast(
+      next < mitigationListSell
+        ? `Discount applied — $${(mitigationListSell - next).toLocaleString()}`
+        : 'Using full list sell total'
+    );
+  };
+
   const addMitigationCatalogLine = (
     itemKey: string,
     label: string,
     tarpType?: 'blue' | 'brown' | null,
+    opts?: {
+      groupId?: string | null;
+      fasciaEdge?: FasciaEdge | null;
+    }
   ) => {
     if (!mitigationDraft) return;
-    const row = mitigationPriceForKey(itemKey);
+
+    // Combined install dropdown uses fascia_wrap:eave | :rake | :eave_rake
+    let resolvedKey = itemKey;
+    let fasciaEdge = opts?.fasciaEdge ?? null;
+    if (itemKey.startsWith('fascia_wrap:')) {
+      const edge = itemKey.slice('fascia_wrap:'.length) as FasciaEdge;
+      resolvedKey = 'fascia_wrap';
+      fasciaEdge = edge;
+    }
+
+    const row = mitigationPriceForKey(
+      resolvedKey === 'fascia_wrap'
+        ? mitigationFasciaPriceKey(fasciaEdge)
+        : resolvedKey
+    );
     const mode = mitigationDraft.rateMode || 'insurance';
     const unit = row
       ? mode === 'cash'
         ? Number(row.cash_retail) || 0
         : Number(row.insurance_rate) || 0
       : 0;
-    const isTarp = itemKey.startsWith('tarp_');
-    const typeLabel =
-      isTarp && tarpType === 'brown'
-        ? ' (brown)'
-        : isTarp && tarpType === 'blue'
-          ? ' (blue)'
-          : '';
+    const isTarp = resolvedKey.startsWith('tarp_');
+    const needsGroup =
+      isTarp || MITIGATION_TARP_SCOPED_KEYS.has(resolvedKey);
+
+    let groupId = opts?.groupId ?? null;
+    let groupLabel: string | null = null;
+
+    if (isTarp) {
+      groupId = `tg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const tarpCount =
+        (mitigationDraft.lines || []).filter((l) =>
+          l.itemKey.startsWith('tarp_')
+        ).length + 1;
+      groupLabel = `Tarp ${tarpCount}`;
+    } else if (needsGroup) {
+      groupId =
+        opts?.groupId ||
+        activeTarpGroupId ||
+        [...(mitigationDraft.lines || [])]
+          .reverse()
+          .find((l) => l.itemKey.startsWith('tarp_'))?.groupId ||
+        null;
+      if (!groupId) {
+        showToast('Add a tarp first — installs attach to that tarp');
+        return;
+      }
+      const tarpLine = (mitigationDraft.lines || []).find(
+        (l) => l.groupId === groupId && l.itemKey.startsWith('tarp_')
+      );
+      groupLabel = tarpLine?.groupLabel || null;
+    }
+
+    if (resolvedKey === 'fascia_wrap' && !fasciaEdge) {
+      showToast('Choose fascia wrap edge — eave, rake, or both');
+      return;
+    }
+
+    const qty = 1;
     const line: MitigationLineItem = {
-      id: `${Date.now()}-${itemKey}-${tarpType || 'x'}`,
-      itemKey,
-      label: `${row?.label || label}${typeLabel}`,
-      qty: 1,
+      id: `${Date.now()}-${resolvedKey}-${tarpType || fasciaEdge || 'x'}`,
+      itemKey: resolvedKey,
+      label: formatMitigationLineDescription({
+        itemKey: resolvedKey,
+        label: row?.label || label,
+        qty,
+        tarpType: isTarp ? tarpType || 'blue' : null,
+        fasciaEdge,
+      }),
+      qty,
       unitPrice: unit,
-      amount: unit,
+      amount: mitigationLineAmount(unit, qty, resolvedKey, fasciaEdge),
       tarpType: isTarp ? tarpType || 'blue' : null,
+      groupId,
+      groupLabel,
+      fasciaEdge,
     };
-    setMitigationDraft({
-      ...mitigationDraft,
-      lines: [...mitigationDraft.lines, line],
+
+    if (isTarp || (needsGroup && groupId)) {
+      setActiveTarpGroupId(groupId);
+    }
+
+    setMitigationDraft((prev) => {
+      if (!prev) return prev;
+      if (resolvedKey === 'obstruction' || resolvedKey.startsWith('obst_')) {
+        return {
+          ...prev,
+          obstructionChoice: 'yes',
+          lines: [...prev.lines, line],
+        };
+      }
+      return { ...prev, lines: [...prev.lines, line] };
     });
   };
 
   const addMitigationLine = (itemKey: string) => {
     if (!mitigationDraft) return;
-    const row = mitigationPrices.find((r) => r.item_key === itemKey);
+    const row = mitigationPriceForKey(itemKey);
     if (!row) return;
     const unit =
       mitigationDraft.rateMode === 'cash'
@@ -2650,10 +3096,15 @@ export default function SummitApp() {
     const line: MitigationLineItem = {
       id: `${Date.now()}-${itemKey}`,
       itemKey,
-      label: row.label,
+      label: formatMitigationLineDescription({
+        itemKey,
+        label: row.label,
+        qty: 1,
+      }),
       qty: 1,
       unitPrice: unit,
       amount: unit,
+      groupId: null,
     };
     setMitigationDraft({
       ...mitigationDraft,
@@ -2667,17 +3118,76 @@ export default function SummitApp() {
     setMitigationDraft({
       ...mitigationDraft,
       lines: mitigationDraft.lines.map((ln) =>
-        ln.id === id ? { ...ln, qty: q, amount: q * ln.unitPrice } : ln
+        ln.id === id
+          ? {
+              ...ln,
+              qty: q,
+              amount: mitigationLineAmount(
+                ln.unitPrice,
+                q,
+                ln.itemKey,
+                ln.fasciaEdge
+              ),
+              label: formatMitigationLineDescription({
+                itemKey: ln.itemKey,
+                label: ln.label,
+                qty: q,
+                tarpType: ln.tarpType,
+                fasciaEdge: ln.fasciaEdge,
+              }),
+            }
+          : ln
       ),
     });
   };
 
   const removeMitigationLine = (id: string) => {
     if (!mitigationDraft) return;
+    const removed = mitigationDraft.lines.find((ln) => ln.id === id);
+    // Removing a tarp removes its whole group
+    const dropGroup =
+      removed?.itemKey?.startsWith('tarp_') && removed.groupId
+        ? removed.groupId
+        : null;
+    const nextLines = mitigationDraft.lines.filter((ln) => {
+      if (ln.id === id) return false;
+      if (dropGroup && ln.groupId === dropGroup) return false;
+      return true;
+    });
     setMitigationDraft({
       ...mitigationDraft,
-      lines: mitigationDraft.lines.filter((ln) => ln.id !== id),
+      lines: nextLines,
+      obstructionChoice:
+        removed?.itemKey === 'obstruction' ||
+        removed?.itemKey?.startsWith('obst_')
+          ? nextLines.some(
+              (l) =>
+                l.itemKey === 'obstruction' || l.itemKey.startsWith('obst_')
+            )
+            ? 'yes'
+            : null
+          : mitigationDraft.obstructionChoice,
     });
+    if (dropGroup && activeTarpGroupId === dropGroup) {
+      const nextActive = [...nextLines]
+        .reverse()
+        .find((l) => l.itemKey.startsWith('tarp_'))?.groupId;
+      setActiveTarpGroupId(nextActive || null);
+    }
+  };
+
+  const removeMitigationTarpGroup = (groupId: string) => {
+    if (!mitigationDraft || !groupId) return;
+    const nextLines = mitigationDraft.lines.filter(
+      (ln) => ln.groupId !== groupId
+    );
+    setMitigationDraft({ ...mitigationDraft, lines: nextLines });
+    if (activeTarpGroupId === groupId) {
+      const nextActive = [...nextLines]
+        .reverse()
+        .find((l) => l.itemKey.startsWith('tarp_'))?.groupId;
+      setActiveTarpGroupId(nextActive || null);
+    }
   };
 
   const generateMitigationPdf = (opts?: {
@@ -2698,120 +3208,285 @@ export default function SummitApp() {
       !blank && opts?.download === undefined && opts?.save === undefined;
     const wantDownload = blank || opts?.download === true || legacyBoth;
     const wantSave = !blank && (opts?.save === true || legacyBoth);
-    const doc = new jsPDF();
+    const doc = new jsPDF({ unit: 'mm', format: 'letter' });
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const left = 18;
+    const right = pageW - 18;
+    const ink = { r: 28, g: 28, b: 30 };
+    const muted = { r: 100, g: 100, b: 105 };
+    const rule = { r: 190, g: 190, b: 195 };
     const title = mitigationInvoiceTitle(entity);
     const payable = mitigationPayableTo(entity);
-    let y = 20;
+    const brandName =
+      entity === 'prowest' ? 'ProWest Roofing' : mitigationPersonalBrand();
+    const brandSub =
+      entity === 'prowest'
+        ? 'Licensed contractor'
+        : `${userName.trim() || 'Joe Roslie'} · ${userTitle.trim() || 'Owner'}`;
+    const brandPhone =
+      displayPhoneUS(userPhone) || userPhone || '(253) 381-2035';
+    const money = (n: number) =>
+      `$${Number(n).toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`;
+
+    // --- Header: logo placeholder + brand (logo settings later) ---
+    let y = 16;
+    doc.setDrawColor(rule.r, rule.g, rule.b);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(left, y, 22, 14, 1, 1, 'S');
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.text('LOGO', left + 11, y + 8.2, { align: 'center' });
+
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.text(brandName, left + 26, y + 5.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.text(brandSub, left + 26, y + 10.5);
+    doc.text(brandPhone, left + 26, y + 14.5);
+
+    doc.setTextColor(ink.r, ink.g, ink.b);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(18);
-    doc.text('INVOICE', 105, y, { align: 'center' });
-    y += 8;
-    doc.setFontSize(11);
+    doc.text('INVOICE', right, y + 6, { align: 'right' });
     doc.setFont('helvetica', 'normal');
-    doc.text(title, 105, y, { align: 'center' });
-    y += 12;
-    doc.setFontSize(10);
+    doc.setFontSize(9);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.text(title, right, y + 11.5, { align: 'right' });
     doc.text(
-      `Invoice for: ${opts?.blank ? '—' : d?.invoiceFor || '—'}`,
-      14,
-      y
+      d?.date || new Date().toLocaleDateString(),
+      right,
+      y + 16,
+      { align: 'right' }
     );
-    doc.text(`Payable to: ${payable}`, 110, y);
-    y += 6;
-    doc.text(
-      `Date: ${d?.date || new Date().toLocaleDateString()}`,
-      14,
-      y
-    );
-    y += 6;
-    doc.text(
-      `Location: ${opts?.blank ? '—' : d?.location || '—'}`,
-      14,
-      y
-    );
-    y += 6;
-    doc.text(`Job: ${opts?.blank ? '—' : d?.job || '—'}`, 14, y);
-    doc.text(
-      `Claim Number: ${opts?.blank ? '—' : d?.claimNumber || '—'}`,
-      110,
-      y
-    );
-    y += 12;
+
+    y = 36;
+    doc.setDrawColor(rule.r, rule.g, rule.b);
+    doc.setLineWidth(0.4);
+    doc.line(left, y, right, y);
+    y += 8;
+
+    // --- Bill-to / job meta ---
+    const metaLeft = left;
+    const metaRight = pageW / 2 + 4;
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.setFontSize(8);
     doc.setFont('helvetica', 'bold');
-    doc.text('Description', 14, y);
-    doc.text('Price', 196, y, { align: 'right' });
-    y += 3;
-    doc.setDrawColor(210);
-    doc.line(14, y, 196, y);
-    y += 8;
+    doc.text('INVOICE FOR', metaLeft, y);
+    doc.text('PAYABLE TO', metaRight, y);
+    y += 5;
+    doc.setTextColor(ink.r, ink.g, ink.b);
     doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.text(blank ? '—' : d?.invoiceFor || '—', metaLeft, y);
+    doc.text(payable, metaRight, y);
+    y += 8;
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('LOCATION', metaLeft, y);
+    doc.text('JOB / CLAIM', metaRight, y);
+    y += 5;
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    const locLines = doc.splitTextToSize(
+      blank ? '—' : d?.location || '—',
+      pageW / 2 - 28
+    );
+    doc.text(locLines, metaLeft, y);
+    doc.text(`Job: ${blank ? '—' : d?.job || '—'}`, metaRight, y);
+    doc.text(
+      `Claim: ${blank ? '—' : d?.claimNumber || '—'}`,
+      metaRight,
+      y + 5
+    );
+    y += Math.max(12, locLines.length * 5 + 6);
+
+    // --- Line table header ---
+    doc.setFillColor(245, 245, 246);
+    doc.rect(left, y - 4, right - left, 8, 'F');
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.text('DESCRIPTION', left + 2, y + 1);
+    doc.text('AMOUNT', right - 2, y + 1, { align: 'right' });
+    y += 8;
+    doc.setDrawColor(rule.r, rule.g, rule.b);
+    doc.setLineWidth(0.25);
+    doc.line(left, y, right, y);
+    y += 6;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.setTextColor(ink.r, ink.g, ink.b);
     let total = 0;
-    if (opts?.blank || !d?.lines?.length) {
-      doc.setTextColor(140);
+    if (blank || !d?.lines?.length) {
+      doc.setTextColor(muted.r, muted.g, muted.b);
       doc.text(
-        opts?.blank
-          ? '(Blank template — fill as needed)'
-          : '(No line items)',
-        14,
+        blank
+          ? 'Blank template — fill as needed'
+          : 'No line items',
+        left + 2,
         y
       );
-      doc.setTextColor(0);
+      doc.setTextColor(ink.r, ink.g, ink.b);
       y += 10;
     } else {
-      for (const line of d.lines) {
-        const label =
-          line.qty !== 1 ? `${line.label} × ${line.qty}` : line.label;
-        const wrapped = doc.splitTextToSize(label, 150);
-        doc.text(wrapped, 14, y);
-        doc.text(`$${Number(line.amount).toLocaleString()}`, 196, y, {
+      // Order: each tarp group (tarp first, then installs), then house-level lines
+      const lines = d.lines;
+      const groupOrder: string[] = [];
+      for (const ln of lines) {
+        if (ln.groupId && !groupOrder.includes(ln.groupId)) {
+          groupOrder.push(ln.groupId);
+        }
+      }
+      const ordered: typeof lines = [];
+      for (const gid of groupOrder) {
+        const inGroup = lines.filter((l) => l.groupId === gid);
+        const tarp = inGroup.filter((l) => l.itemKey.startsWith('tarp_'));
+        const rest = inGroup.filter((l) => !l.itemKey.startsWith('tarp_'));
+        ordered.push(...tarp, ...rest);
+      }
+      ordered.push(...lines.filter((l) => !l.groupId));
+
+      let lastGroup: string | null | undefined = undefined;
+      for (const line of ordered) {
+        const gid = line.groupId || null;
+        if (gid && gid !== lastGroup) {
+          if (lastGroup !== undefined) y += 3;
+          const gLabel =
+            line.groupLabel ||
+            lines.find((l) => l.groupId === gid && l.groupLabel)?.groupLabel ||
+            '';
+          if (gLabel) {
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(8);
+            doc.setTextColor(muted.r, muted.g, muted.b);
+            doc.text(gLabel.toUpperCase(), left + 2, y);
+            y += 5;
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(10);
+            doc.setTextColor(ink.r, ink.g, ink.b);
+          }
+          lastGroup = gid;
+        } else if (!gid && lastGroup) {
+          y += 3;
+          lastGroup = null;
+        }
+
+        const label = formatMitigationLineDescription(line);
+        const wrapped = doc.splitTextToSize(label, right - left - 40);
+        doc.text(wrapped, left + 2, y);
+        doc.text(money(Number(line.amount) || 0), right - 2, y, {
           align: 'right',
         });
         total += Number(line.amount) || 0;
-        y += Math.max(7, wrapped.length * 5);
-        if (y > 250) {
+        y += Math.max(7, wrapped.length * 4.8);
+        if (y > pageH - 70) {
           doc.addPage();
           y = 20;
         }
       }
     }
+
     y += 4;
+    doc.setDrawColor(rule.r, rule.g, rule.b);
+    doc.line(left, y, right, y);
+    y += 8;
+
+    // --- Notes ---
     const notesText =
       d?.notes ||
-      'Work performed to mitigate any further damages.\nPrice includes materials, labor and roof access / set up.\nPlease forward to Insurance Company for reimbursement.';
+      'Work performed to mitigate any further damages.\nLabor is included — price covers materials, labor, and roof access / set up.\nPlease forward to Insurance Company for reimbursement.';
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.text('NOTES', left, y);
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(ink.r, ink.g, ink.b);
     for (const n of notesText.split('\n')) {
-      doc.text(n, 14, y);
-      y += 5;
+      const wrapped = doc.splitTextToSize(n, right - left);
+      doc.text(wrapped, left, y);
+      y += Math.max(4.5, wrapped.length * 4.2);
     }
     y += 8;
+
+    // --- Totals ---
+    const listTotal = total;
+    const negotiatedRaw =
+      d?.negotiatedTotal != null && Number.isFinite(Number(d.negotiatedTotal))
+        ? Number(d.negotiatedTotal)
+        : listTotal;
+    const finalTotal = Math.min(listTotal, Math.max(0, negotiatedRaw));
+    const discount = Math.max(0, listTotal - finalTotal);
+    const totalsX = right - 70;
+    if (discount > 0) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(muted.r, muted.g, muted.b);
+      doc.text('List total', totalsX, y);
+      doc.text(money(listTotal), right - 2, y, { align: 'right' });
+      y += 5;
+      doc.text('Special discount', totalsX, y);
+      doc.text(`−${money(discount).slice(1)}`, right - 2, y, {
+        align: 'right',
+      });
+      y += 7;
+    }
+    doc.setDrawColor(ink.r, ink.g, ink.b);
+    doc.setLineWidth(0.5);
+    doc.line(totalsX, y - 2, right, y - 2);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(12);
-    doc.text('Total Amount Due:', 14, y);
-    doc.text(opts?.blank ? '—' : `$${total.toLocaleString()}`, 196, y, {
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.text('Total amount due', totalsX, y + 4);
+    doc.text(blank ? '—' : money(finalTotal), right - 2, y + 4, {
       align: 'right',
     });
-    y += 14;
+    y += 16;
+
+    // --- Signature ---
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
-    if (entity === 'prowest') {
-      doc.text('ProWest Roofing', 14, y);
-      y += 5;
-      doc.text('Licensed contractor', 14, y);
-    } else {
-      doc.text('Joe Roslie', 14, y);
-      y += 5;
-      doc.text('Owner | Roslie Consulting Firm LLC', 14, y);
-    }
+    doc.setFontSize(9);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.text('Authorized signature', left, y);
+    y += 10;
+    doc.setDrawColor(rule.r, rule.g, rule.b);
+    doc.setLineWidth(0.35);
+    doc.line(left, y, left + 70, y);
     y += 5;
-    doc.text('(253) 381-2035', 14, y);
-    y += 12;
-    doc.text('Authorized Signature', 14, y);
-    doc.line(14, y + 6, 80, y + 6);
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.setFontSize(9);
+    doc.text(brandName, left, y);
+    y += 4;
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.setFontSize(8);
+    doc.text(`${brandSub}  ·  ${brandPhone}`, left, y);
+
+    // Footer
+    doc.setFontSize(7);
+    doc.setTextColor(160, 160, 165);
+    doc.text(
+      'Mitigation invoice · costs are internal and not shown on this document',
+      pageW / 2,
+      pageH - 10,
+      { align: 'center' }
+    );
 
     const fileName = `${title.replace(/\s+/g, '_')}_${
       blank ? 'BLANK' : d?.job || 'draft'
     }.pdf`;
     const blob = doc.output('blob');
-    const url = URL.createObjectURL(blob);
 
     if (wantDownload) {
       doc.save(fileName);
@@ -2828,53 +3503,102 @@ export default function SummitApp() {
         return;
       }
       const lead = leads.find((l) => l.id === currentLeadId);
-      const leadLabel = lead
-        ? [lead.clientFirstName, lead.clientLastName]
-            .filter(Boolean)
-            .join(' ') ||
-          lead.jobNumber ||
-          'Lead'
-        : 'Lead';
-      const docEntry: LeadDocument = {
-        id: `inv-${Date.now()}`,
-        name: fileName,
-        url,
-        mimeType: 'application/pdf',
-        createdAt: new Date().toISOString(),
-      };
-      const updated = leads.map((l) =>
-        l.id === currentLeadId
-          ? { ...l, documents: [...(l.documents || []), docEntry] }
-          : l
-      );
-      persistLeads(updated);
-
-      const inv: AppInvoice = {
-        id: docEntry.id,
-        createdAt: new Date().toISOString(),
-        title,
-        entity,
-        rateMode: d?.rateMode || 'insurance',
-        leadId: currentLeadId,
-        leadLabel,
-        job: d?.job || '',
-        claimNumber: d?.claimNumber || '',
-        total,
-        fileName,
-        url,
-      };
-      persistAppInvoices([inv, ...appInvoices]);
-      showToast('Saved to lead Documents + Invoices');
-      // Close form and open the lead's Documents tab so the file is visible
-      setShowMitigationInvoice(false);
-      setSystemDocWorkspace(null);
-      setMitigationDraft(null);
-    try { sessionStorage.removeItem('summitMitigationWorkspace'); } catch (e) {}
-      if (currentLeadId != null) {
-        setIsEditingLead(true);
-        setProfileTab('documents');
-        setActiveTab('leads');
+      if (!lead) {
+        showToast('Lead not found');
+        return;
       }
+      const leadLabel =
+        [lead.clientFirstName, lead.clientLastName]
+          .filter(Boolean)
+          .join(' ') ||
+        lead.jobNumber ||
+        'Lead';
+      const leadIdAtSave = currentLeadId;
+      const entityAtSave = entity;
+      const totalAtSave = finalTotal;
+      const draftSnap = d;
+
+      void (async () => {
+        try {
+          if (!supabaseEnabled || !supabase) {
+            showToast('Cloud offline — downloading PDF instead');
+            doc.save(fileName);
+            return;
+          }
+
+          const folderKey = lead.supabaseId?.trim() || String(leadIdAtSave);
+          const id = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+          const storagePath = `${folderKey}/invoices/${id}-${fileName}`;
+          const { error: upErr } = await supabase.storage
+            .from('lead-docs')
+            .upload(storagePath, blob, {
+              cacheControl: '3600',
+              upsert: false,
+              contentType: 'application/pdf',
+            });
+          if (upErr) {
+            console.error('Mitigation invoice upload error', upErr);
+            showToast('Cloud save failed — downloading PDF instead');
+            doc.save(fileName);
+            return;
+          }
+
+          const { data: pub } = supabase.storage
+            .from('lead-docs')
+            .getPublicUrl(storagePath);
+          const durableUrl = pub.publicUrl;
+          const stamp = new Date().toISOString();
+
+          const docEntry: LeadDocument = {
+            id,
+            name: fileName,
+            url: durableUrl,
+            size: blob.size,
+            mimeType: 'application/pdf',
+            createdAt: stamp,
+          };
+          const updated = leads.map((l) =>
+            l.id === leadIdAtSave
+              ? { ...l, documents: [...(l.documents || []), docEntry] }
+              : l
+          );
+          persistLeads(updated);
+
+          const inv: AppInvoice = {
+            id: docEntry.id,
+            createdAt: stamp,
+            title,
+            entity: entityAtSave,
+            rateMode: draftSnap?.rateMode || 'insurance',
+            leadId: leadIdAtSave,
+            leadLabel,
+            job: draftSnap?.job || '',
+            claimNumber: draftSnap?.claimNumber || '',
+            total: totalAtSave,
+            fileName,
+            url: durableUrl,
+          };
+          persistAppInvoices([inv, ...appInvoices]);
+          showToast('Saved to lead Documents + Invoices');
+
+          setShowMitigationInvoice(false);
+          setSystemDocWorkspace(null);
+          setMitigationDraft(null);
+          setMitigationWorkspace('invoice');
+          try {
+            sessionStorage.removeItem('summitMitigationWorkspace');
+          } catch (e) {}
+          if (leadIdAtSave != null) {
+            setIsEditingLead(true);
+            setProfileTab('documents');
+            setActiveTab('leads');
+          }
+        } catch (err) {
+          console.error('Mitigation save error', err);
+          showToast('Save failed — downloading PDF instead');
+          doc.save(fileName);
+        }
+      })();
       return;
     }
 
@@ -3422,10 +4146,61 @@ export default function SummitApp() {
             const { data: leadRows, error: leadErr } = await supabase
               .from('leads')
               .select('*')
+              .is('deleted_at', null)
               .order('created_at', { ascending: false });
+
+            // Soft-deleted leads in cloud → keep Trash in sync (source of truth)
+            try {
+              const { data: trashedRows } = await supabase
+                .from('leads')
+                .select('*')
+                .not('deleted_at', 'is', null)
+                .order('deleted_at', { ascending: false });
+              if (trashedRows && trashedRows.length > 0) {
+                setTrash((prev) => {
+                  const next = [...prev];
+                  for (const row of trashedRows) {
+                    const lead = mapDbLeadToApp(row as Record<string, unknown>);
+                    const cloudId = lead.supabaseId?.trim();
+                    if (!cloudId) continue;
+                    const already = next.some(
+                      (t) =>
+                        t.kind === 'lead' &&
+                        t.lead.supabaseId?.trim() === cloudId
+                    );
+                    if (already) continue;
+                    const deletedAtRaw = (row as Record<string, unknown>)
+                      .deleted_at;
+                    next.unshift({
+                      id: `lead-cloud-${cloudId}`,
+                      kind: 'lead',
+                      deletedAt:
+                        typeof deletedAtRaw === 'string'
+                          ? new Date(deletedAtRaw).toLocaleString()
+                          : new Date().toLocaleString(),
+                      lead,
+                    });
+                  }
+                  try {
+                    localStorage.setItem('summitTrash', JSON.stringify(next));
+                  } catch {
+                    /* ignore */
+                  }
+                  return next;
+                });
+              }
+            } catch (e) {
+              console.error('Supabase trashed leads fetch error:', e);
+            }
 
             if (leadErr) {
               console.error('Supabase leads fetch error:', leadErr);
+              const msg = String(leadErr.message || leadErr);
+              if (/deleted_at/i.test(msg)) {
+                showToast(
+                  'Run soft_delete_leads.sql in Supabase SQL Editor, then refresh'
+                );
+              }
               // Offline fallback: use local cache only if cloud fetch fails
               if (savedLeads) {
                 try {
@@ -5054,10 +5829,10 @@ export default function SummitApp() {
       profileTab === 'estimator' &&
       !(newTab === 'leads' && isEditingLead)
     ) {
-      const stayToSave = confirm(
-        'Unsaved estimate changes.\n\nOK = stay and save · Cancel = discard and leave'
+      const leaveWithoutSaving = confirm(
+        'You have unsaved estimate changes.\n\nOK = leave without saving\nCancel = stay here'
       );
-      if (stayToSave) return;
+      if (!leaveWithoutSaving) return;
       const keepContact = estimatorSourceLeadId != null || currentLeadId != null;
       resetEstimatorFields(keepContact);
       setHasUnsavedChanges(false);
@@ -5247,6 +6022,59 @@ export default function SummitApp() {
       document.body.style.overflow = prev;
     };
   }, [sidebarOpen]);
+
+  // Restore desktop sidebar collapse preference
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1') {
+        setSidebarCollapsed(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const isDocumentWorkspace =
+    systemDocWorkspace === 'takeoff' ||
+    systemDocWorkspace === 'pricing' ||
+    systemDocWorkspace === 'mitigation' ||
+    systemDocWorkspace === 'mitigation_personal' ||
+    systemDocWorkspace === 'mitigation_company';
+
+  // Document workspaces: collapse to icon rail for focus; restore on exit
+  useEffect(() => {
+    if (isDocumentWorkspace) {
+      setSidebarCollapsed((current) => {
+        if (sidebarDocPrevCollapsed.current === null) {
+          sidebarDocPrevCollapsed.current = current;
+        }
+        return true;
+      });
+      return;
+    }
+    if (sidebarDocPrevCollapsed.current !== null) {
+      const restore = sidebarDocPrevCollapsed.current;
+      sidebarDocPrevCollapsed.current = null;
+      setSidebarCollapsed(restore);
+    }
+  }, [isDocumentWorkspace]);
+
+  const persistSidebarCollapsed = (next: boolean) => {
+    setSidebarCollapsed(next);
+    if (sidebarDocPrevCollapsed.current !== null) {
+      // While in a document workspace, remember the user's toggle for restore
+      sidebarDocPrevCollapsed.current = next;
+    }
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const toggleSidebarCollapsed = () => {
+    persistSidebarCollapsed(!sidebarCollapsed);
+  };
 
   // Mark estimator dirty when the user edits fields (skip after reset / load).
   // activeTab is read via ref so switching tabs does not itself mark dirty.
@@ -5928,16 +6756,12 @@ export default function SummitApp() {
       if (cloudId) {
         void (async () => {
           try {
-            const { error: estErr } = await supabase
-              .from('estimates')
-              .delete()
-              .eq('lead_id', cloudId);
-            if (estErr) console.error('Supabase estimates delete error:', estErr);
+            // Soft-delete in cloud (matches Trash UI). Estimates stay linked.
             const { error } = await supabase
               .from('leads')
-              .delete()
+              .update({ deleted_at: new Date().toISOString() })
               .eq('id', cloudId);
-            if (error) console.error('Supabase lead delete error:', error);
+            if (error) console.error('Supabase soft-delete error:', error);
           } catch (err) {
             console.error('Supabase trash error:', err);
           }
@@ -5955,13 +6779,11 @@ export default function SummitApp() {
 
     if (item.kind === 'lead') {
       const leadId = item.lead.id;
+      const cloudId = item.lead.supabaseId?.trim();
+      // Keep the same cloud id — restore clears deleted_at (no duplicate insert)
       const restored: Lead = {
         ...item.lead,
-        supabaseId: undefined,
-        estimates: (item.lead.estimates || []).map((e) => ({
-          ...e,
-          supabaseId: undefined,
-        })),
+        estimates: item.lead.estimates || [],
       };
       const newLeads = [...leads, restored];
       persistTrash(newTrash);
@@ -5972,7 +6794,24 @@ export default function SummitApp() {
         /* ignore */
       }
 
-      if (supabaseEnabled && supabase) {
+      if (supabaseEnabled && supabase && cloudId) {
+        void (async () => {
+          try {
+            const { error } = await supabase
+              .from('leads')
+              .update({ deleted_at: null })
+              .eq('id', cloudId);
+            if (error) {
+              console.error('Supabase restore error:', error);
+              showToast('Restored locally — cloud restore failed (check SQL)');
+              return;
+            }
+          } catch (err) {
+            console.error('Supabase restore error:', err);
+          }
+        })();
+      } else if (supabaseEnabled && supabase && !cloudId) {
+        // Never synced before trash — insert as new cloud lead
         void (async () => {
           try {
             const payload = mapAppLeadToDb(restored);
@@ -5982,48 +6821,15 @@ export default function SummitApp() {
               .select('id')
               .single();
             if (error) {
-              console.error('Supabase restore error:', error);
+              console.error('Supabase restore insert error:', error);
               return;
             }
             if (!data?.id) return;
-            const cloudLeadId = String(data.id);
-            const estList = restored.estimates || [];
-            const estIdMap = new Map<number, string>();
-            for (const est of estList) {
-              const estPayload = {
-                lead_id: cloudLeadId,
-                type: 'roof',
-                material: est.selectedShingle || null,
-                rate: null as number | null,
-                labor: null as number | null,
-                status: 'saved',
-                data: est,
-                updated_at: new Date().toISOString(),
-              };
-              const { data: estRow, error: estErr } = await supabase
-                .from('estimates')
-                .insert(estPayload)
-                .select('id')
-                .single();
-              if (estErr) {
-                console.error('Supabase estimate restore error:', estErr);
-              } else if (estRow?.id) {
-                estIdMap.set(est.id, String(estRow.id));
-              }
-            }
+            const newCloudId = String(data.id);
             setLeads((prev) => {
-              const next = prev.map((l) => {
-                if (l.id !== leadId) return l;
-                return {
-                  ...l,
-                  supabaseId: cloudLeadId,
-                  estimates: (l.estimates || []).map((e) =>
-                    estIdMap.has(e.id)
-                      ? { ...e, supabaseId: estIdMap.get(e.id) }
-                      : e
-                  ),
-                };
-              });
+              const next = prev.map((l) =>
+                l.id === leadId ? { ...l, supabaseId: newCloudId } : l
+              );
               try {
                 localStorage.setItem('summitLeads', JSON.stringify(next));
               } catch {
@@ -6032,7 +6838,7 @@ export default function SummitApp() {
               return next;
             });
           } catch (err) {
-            console.error('Supabase restore error:', err);
+            console.error('Supabase restore insert error:', err);
           }
         })();
       }
@@ -6101,7 +6907,31 @@ export default function SummitApp() {
     persistTrash(newTrash);
 
     if (doomed?.kind === 'lead') {
+      const leadId = doomed.lead.id;
       const cloudId = doomed.lead.supabaseId?.trim();
+      // Purge this lead's invoices from the Invoices index + Storage
+      const doomedInvoices = appInvoices.filter((i) => i.leadId === leadId);
+      if (doomedInvoices.length > 0) {
+        persistAppInvoices(
+          appInvoices.filter((i) => i.leadId !== leadId)
+        );
+        if (supabaseEnabled && supabase) {
+          for (const inv of doomedInvoices) {
+            try {
+              const marker = '/lead-docs/';
+              const idx = inv.url?.indexOf(marker) ?? -1;
+              if (idx >= 0) {
+                const objectPath = decodeURIComponent(
+                  inv.url.slice(idx + marker.length).split('?')[0]
+                );
+                void supabase.storage.from('lead-docs').remove([objectPath]);
+              }
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+      }
       if (supabaseEnabled && supabase && cloudId) {
         void (async () => {
           try {
@@ -6152,6 +6982,21 @@ export default function SummitApp() {
     // Confirm is handled by the Trash UI call site
     const doomed = [...trash];
     persistTrash([]);
+
+    const purgedLeadIds = new Set(
+      doomed.filter((t) => t.kind === 'lead').map((t) => t.lead.id)
+    );
+    const invoicesToPurge = appInvoices.filter(
+      (i) => i.leadId != null && purgedLeadIds.has(i.leadId)
+    );
+    if (invoicesToPurge.length > 0) {
+      persistAppInvoices(
+        appInvoices.filter(
+          (i) => i.leadId == null || !purgedLeadIds.has(i.leadId)
+        )
+      );
+    }
+
     if (supabaseEnabled && supabase) {
       void (async () => {
         for (const item of doomed) {
@@ -6186,6 +7031,20 @@ export default function SummitApp() {
             }
           } catch (err) {
             console.error('Empty trash purge error:', err);
+          }
+        }
+        for (const inv of invoicesToPurge) {
+          try {
+            const marker = '/lead-docs/';
+            const idx = inv.url?.indexOf(marker) ?? -1;
+            if (idx >= 0) {
+              const objectPath = decodeURIComponent(
+                inv.url.slice(idx + marker.length).split('?')[0]
+              );
+              await supabase.storage.from('lead-docs').remove([objectPath]);
+            }
+          } catch {
+            /* ignore */
           }
         }
       })();
@@ -6468,13 +7327,21 @@ export default function SummitApp() {
         .filter(Boolean)
         .join(', ');
       const brand =
-        (typeof userCompany === 'string' && userCompany.trim()) || 'Summit';
+        (typeof userCompany === 'string' && userCompany.trim()) ||
+        'Roslie Consulting Firm LLC';
+      const brandSub = `${userName.trim() || 'Joe Roslie'} · ${
+        userTitle.trim() || 'Project Manager'
+      }`;
+      const brandPhone = displayPhoneUS(userPhone) || userPhone || '';
       const title = (photoReportTitle || 'Photo Report').trim();
       const dateStr = new Date().toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
         year: 'numeric',
       });
+      const ink = { r: 28, g: 28, b: 30 };
+      const muted = { r: 100, g: 100, b: 105 };
+      const rule = { r: 190, g: 190, b: 195 };
 
       const loadImg = (src: string) =>
         new Promise<{ data: string; w: number; h: number }>((resolve, reject) => {
@@ -6508,27 +7375,75 @@ export default function SummitApp() {
           img.src = src;
         });
 
-      // Cover page
+      // Cover page — print-friendly twin of estimate / mitigation
+      const left = 18;
+      const right = pageW - 18;
+      let hy = 16;
+      doc.setDrawColor(rule.r, rule.g, rule.b);
+      doc.setLineWidth(0.3);
+      doc.roundedRect(left, hy, 22, 14, 1, 1, 'S');
+      doc.setTextColor(muted.r, muted.g, muted.b);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7);
+      doc.text('LOGO', left + 11, hy + 8.2, { align: 'center' });
+      doc.setTextColor(ink.r, ink.g, ink.b);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(14);
+      doc.text(brand, left + 26, hy + 5.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(muted.r, muted.g, muted.b);
+      doc.text(brandSub, left + 26, hy + 10.5);
+      if (brandPhone) doc.text(brandPhone, left + 26, hy + 14.5);
+
+      doc.setTextColor(ink.r, ink.g, ink.b);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(18);
+      doc.text('PHOTO REPORT', right, hy + 6, { align: 'right' });
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(muted.r, muted.g, muted.b);
+      doc.text(dateStr, right, hy + 11.5, { align: 'right' });
+      doc.text(
+        `${chosen.length} photo${chosen.length === 1 ? '' : 's'}`,
+        right,
+        hy + 16,
+        { align: 'right' }
+      );
+
+      hy = 36;
+      doc.setDrawColor(rule.r, rule.g, rule.b);
+      doc.setLineWidth(0.4);
+      doc.line(left, hy, right, hy);
+
+      doc.setTextColor(ink.r, ink.g, ink.b);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(22);
+      doc.text(title, pageW / 2, pageH * 0.42, { align: 'center' });
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(11);
-      doc.setTextColor(60);
-      doc.text(`${dateStr}  |  ${chosen.length} Photo${chosen.length === 1 ? '' : 's'}`, pageW / 2, pageH * 0.38, {
+      doc.setTextColor(muted.r, muted.g, muted.b);
+      doc.text(leadName, pageW / 2, pageH * 0.42 + 12, { align: 'center' });
+      if (addr) {
+        const addrLines = doc.splitTextToSize(addr, pageW - 48);
+        doc.setFontSize(10);
+        doc.text(addrLines, pageW / 2, pageH * 0.42 + 20, { align: 'center' });
+      }
+      if (lead.jobNumber) {
+        doc.setFontSize(10);
+        doc.text(
+          `Job ${String(lead.jobNumber)}`,
+          pageW / 2,
+          pageH * 0.42 + (addr ? 32 : 26),
+          { align: 'center' }
+        );
+      }
+      doc.setFontSize(8);
+      doc.setTextColor(160, 160, 165);
+      doc.text(brand, pageW / 2, pageH - 14, { align: 'center' });
+      doc.text('Photo documentation · for customer / carrier review', pageW / 2, pageH - 9, {
         align: 'center',
       });
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(28);
-      doc.setTextColor(15, 23, 42);
-      doc.text(title, pageW / 2, pageH * 0.48, { align: 'center' });
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(11);
-      doc.setTextColor(100);
-      doc.text(leadName, pageW / 2, pageH * 0.56, { align: 'center' });
-      if (addr) doc.text(addr, pageW / 2, pageH * 0.56 + 6, { align: 'center' });
-      if (lead.jobNumber) {
-        doc.text(String(lead.jobNumber), pageW / 2, pageH * 0.56 + 12, { align: 'center' });
-      }
-      doc.setFontSize(9);
-      doc.text(brand, pageW / 2, pageH - 16, { align: 'center' });
 
       // Photo pages — 2 per page
       const slotH = (pageH - 36) / 2;
@@ -6569,7 +7484,8 @@ export default function SummitApp() {
         }
         // footer
         doc.setFontSize(8);
-        doc.setTextColor(160);
+        doc.setTextColor(160, 160, 165);
+        doc.text(brand, left, pageH - 8);
         doc.text(
           `${Math.floor(i / 2) + 2} / ${Math.ceil(chosen.length / 2) + 1}`,
           pageW / 2,
@@ -6917,6 +7833,15 @@ showToast(
         : l
     );
     persistLeads(updated);
+    // Keep Invoices index in sync when an invoice PDF is trashed from Documents
+    const stillInInvoices = appInvoices.some(
+      (i) => i.id === docId || i.url === doc.url
+    );
+    if (stillInInvoices) {
+      persistAppInvoices(
+        appInvoices.filter((i) => i.id !== docId && i.url !== doc.url)
+      );
+    }
     persistTrash([
       {
         id: `${Date.now()}-doc`,
@@ -7168,10 +8093,10 @@ showToast(
     targetTab?: AppTab;
   }) => {
     if (hasUnsavedChanges) {
-      const stayToSave = confirm(
-        'Unsaved estimate changes.\n\nOK = stay and save · Cancel = discard and leave'
+      const leaveWithoutSaving = confirm(
+        'You have unsaved estimate changes.\n\nOK = leave without saving\nCancel = stay here'
       );
-      if (stayToSave) return false;
+      if (!leaveWithoutSaving) return false;
       const keepContact =
         (opts?.returnToLead && estimatorSourceLeadId != null) ||
         currentLeadId != null;
@@ -7562,54 +8487,119 @@ showToast(
     userCompany.trim() || DEFAULT_USER_PROFILE.company;
 
   const generatePDF = () => {
-    // Summit jsPDF type scale: title 18, subtitle 11, sections 12, body 10, total 14
+    // Print-friendly letter layout (twin of mitigation invoice)
     const client = resolveEstimatorClient();
-    const doc = new jsPDF();
+    const doc = new jsPDF({ unit: 'mm', format: 'letter' });
     const scopeItems = buildScopeOfWork();
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const maxWidth = pageWidth - 40;
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const left = 18;
+    const right = pageW - 18;
+    const ink = { r: 28, g: 28, b: 30 };
+    const muted = { r: 100, g: 100, b: 105 };
+    const rule = { r: 190, g: 190, b: 195 };
     const pmPhone = displayPhoneUS(userPhone) || userPhone;
+    const money = (n: number) =>
+      `$${Math.round(n).toLocaleString()}`;
 
+    // --- Header: logo placeholder + brand ---
+    let y = 16;
+    doc.setDrawColor(rule.r, rule.g, rule.b);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(left, y, 22, 14, 1, 1, 'S');
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.text('LOGO', left + 11, y + 8.2, { align: 'center' });
+
+    doc.setTextColor(ink.r, ink.g, ink.b);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(18);
-    doc.text(brandCompany, 20, 20);
+    doc.setFontSize(14);
+    doc.text(brandCompany, left + 26, y + 5.5);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
-    doc.text(`Prepared ${estimateDate}`, 20, 28);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.text(
+      `${userName || 'Rep'} · ${userTitle || 'Project Manager'}`,
+      left + 26,
+      y + 10.5
+    );
+    if (pmPhone) doc.text(pmPhone, left + 26, y + 14.5);
 
-    doc.setFontSize(10);
-    doc.text(`Client: ${client.fullName}`, 20, 46);
-    doc.text(`Phone: ${client.phone || 'N/A'}`, 20, 52);
-    doc.text(`Email: ${client.email || 'N/A'}`, 20, 58);
-    const addressLines = doc.splitTextToSize(`Address: ${client.fullAddress}`, maxWidth);
-    doc.text(addressLines, 20, 64);
-    let y = 64 + addressLines.length * 6;
-    doc.text(`Job #: ${client.jobNumber || 'N/A'}`, 20, y);
-    y += 10;
-
-    // Project manager contact
+    doc.setTextColor(ink.r, ink.g, ink.b);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
-    doc.text('Your Project Manager', 20, y);
-    y += 6;
+    doc.setFontSize(18);
+    doc.text('ESTIMATE', right, y + 6, { align: 'right' });
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
-    doc.text(`${userName || 'Rep'} · ${userTitle || 'Project Manager'}`, 20, y);
-    y += 5;
-    doc.text(`Phone: ${pmPhone}`, 20, y);
-    y += 5;
-    doc.text(`Email: ${userEmail || 'N/A'}`, 20, y);
-    y += 12;
+    doc.setFontSize(9);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.text('Roofing proposal', right, y + 11.5, { align: 'right' });
+    doc.text(`Prepared ${estimateDate}`, right, y + 16, { align: 'right' });
 
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12);
-    doc.text('Scope of Work', 20, y);
+    y = 36;
+    doc.setDrawColor(rule.r, rule.g, rule.b);
+    doc.setLineWidth(0.4);
+    doc.line(left, y, right, y);
     y += 8;
+
+    // --- Client / job meta ---
+    const metaLeft = left;
+    const metaRight = pageW / 2 + 4;
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('PREPARED FOR', metaLeft, y);
+    doc.text('PROJECT MANAGER', metaRight, y);
+    y += 5;
+    doc.setTextColor(ink.r, ink.g, ink.b);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
+    doc.text(client.fullName, metaLeft, y);
+    doc.text(`${userName || 'Rep'} · ${userTitle || 'Project Manager'}`, metaRight, y);
+    y += 5;
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.setFontSize(9);
+    doc.text(client.phone || '—', metaLeft, y);
+    doc.text(pmPhone || '—', metaRight, y);
+    y += 5;
+    doc.text(client.email || '—', metaLeft, y);
+    doc.text(userEmail || '—', metaRight, y);
+    y += 8;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('LOCATION', metaLeft, y);
+    doc.text('JOB', metaRight, y);
+    y += 5;
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    const addressLines = doc.splitTextToSize(
+      client.fullAddress || '—',
+      pageW / 2 - 28
+    );
+    doc.text(addressLines, metaLeft, y);
+    doc.text(client.jobNumber || '—', metaRight, y);
+    y += Math.max(12, addressLines.length * 5 + 6);
 
+    // --- Scope table ---
+    doc.setFillColor(245, 245, 246);
+    doc.rect(left, y - 4, right - left, 8, 'F');
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.text('SCOPE OF WORK', left + 2, y + 1);
+    doc.text('AMOUNT', right - 2, y + 1, { align: 'right' });
+    y += 8;
+    doc.setDrawColor(rule.r, rule.g, rule.b);
+    doc.setLineWidth(0.25);
+    doc.line(left, y, right, y);
+    y += 6;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.setTextColor(ink.r, ink.g, ink.b);
     scopeItems.forEach((item) => {
-      if (y > 270) {
+      if (y > pageH - 55) {
         doc.addPage();
         y = 20;
       }
@@ -7618,81 +8608,94 @@ showToast(
         typeof item === 'object' && item && item.amount != null && item.amount > 0
           ? Math.round(item.amount)
           : null;
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(10);
-      doc.setTextColor(30);
-      const maxW = amount != null ? 140 : 170;
-      const lines = doc.splitTextToSize(`•  ${line}`, maxW);
-      doc.text(lines, 20, y);
+      const wrapped = doc.splitTextToSize(line, amount != null ? right - left - 40 : right - left - 4);
+      doc.text(wrapped, left + 2, y);
       if (amount != null) {
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(10);
-        doc.text(`$${amount.toLocaleString()}`, 190, y, { align: 'right' });
+        doc.text(money(amount), right - 2, y, { align: 'right' });
       }
-      y += lines.length * 5 + 2;
+      y += Math.max(7, wrapped.length * 4.8);
     });
 
     if (notes.trim()) {
-      y += 10;
-      if (y > 250) {
+      y += 6;
+      if (y > pageH - 50) {
         doc.addPage();
         y = 20;
       }
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(12);
-      doc.text('ADDITIONAL NOTES', 20, y);
+      doc.setDrawColor(rule.r, rule.g, rule.b);
+      doc.line(left, y, right, y);
       y += 8;
+      doc.setTextColor(muted.r, muted.g, muted.b);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.text('ADDITIONAL NOTES', left, y);
+      y += 5;
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(10);
-      const noteLines = doc.splitTextToSize(notes, maxWidth);
-      if (y + noteLines.length * 5 > 270) {
-        doc.addPage();
-        y = 20;
-      }
-      doc.text(noteLines, 20, y);
-      y += noteLines.length * 5 + 8;
+      doc.setFontSize(9);
+      doc.setTextColor(ink.r, ink.g, ink.b);
+      const noteLines = doc.splitTextToSize(notes.trim(), right - left);
+      doc.text(noteLines, left, y);
+      y += noteLines.length * 4.2 + 6;
     }
 
-    y += 12;
-    if (y > 250) {
+    y += 4;
+    if (y > pageH - 45) {
       doc.addPage();
       y = 20;
     }
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(14);
-    doc.text('Total Investment', 20, y);
-    doc.text(`$${estimatorTotalPrice.toLocaleString()}`, pageWidth - 20, y, { align: 'right' });
-    doc.setFont('helvetica', 'normal');
-
-    if (bufferUsed > 0) {
-      y += 8;
-      doc.setFontSize(10);
-      doc.text(
-        `Special discount applied — $${bufferUsed.toLocaleString()}`,
-        20,
-        y
-      );
-    }
-
-    y += 12;
-    doc.setFontSize(9);
-    doc.text(
-      'Pricing subject to change upon signed change order for unforeseen conditions. Valid for 30 days.',
-      20,
-      y
-    );
-
+    doc.setDrawColor(rule.r, rule.g, rule.b);
+    doc.line(left, y, right, y);
     y += 10;
-    doc.setFontSize(10);
-    doc.text(`Thank you for choosing ${brandCompany}.`, 20, y);
-    y += 8;
+
+    const totalsX = right - 70;
+    if (bufferUsed > 0) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(muted.r, muted.g, muted.b);
+      doc.text('Special discount', totalsX, y);
+      doc.text(`−$${bufferUsed.toLocaleString()}`, right - 2, y, {
+        align: 'right',
+      });
+      y += 7;
+    }
+    doc.setDrawColor(ink.r, ink.g, ink.b);
+    doc.setLineWidth(0.5);
+    doc.line(totalsX, y - 2, right, y - 2);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.text('Total investment', totalsX, y + 4);
+    doc.text(money(estimatorTotalPrice), right - 2, y + 4, {
+      align: 'right',
+    });
+    y += 14;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    const disclaimer = doc.splitTextToSize(
+      'Pricing subject to change upon signed change order for unforeseen conditions. Valid for 30 days.',
+      right - left
+    );
+    doc.text(disclaimer, left, y);
+    y += disclaimer.length * 4 + 6;
     doc.setFontSize(9);
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.text(`Thank you for choosing ${brandCompany}.`, left, y);
+    y += 5;
+    doc.setFontSize(8);
+    doc.setTextColor(muted.r, muted.g, muted.b);
     doc.text(
-      `Questions? Contact ${userName || 'Rep'} (${userTitle || 'Project Manager'}) · ${pmPhone} · ${userEmail || ''}`,
-      20,
+      `Questions? ${userName || 'Rep'} · ${pmPhone || ''} · ${userEmail || ''}`,
+      left,
       y
     );
+
+    doc.setFontSize(7);
+    doc.setTextColor(160, 160, 165);
+    doc.text('Estimate · for customer review', pageW / 2, pageH - 10, {
+      align: 'center',
+    });
 
     const safeName =
       [client.firstName, client.lastName].filter(Boolean).join('_') || 'Estimate';
@@ -7848,6 +8851,27 @@ showToast(
   const openNavTab = (tab: AppTab) => {
     setShowProfessionalEstimate(false);
     setSidebarOpen(false);
+    // Leaving a document workspace via nav — return to normal shell
+    if (systemDocWorkspace) {
+      setSystemDocWorkspace(null);
+      setTakeoffAssignOpen(false);
+      if (
+        systemDocWorkspace === 'mitigation' ||
+        systemDocWorkspace === 'mitigation_personal' ||
+        systemDocWorkspace === 'mitigation_company'
+      ) {
+        setMitigationDraft(null);
+        setMitigationWorkspace('invoice');
+        setShowMitigationCostBreakdown(false);
+        setShowMitigationInvoice(false);
+        setShowMitigationPreview(false);
+        try {
+          sessionStorage.removeItem('summitMitigationWorkspace');
+        } catch {
+          /* ignore */
+        }
+      }
+    }
     handleTabChange(tab);
   };
 
@@ -7967,20 +8991,27 @@ showToast(
     }
   };
 
-  const renderSidebarNav = (onNavigate?: () => void) => (
-    <nav className="flex flex-col gap-0.5 px-2.5 py-3">
+  const renderSidebarNav = (onNavigate?: () => void, opts?: { collapsed?: boolean }) => {
+    const collapsed = opts?.collapsed === true;
+    return (
+    <nav className={`flex flex-col gap-0.5 py-3 ${collapsed ? 'px-1.5' : 'px-2.5'}`}>
       {sidebarPrimary.map((item) => {
         const active = isSidebarTabActive(item.tab);
         return (
           <button
             key={item.tab}
             type="button"
+            title={collapsed ? item.label : undefined}
             onClick={() => {
               setSidebarProfileOpen(false);
               openNavTab(item.tab);
               onNavigate?.();
             }}
-            className={`flex items-center gap-3 w-full rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
+            className={`flex items-center w-full rounded-xl text-sm font-medium transition-all ${
+              collapsed
+                ? 'justify-center px-0 py-2.5'
+                : 'gap-3 px-3 py-2.5'
+            } ${
               active
                 ? 'bg-zinc-900 text-white shadow-sm'
                 : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
@@ -7992,15 +9023,20 @@ showToast(
                 active ? 'opacity-100' : 'opacity-80'
               }`}
             />
-            <span className="truncate">{item.label}</span>
+            {!collapsed && <span className="truncate">{item.label}</span>}
           </button>
         );
       })}
     </nav>
-  );
+    );
+  };
 
   /** Grok-style profile dock — bottom of sidebar */
-  const renderSidebarProfile = (onNavigate?: () => void) => {
+  const renderSidebarProfile = (
+    onNavigate?: () => void,
+    opts?: { collapsed?: boolean }
+  ) => {
+    const collapsed = opts?.collapsed === true;
     const displayName = userName || (email ? email.split('@')[0] : 'Account');
     const subtitle =
       userCompany.trim() || userTitle.trim() || userEmail || email || '';
@@ -8009,11 +9045,19 @@ showToast(
 
     return (
       <div
-        className="relative shrink-0 border-t border-zinc-200/70 px-2.5 py-2.5"
+        className={`relative shrink-0 border-t border-zinc-200/70 py-2.5 ${
+          collapsed ? 'px-1.5' : 'px-2.5'
+        }`}
         data-sidebar-profile
       >
         {sidebarProfileOpen && (
-          <div className="absolute bottom-full left-2.5 right-2.5 mb-1.5 rounded-2xl bg-white border border-zinc-200 shadow-md overflow-hidden z-50">
+          <div
+            className={`absolute bottom-full mb-1.5 rounded-2xl bg-white border border-zinc-200 shadow-md overflow-hidden z-50 ${
+              collapsed
+                ? 'left-1.5 w-52'
+                : 'left-2.5 right-2.5'
+            }`}
+          >
             <button
               type="button"
               onClick={() => {
@@ -8039,11 +9083,14 @@ showToast(
         )}
         <button
           type="button"
+          title={collapsed ? displayName : undefined}
           onClick={() => {
             setShowUserMenu(false);
             setSidebarProfileOpen((v) => !v);
           }}
-          className={`w-full flex items-center gap-2.5 rounded-2xl px-2 py-2 text-left transition-colors ${
+          className={`w-full flex items-center rounded-2xl text-left transition-colors ${
+            collapsed ? 'justify-center px-0 py-2' : 'gap-2.5 px-2 py-2'
+          } ${
             profileActive || sidebarProfileOpen
               ? 'bg-zinc-200/70 ring-1 ring-zinc-200/90'
               : 'hover:bg-zinc-200/50'
@@ -8054,55 +9101,112 @@ showToast(
           <div className="w-9 h-9 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-semibold text-white shrink-0">
             {initial}
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-semibold text-zinc-900 truncate leading-tight">
-              {displayName}
-            </div>
-            {subtitle ? (
-              <div className="text-[11px] text-zinc-500 truncate mt-0.5 leading-tight">
-                {subtitle}
+          {!collapsed && (
+            <>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-zinc-900 truncate leading-tight">
+                  {displayName}
+                </div>
+                {subtitle ? (
+                  <div className="text-[11px] text-zinc-500 truncate mt-0.5 leading-tight">
+                    {subtitle}
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-          </div>
-          <svg
-            className={`w-4 h-4 shrink-0 text-zinc-400 transition-transform ${
-              sidebarProfileOpen ? 'rotate-180' : ''
-            }`}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.75"
-            viewBox="0 0 24 24"
-            aria-hidden
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
-          </svg>
+              <svg
+                className={`w-4 h-4 shrink-0 text-zinc-400 transition-transform ${
+                  sidebarProfileOpen ? 'rotate-180' : ''
+                }`}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.75"
+                viewBox="0 0 24 24"
+                aria-hidden
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
+              </svg>
+            </>
+          )}
         </button>
       </div>
     );
   };
 
+  const desktopSidebarWidth = sidebarCollapsed
+    ? SIDEBAR_WIDTH_COLLAPSED
+    : SIDEBAR_WIDTH_EXPANDED;
+
+  /** Document workspaces sit beside the sidebar (same shell), not over it. */
+  const documentWorkspaceClass = `fixed inset-y-0 right-0 z-[35] bg-zinc-50 overflow-y-auto transition-[left] duration-200 ease-out left-0 ${
+    sidebarCollapsed ? 'lg:left-[4.25rem]' : 'lg:left-[15.5rem]'
+  }`;
+
   const renderAppSidebar = () => (
     <>
       {/* Desktop sidebar */}
       <aside
-        className="hidden lg:flex fixed inset-y-0 left-0 z-40 w-[15.5rem] flex-col border-r border-zinc-200/80 bg-zinc-50/95 backdrop-blur-md"
+        className="hidden lg:flex fixed inset-y-0 left-0 z-40 flex-col border-r border-zinc-200/80 bg-zinc-50/95 backdrop-blur-md transition-[width] duration-200 ease-out"
+        style={{ width: desktopSidebarWidth }}
         aria-label="Main navigation"
+        data-collapsed={sidebarCollapsed ? 'true' : 'false'}
       >
-        <div className="h-14 sm:h-16 flex items-center gap-2.5 px-4 border-b border-zinc-200/70 shrink-0">
-          <div className="w-8 h-8 rounded-xl bg-zinc-900 ring-1 ring-zinc-700/40 flex items-center justify-center">
-            <span className="text-white text-lg font-bold tracking-tight">S</span>
-          </div>
-          <div className="min-w-0">
-            <div className="font-semibold text-[15px] tracking-tight text-zinc-900 truncate">
-              Summit
-            </div>
-            <div className="text-[10px] uppercase tracking-wider text-zinc-400 font-medium">
-              Roofing OS
-            </div>
-          </div>
+        <div
+          className={`h-14 sm:h-16 flex items-center border-b border-zinc-200/70 shrink-0 ${
+            sidebarCollapsed ? 'justify-center px-1.5' : 'gap-2.5 px-3'
+          }`}
+        >
+          {sidebarCollapsed ? (
+            <button
+              type="button"
+              onClick={toggleSidebarCollapsed}
+              className="w-9 h-9 rounded-xl bg-zinc-900 ring-1 ring-zinc-700/40 flex items-center justify-center hover:bg-zinc-800 transition-colors"
+              title="Expand sidebar"
+              aria-label="Expand sidebar"
+            >
+              <span className="text-white text-lg font-bold tracking-tight">S</span>
+            </button>
+          ) : (
+            <>
+              <div className="w-8 h-8 rounded-xl bg-zinc-900 ring-1 ring-zinc-700/40 flex items-center justify-center shrink-0">
+                <span className="text-white text-lg font-bold tracking-tight">S</span>
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-semibold text-[15px] tracking-tight text-zinc-900 truncate">
+                  Summit
+                </div>
+                <div className="text-[10px] uppercase tracking-wider text-zinc-400 font-medium">
+                  Roofing OS
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={toggleSidebarCollapsed}
+                className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-zinc-500 hover:bg-zinc-200/70 hover:text-zinc-800"
+                title="Collapse sidebar"
+                aria-label="Collapse sidebar"
+              >
+                <svg
+                  className="w-4 h-4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  viewBox="0 0 24 24"
+                  aria-hidden
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M15 6 9 12l6 6"
+                  />
+                </svg>
+              </button>
+            </>
+          )}
         </div>
-        <div className="flex-1 overflow-y-auto py-1">{renderSidebarNav()}</div>
-        {renderSidebarProfile()}
+        <div className="flex-1 overflow-y-auto overflow-x-hidden py-1">
+          {renderSidebarNav(undefined, { collapsed: sidebarCollapsed })}
+        </div>
+        {renderSidebarProfile(undefined, { collapsed: sidebarCollapsed })}
       </aside>
 
       {/* Mobile drawer */}
@@ -8166,6 +9270,28 @@ showToast(
             <path strokeLinecap="round" d="M4 7h16M4 12h16M4 17h16" />
           </svg>
         </button>
+
+        {/* Desktop: expand rail when collapsed (sidebar logo also expands) */}
+        {sidebarCollapsed && (
+          <button
+            type="button"
+            className="hidden lg:flex shrink-0 w-10 h-10 rounded-xl items-center justify-center text-zinc-700 hover:bg-zinc-200/70 border border-zinc-200 bg-white"
+            onClick={toggleSidebarCollapsed}
+            aria-label="Expand sidebar"
+            title="Expand sidebar"
+          >
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.75"
+              viewBox="0 0 24 24"
+              aria-hidden
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="m9 6 6 6-6 6" />
+            </svg>
+          </button>
+        )}
 
         <div className="lg:hidden flex items-center gap-2 shrink-0 min-w-0">
           <div className="w-8 h-8 rounded-xl bg-zinc-900 flex items-center justify-center">
@@ -8368,10 +9494,10 @@ showToast(
       {(systemDocWorkspace === 'mitigation' ||
         systemDocWorkspace === 'mitigation_personal' ||
         systemDocWorkspace === 'mitigation_company') && (
-        <div className="fixed inset-0 z-[90] bg-zinc-50 overflow-y-auto">
+        <div className={documentWorkspaceClass}>
           <div className="page-shell !py-8 sm:!py-10">
             {/* Header */}
-            <div className="mb-8 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+            <div className="mb-6 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
               <div>
                 <button
                   type="button"
@@ -8379,8 +9505,11 @@ showToast(
                   onClick={() => {
                     setSystemDocWorkspace(null);
                     setMitigationDraft(null);
+                    setMitigationWorkspace('invoice');
+                    setShowMitigationCostBreakdown(false);
     try { sessionStorage.removeItem('summitMitigationWorkspace'); } catch (e) {}
                     setShowMitigationInvoice(false);
+                    setShowMitigationPreview(false);
                     if (currentLeadId != null) {
                       setIsEditingLead(true);
                       setProfileTab('documents');
@@ -8393,16 +9522,24 @@ showToast(
                 <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
                   Mitigation invoice
                 </h1>
+                <p className="text-sm text-zinc-500 mt-1">
+                  {mitigationWorkspace === 'internal'
+                    ? 'Internal financials & buffer'
+                    : 'Customer quote · mitigation'}
+                </p>
               </div>
               <button
                 type="button"
                 onClick={() => {
                   setSystemDocWorkspace(null);
                   setMitigationDraft(null);
+                  setMitigationWorkspace('invoice');
+                  setShowMitigationCostBreakdown(false);
                   try {
                     sessionStorage.removeItem('summitMitigationWorkspace');
                   } catch (e) {}
                   setShowMitigationInvoice(false);
+                  setShowMitigationPreview(false);
                   if (currentLeadId != null) {
                     setIsEditingLead(true);
                     setProfileTab('documents');
@@ -8415,8 +9552,460 @@ showToast(
               </button>
             </div>
 
+            {mitigationDraft && !showMitigationPreview && (
+              <div className="inline-flex p-1 rounded-full bg-zinc-100 mb-6">
+                <button
+                  type="button"
+                  onClick={() => setMitigationWorkspace('invoice')}
+                  className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-colors ${
+                    mitigationWorkspace === 'invoice'
+                      ? 'bg-white text-zinc-900 shadow-sm'
+                      : 'text-zinc-500 hover:text-zinc-800'
+                  }`}
+                >
+                  Invoice
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMitigationWorkspace('internal')}
+                  className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-colors ${
+                    mitigationWorkspace === 'internal'
+                      ? 'bg-white text-zinc-900 shadow-sm'
+                      : 'text-zinc-500 hover:text-zinc-800'
+                  }`}
+                >
+                  Internal
+                </button>
+              </div>
+            )}
+
             {!mitigationDraft ? (
               <div className="text-base text-zinc-500">Loading…</div>
+            ) : mitigationWorkspace === 'internal' ? (
+              <div className="space-y-6 pb-16 w-full">
+                <div className="bg-white rounded-3xl p-6 border border-zinc-200">
+                  <div className="font-semibold text-xl mb-6 text-zinc-900">
+                    Job financials
+                  </div>
+                  <div className="mb-6">
+                    <div className="text-sm text-zinc-500">Total invoice (sell)</div>
+                    <div className="text-4xl font-semibold tabular-nums text-emerald-700">
+                      $
+                      {mitigationListSell.toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </div>
+                    <p className="text-xs text-zinc-400 mt-1">
+                      List sell from invoice lines · negotiate below if needed
+                    </p>
+                  </div>
+                  <div className="space-y-4">
+                    <div
+                      onClick={() =>
+                        setShowMitigationCostBreakdown(!showMitigationCostBreakdown)
+                      }
+                      className="flex justify-between items-center cursor-pointer hover:bg-zinc-100 p-2 rounded-2xl -mx-2 text-zinc-900"
+                    >
+                      <div>Material cost</div>
+                      <div className="font-semibold text-red-600">
+                        -$
+                        {mitigationCostTotal.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center text-zinc-900 px-2 -mx-2">
+                      <div className="font-semibold">Margin</div>
+                      <div className="font-semibold text-emerald-700 tabular-nums">
+                        $
+                        {mitigationMargin.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-xs text-zinc-500 mt-4">
+                    Labor is included in the sell price. Only materials (tarps,
+                    battens, sandbags) count as cost — everything else is $0
+                    on the cost sheet.
+                  </p>
+                  {showMitigationCostBreakdown && (
+                    <div className="mt-6 bg-zinc-100 rounded-3xl p-6 text-sm text-zinc-900">
+                      <div className="font-semibold mb-4">Cost breakdown</div>
+                      {(mitigationDraft.lines || []).length === 0 ? (
+                        <div className="text-zinc-500">
+                          No line items yet — add them on Invoice.
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {(mitigationDraft.lines || []).map((ln) => {
+                            const unitKey = mitigationCostKeyForLine(ln);
+                            const unitCost = mitigationCostForKey(unitKey);
+                            const lineCost = mitigationLineCost(ln);
+                            const money = (n: number) =>
+                              n.toLocaleString(undefined, {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              });
+                            return (
+                              <div
+                                key={ln.id}
+                                className="flex justify-between gap-3 items-start"
+                              >
+                                <span className="min-w-0">
+                                  <span className="font-medium">
+                                    {formatMitigationLineDescription(ln)}
+                                  </span>
+                                  <span className="block text-xs text-zinc-500">
+                                    qty {ln.qty}
+                                    {unitCost != null
+                                      ? ` · $${money(unitCost)} cost ea`
+                                      : ' · no cost on sheet'}
+                                  </span>
+                                </span>
+                                <span className="shrink-0 tabular-nums text-right">
+                                  <span className="block text-emerald-700">
+                                    sell ${money(Number(ln.amount || 0))}
+                                  </span>
+                                  <span className="block text-red-600">
+                                    {lineCost == null
+                                      ? 'cost —'
+                                      : `cost $${money(lineCost)}`}
+                                  </span>
+                                </span>
+                              </div>
+                            );
+                          })}
+                          <div className="pt-3 border-t border-zinc-200 flex justify-between font-semibold">
+                            <span>Total material cost</span>
+                            <span className="text-red-600">
+                              $
+                              {mitigationCostTotal.toLocaleString(undefined, {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </span>
+                          </div>
+                          <div className="flex justify-between font-semibold">
+                            <span>Margin</span>
+                            <span className="text-emerald-700">
+                              $
+                              {mitigationMargin.toLocaleString(undefined, {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-white rounded-3xl p-6 border border-zinc-200">
+                  <div className="font-semibold text-xl mb-6 text-zinc-900">
+                    Your margin
+                  </div>
+                  <div className="bg-emerald-50/60 border border-emerald-100 rounded-3xl p-6 mb-4">
+                    <div className="text-sm text-zinc-500 mb-1">
+                      Negotiated sell − material cost
+                    </div>
+                    <div className="text-4xl font-semibold text-emerald-700 tabular-nums">
+                      $
+                      {mitigationMargin.toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </div>
+                    <div className="text-xs text-zinc-500 mt-1">
+                      Labor is included · list sell $
+                      {mitigationListSell.toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                      {mitigationBufferUsed > 0
+                        ? ` · discount $${mitigationBufferUsed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                        : ''}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Negotiation buffer — twin of estimate, starts at list sell */}
+                <div className="bg-white rounded-3xl p-6 border border-amber-200/80 shadow-sm ring-1 ring-amber-100/80">
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-2">
+                    <div className="font-semibold text-xl text-zinc-900">
+                      Negotiation buffer
+                    </div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-amber-800 bg-amber-50 border border-amber-100 px-2.5 py-1 rounded-full w-fit">
+                      ${MITIGATION_BUFFER_CAP.toLocaleString()} discount room
+                    </div>
+                  </div>
+                  <p className="text-sm text-zinc-500 mb-5">
+                    Starts at list sell price. Lower it in the field for a small
+                    discount — costs stay internal.
+                  </p>
+
+                  <div className="mb-5">
+                    <div className="flex justify-between text-xs font-medium text-zinc-500 mb-1.5">
+                      <span>Buffer used</span>
+                      <span>
+                        $
+                        {mitigationBufferUsed.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}{' '}
+                        of ${MITIGATION_BUFFER_CAP.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="h-3 rounded-full bg-zinc-100 overflow-hidden flex">
+                      <div
+                        className="h-full bg-amber-500 transition-all duration-300"
+                        style={{ width: `${mitigationBufferUsedPct}%` }}
+                      />
+                      <div
+                        className="h-full bg-emerald-500/80 transition-all duration-300"
+                        style={{
+                          width: `${100 - mitigationBufferUsedPct}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-[11px] mt-1.5">
+                      <span className="text-amber-700 font-medium">
+                        Used $
+                        {mitigationBufferUsed.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </span>
+                      <span className="text-emerald-700 font-medium">
+                        Left $
+                        {mitigationBufferRemaining.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mb-4">
+                    <div className="text-sm text-zinc-500 mb-1">
+                      Negotiated / final price
+                    </div>
+                    <input
+                      type="number"
+                      value={
+                        mitigationDraft.negotiatedTotal != null
+                          ? mitigationDraft.negotiatedTotal
+                          : mitigationListSell
+                      }
+                      onChange={(e) =>
+                        setMitigationDraft({
+                          ...mitigationDraft,
+                          negotiatedTotal: Number(e.target.value),
+                        })
+                      }
+                      className="text-4xl font-semibold w-full border border-zinc-200 rounded-2xl px-4 py-3 text-zinc-900 focus:outline-none focus:border-amber-300 focus:ring-2 focus:ring-amber-100"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={applyMitigationNegotiatedTotal}
+                    className="btn-primary w-full py-4 rounded-3xl font-semibold mb-6"
+                  >
+                    Apply negotiated price
+                  </button>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="rounded-2xl bg-amber-50 border border-amber-100 p-4">
+                      <div className="text-xs font-medium text-amber-800/80 uppercase tracking-wide">
+                        Buffer used
+                      </div>
+                      <div className="text-3xl font-semibold text-amber-700 tabular-nums mt-1">
+                        $
+                        {mitigationBufferUsed.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl bg-emerald-50 border border-emerald-100 p-4">
+                      <div className="text-xs font-medium text-emerald-800/80 uppercase tracking-wide">
+                        Remaining
+                      </div>
+                      <div className="text-3xl font-semibold text-emerald-700 tabular-nums mt-1">
+                        $
+                        {mitigationBufferRemaining.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-xs text-zinc-500 mt-5">
+                    Invoice PDF and saved total use the negotiated price. Costs never
+                    appear on the customer PDF.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setMitigationWorkspace('invoice')}
+                  className="w-full py-3 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50"
+                >
+                  ← Back to invoice
+                </button>
+              </div>
+            ) : showMitigationPreview ? (
+              <div className="bg-white p-5 sm:p-8 text-zinc-900 pb-16 rounded-3xl border border-zinc-200/80 shadow-sm">
+                <div className="flex justify-between items-center mb-8 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowMitigationPreview(false)}
+                    className="px-6 py-2 border border-zinc-300 rounded-2xl text-sm hover:bg-zinc-100"
+                  >
+                    ← Back to invoice
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      generateMitigationPdf({ download: true, save: false })
+                    }
+                    className="btn-primary px-6 sm:px-8 py-3 rounded-3xl font-semibold"
+                  >
+                    Download PDF
+                  </button>
+                </div>
+
+                <div className="text-center mb-8">
+                  <div className="font-bold text-3xl tracking-tight">
+                    {mitigationDraft.entity === 'prowest'
+                      ? 'ProWest Roofing'
+                      : mitigationPersonalBrand()}
+                  </div>
+                  <div className="text-sm text-zinc-400 mt-1">
+                    {mitigationInvoiceTitle(mitigationDraft.entity)} ·{' '}
+                    {mitigationDraft.date}
+                  </div>
+                </div>
+
+                <div className="border border-zinc-200 rounded-3xl p-6 sm:p-10 space-y-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-1">
+                        Invoice for
+                      </div>
+                      <div className="font-medium text-zinc-900">
+                        {mitigationDraft.invoiceFor || '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-1">
+                        Payable to
+                      </div>
+                      <div className="font-medium text-zinc-900">
+                        {mitigationPayableTo(mitigationDraft.entity)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-1">
+                        Location
+                      </div>
+                      <div className="text-zinc-900">
+                        {mitigationDraft.location || '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-1">
+                        Job / claim
+                      </div>
+                      <div className="text-zinc-900">
+                        Job {mitigationDraft.job || '—'}
+                        {mitigationDraft.claimNumber
+                          ? ` · Claim ${mitigationDraft.claimNumber}`
+                          : ''}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-3">
+                      Line items
+                    </div>
+                    <div className="space-y-2">
+                      {(mitigationDraft.lines || []).length === 0 ? (
+                        <div className="text-sm text-zinc-400">No line items</div>
+                      ) : (
+                        (mitigationDraft.lines || []).map((ln) => (
+                          <div
+                            key={ln.id}
+                            className="flex justify-between gap-4 text-sm items-start"
+                          >
+                            <div className="min-w-0">
+                              {formatMitigationLineDescription(ln)}
+                            </div>
+                            <div className="shrink-0 tabular-nums font-medium text-emerald-700">
+                              $
+                              {Number(ln.amount || 0).toLocaleString(undefined, {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {mitigationDraft.notes.trim() && (
+                    <div className="rounded-2xl border border-zinc-200 bg-zinc-50/80 px-5 py-4">
+                      <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-2">
+                        Notes
+                      </div>
+                      <div className="text-sm whitespace-pre-wrap text-zinc-800">
+                        {mitigationDraft.notes}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="pt-6 border-t border-zinc-200">
+                    {mitigationBufferUsed > 0 && (
+                      <div className="flex justify-between text-sm text-amber-700 mb-2">
+                        <span>Special discount</span>
+                        <span className="tabular-nums">
+                          −$
+                          {mitigationBufferUsed.toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex justify-between items-center text-2xl font-semibold text-zinc-900">
+                      <span>Total amount due</span>
+                      <span className="tabular-nums text-emerald-700">
+                        $
+                        {mitigationNegotiated.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    generateMitigationPdf({ download: false, save: true });
+                    setShowMitigationPreview(false);
+                  }}
+                  className="btn-primary mt-10 w-full py-4 rounded-3xl font-semibold text-lg"
+                >
+                  Save This Invoice to Lead
+                </button>
+              </div>
             ) : (
               <div className="space-y-6">
                 {/* BILLING ENTITY */}
@@ -8583,211 +10172,292 @@ showToast(
                     Line items
                   </div>
 
-                  {/* Catalog */}
-                  <div className="space-y-4 mb-6">
-                    {/* Row: Trip | Install */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4">
-                      {(['Trip charges', 'Install'] as const).map((name) => {
-                        const group = MITIGATION_LINE_GROUPS.find(
-                          (g) => g.group === name
-                        );
-                        if (!group) return null;
-                        return (
-                          <div key={name} className="space-y-1.5 min-w-0">
-                            <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
-                              {group.group}
-                            </div>
-                            <MitigationGroupAddRow
-                              items={group.items}
-                              onAdd={(itemKey, label) =>
-                                addMitigationCatalogLine(itemKey, label)
-                              }
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
+                  {/* Add tarp — each tarp is its own job with installs underneath */}
+                  {(() => {
+                    const group = MITIGATION_LINE_GROUPS.find(
+                      (g) => g.group === 'Tarps'
+                    );
+                    if (!group) return null;
+                    return (
+                      <div className="space-y-1.5 mb-5">
+                        <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
+                          Add tarp
+                        </div>
+                        <MitigationTarpAddRow
+                          items={group.items}
+                          onAdd={(itemKey, label, tarpType) =>
+                            addMitigationCatalogLine(itemKey, label, tarpType)
+                          }
+                        />
+                      </div>
+                    );
+                  })()}
 
-                    {/* Tarps — full width so size + type + Add share one row */}
+                  {/* Tarp groups */}
+                  <div className="space-y-4 mb-6">
                     {(() => {
-                      const group = MITIGATION_LINE_GROUPS.find(
-                        (g) => g.group === 'Tarps'
+                      const lines = mitigationDraft.lines || [];
+                      const groupIds: string[] = [];
+                      for (const ln of lines) {
+                        if (ln.groupId && !groupIds.includes(ln.groupId)) {
+                          groupIds.push(ln.groupId);
+                        }
+                      }
+                      const installGroup = MITIGATION_LINE_GROUPS.find(
+                        (g) => g.group === 'Install'
                       );
-                      if (!group) return null;
-                      return (
-                        <div className="space-y-1.5">
-                          <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
-                            {group.group}
+                      if (groupIds.length === 0) {
+                        return (
+                          <div className="text-base text-zinc-400 py-8 text-center border border-dashed border-zinc-200 rounded-2xl bg-zinc-50/50">
+                            Add a tarp to start — then attach installs to that
+                            tarp
                           </div>
-                          <MitigationTarpAddRow
-                            items={group.items}
-                            onAdd={(itemKey, label, tarpType) =>
-                              addMitigationCatalogLine(
-                                itemKey,
-                                label,
-                                tarpType
+                        );
+                      }
+                      return groupIds.map((gid) => {
+                        const inGroup = lines.filter((l) => l.groupId === gid);
+                        const tarpLine = inGroup.find((l) =>
+                          l.itemKey.startsWith('tarp_')
+                        );
+                        const childLines = inGroup.filter(
+                          (l) => !l.itemKey.startsWith('tarp_')
+                        );
+                        const label =
+                          tarpLine?.groupLabel ||
+                          inGroup.find((l) => l.groupLabel)?.groupLabel ||
+                          'Tarp';
+                        const isActive = activeTarpGroupId === gid;
+                        return (
+                          <div
+                            key={gid}
+                            className={`rounded-2xl border p-4 space-y-3 ${
+                              isActive
+                                ? 'border-sky-400 bg-sky-50/40'
+                                : 'border-zinc-200 bg-zinc-50/40'
+                            }`}
+                            onClick={() => setActiveTarpGroupId(gid)}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                                {label}
+                                {isActive ? (
+                                  <span className="ml-2 text-sky-700 normal-case tracking-normal font-medium">
+                                    · adding here
+                                  </span>
+                                ) : null}
+                              </div>
+                              <button
+                                type="button"
+                                className="text-xs text-zinc-500 hover:text-red-500/90"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  removeMitigationTarpGroup(gid);
+                                }}
+                              >
+                                Remove tarp
+                              </button>
+                            </div>
+
+                            {tarpLine && (
+                              <div className="flex flex-wrap items-center gap-3 text-base bg-white rounded-2xl px-4 py-3 border border-zinc-100">
+                                <div className="flex-1 min-w-[8rem] font-medium text-zinc-900">
+                                  {formatMitigationLineDescription(tarpLine)}
+                                </div>
+                                <div className="w-24 text-right tabular-nums font-medium text-emerald-700">
+                                  $
+                                  {Number(tarpLine.amount || 0).toLocaleString(
+                                    undefined,
+                                    {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    }
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {installGroup && (
+                              <div
+                                className="space-y-1.5"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <div className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
+                                  Install on this tarp
+                                </div>
+                                <MitigationGroupAddRow
+                                  items={installGroup.items}
+                                  onAdd={(itemKey, itemLabel) => {
+                                    addMitigationCatalogLine(
+                                      itemKey,
+                                      itemLabel,
+                                      null,
+                                      { groupId: gid }
+                                    );
+                                  }}
+                                />
+                              </div>
+                            )}
+
+                            {childLines.map((ln) => (
+                              <div
+                                key={ln.id}
+                                className="flex flex-wrap items-center gap-3 text-sm bg-white rounded-2xl px-4 py-2.5 border border-zinc-100"
+                              >
+                                <div className="flex-1 min-w-[8rem] font-medium text-zinc-900">
+                                  {formatMitigationLineDescription(ln)}
+                                </div>
+                                <input
+                                  type="number"
+                                  className="w-16 border border-zinc-200 rounded-xl px-2 py-1.5 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                                  value={ln.qty}
+                                  title={
+                                    ln.itemKey === 'hip_install'
+                                      ? 'Number of hips'
+                                      : 'Qty'
+                                  }
+                                  onFocus={(e) => e.target.select()}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onChange={(e) =>
+                                    updateMitigationLineQty(
+                                      ln.id,
+                                      parseFloat(e.target.value) || 0
+                                    )
+                                  }
+                                />
+                                <div className="w-20 text-right tabular-nums font-medium text-emerald-700">
+                                  $
+                                  {Number(ln.amount || 0).toLocaleString(
+                                    undefined,
+                                    {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    }
+                                  )}
+                                </div>
+                                <button
+                                  type="button"
+                                  className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    removeMitigationLine(ln.id);
+                                  }}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+
+                  {/* House-level: Trip | Adders | Obstruction */}
+                  <div className="space-y-4 mb-4">
+                    <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
+                      House-level charges
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4">
+                      {(['Trip charges', 'Adders', 'Obstruction'] as const).map(
+                        (name) => {
+                          const group = MITIGATION_LINE_GROUPS.find(
+                            (g) => g.group === name
+                          );
+                          if (!group) return null;
+                          return (
+                            <div key={name} className="space-y-1.5 min-w-0">
+                              <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
+                                {group.group}
+                              </div>
+                              <MitigationGroupAddRow
+                                items={group.items}
+                                onAdd={(itemKey, label) =>
+                                  addMitigationCatalogLine(itemKey, label)
+                                }
+                              />
+                            </div>
+                          );
+                        }
+                      )}
+                    </div>
+                  </div>
+
+                  {/* House-level line list */}
+                  <div className="space-y-2">
+                    {(mitigationDraft.lines || [])
+                      .filter((ln) => !ln.groupId)
+                      .map((ln) => (
+                        <div
+                          key={ln.id}
+                          className="flex flex-wrap items-center gap-3 text-base bg-zinc-50 rounded-2xl px-4 py-3 border border-zinc-100"
+                        >
+                          <div className="flex-1 min-w-[8rem] font-medium text-zinc-900">
+                            {formatMitigationLineDescription(ln)}
+                          </div>
+                          <input
+                            type="number"
+                            className="w-20 border border-zinc-200 rounded-xl px-3 py-2 bg-white text-base focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                            value={ln.qty}
+                            onFocus={(e) => e.target.select()}
+                            onChange={(e) =>
+                              updateMitigationLineQty(
+                                ln.id,
+                                parseFloat(e.target.value) || 0
                               )
                             }
                           />
-                        </div>
-                      );
-                    })()}
-
-                    {/* Row: Adders | Obstruction */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4">
-                      {(() => {
-                        const group = MITIGATION_LINE_GROUPS.find(
-                          (g) => g.group === 'Adders'
-                        );
-                        if (!group) return null;
-                        return (
-                          <div className="space-y-1.5 min-w-0">
-                            <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
-                              {group.group}
-                            </div>
-                            <MitigationGroupAddRow
-                              items={group.items}
-                              onAdd={(itemKey, label) =>
-                                addMitigationCatalogLine(itemKey, label)
-                              }
-                            />
+                          <div className="w-24 text-right tabular-nums font-medium text-emerald-700">
+                            $
+                            {Number(ln.amount || 0).toLocaleString(undefined, {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
                           </div>
-                        );
-                      })()}
-
-                      {(() => {
-                        const group = MITIGATION_LINE_GROUPS.find(
-                          (g) => g.group === 'Obstruction'
-                        );
-                        if (!group) return null;
-                        const it = group.items[0];
-                        const on = !!mitigationDraft?.lines.some(
-                          (l) => l.itemKey === it.itemKey
-                        );
-                        return (
-                          <div className="space-y-1.5 min-w-0">
-                            <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
-                              {group.group}
-                            </div>
-                            <div className="grid grid-cols-2 gap-2">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (!on)
-                                    addMitigationCatalogLine(
-                                      it.itemKey,
-                                      it.label
-                                    );
-                                }}
-                                className={`rounded-2xl border-2 px-5 py-2.5 text-sm font-semibold transition ${
-                                  on
-                                    ? 'border-sky-500 bg-sky-50 text-sky-800'
-                                    : 'border-zinc-200 bg-white text-zinc-700 hover:border-sky-300'
-                                }`}
-                              >
-                                Yes
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (on && mitigationDraft) {
-                                    setMitigationDraft({
-                                      ...mitigationDraft,
-                                      lines: mitigationDraft.lines.filter(
-                                        (l) => l.itemKey !== it.itemKey
-                                      ),
-                                    });
-                                  }
-                                }}
-                                className={`rounded-2xl border-2 px-5 py-2.5 text-sm font-semibold transition ${
-                                  !on
-                                    ? 'border-sky-500 bg-sky-50 text-sky-800'
-                                    : 'border-zinc-200 bg-white text-zinc-700 hover:border-sky-300'
-                                }`}
-                              >
-                                No
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  </div>
-
-
-
-                  <div className="space-y-3">
-                    {mitigationDraft.lines.length === 0 && (
-                      <div className="text-base text-zinc-400 py-10 text-center border border-dashed border-zinc-200 rounded-2xl bg-zinc-50/50">
-                        Add tarp size and adders above
-                      </div>
-                    )}
-                    {mitigationDraft.lines.map((ln) => (
-                      <div
-                        key={ln.id}
-                        className="flex flex-wrap items-center gap-3 text-base bg-zinc-50 rounded-2xl px-4 py-3 border border-zinc-100"
-                      >
-                        <div className="flex-1 min-w-[8rem] font-medium text-zinc-900">
-                          {ln.label}
+                          <button
+                            type="button"
+                            className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
+                            onClick={() => removeMitigationLine(ln.id)}
+                          >
+                            Remove
+                          </button>
                         </div>
-                        <input
-                          type="number"
-                          className="w-20 border border-zinc-200 rounded-xl px-3 py-2 bg-white text-base focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
-                          value={ln.qty}
-                          onChange={(e) =>
-                            updateMitigationLineQty(
-                              ln.id,
-                              parseFloat(e.target.value) || 0
-                            )
-                          }
-                        />
-                        <div className="w-24 text-right tabular-nums font-medium text-emerald-700">
-                          ${ln.amount.toLocaleString()}
-                        </div>
-                        <button
-                          type="button"
-                          className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
-                          onClick={() => removeMitigationLine(ln.id)}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    ))}
+                      ))}
                   </div>
                 </div>
 
-                {/* TOTAL + ACTIONS */}
-                <div className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="text-base font-semibold text-zinc-600">
-                      Total amount due
+                {/* TOTAL + SEE INVOICE */}
+                <div className="sticky bottom-0 bg-white/95 backdrop-blur border-t border-zinc-200 py-4 z-40 -mx-[var(--page-pad-x)] px-[var(--page-pad-x)]">
+                  <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-xs text-zinc-500">TOTAL AMOUNT DUE</div>
+                      <div className="text-4xl sm:text-5xl font-semibold text-emerald-700 tabular-nums">
+                        $
+                        {mitigationNegotiated.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </div>
+                      {mitigationBufferUsed > 0 && (
+                        <div className="text-xs text-amber-700 mt-0.5">
+                          List $
+                          {mitigationListSell.toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}{' '}
+                          · discount $
+                          {mitigationBufferUsed.toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </div>
+                      )}
                     </div>
-                    <div className="text-3xl font-semibold text-emerald-700 tabular-nums">
-                      $
-                      {mitigationDraft.lines
-                        .reduce((s, l) => s + (l.amount || 0), 0)
-                        .toLocaleString()}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <button
                       type="button"
-                      className="w-full rounded-2xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-800 font-medium py-3.5 text-base transition-colors"
-                      onClick={() =>
-                        generateMitigationPdf({ download: true, save: false })
-                      }
+                      onClick={() => setShowMitigationPreview(true)}
+                      className="btn-primary px-8 py-4 rounded-3xl font-semibold w-full sm:w-auto sm:shrink-0"
                     >
-                      Download PDF
-                    </button>
-                    <button
-                      type="button"
-                      className="w-full rounded-2xl border-2 border-sky-500 bg-white hover:bg-sky-50 text-sky-700 font-medium py-3.5 text-base transition"
-                      onClick={() =>
-                        generateMitigationPdf({ download: false, save: true })
-                      }
-                    >
-                      Save to lead
+                      See Invoice
                     </button>
                   </div>
                 </div>
@@ -8806,7 +10476,11 @@ showToast(
       )}
       {renderAppSidebar()}
       {/* Main column offset for fixed desktop sidebar */}
-      <div className="lg:pl-[15.5rem] min-h-screen pb-8 flex flex-col">
+      <div
+        className={`min-h-screen pb-8 flex flex-col transition-[padding] duration-200 ease-out ${
+          sidebarCollapsed ? 'lg:pl-[4.25rem]' : 'lg:pl-[15.5rem]'
+        }`}
+      >
       {/* Single global shell: search + user on every page */}
       {renderAppHeader()}
 
@@ -9324,7 +10998,7 @@ showToast(
         
         {/* System docs: available from lead profile + documents hub */}
 {systemDocWorkspace === 'pricing' && (
-        <div className="fixed inset-0 z-[85] bg-zinc-50 overflow-y-auto">
+        <div className={documentWorkspaceClass}>
           <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-20">
             <div className="flex items-center justify-between gap-3 mb-4 sticky top-0 bg-zinc-50/95 backdrop-blur py-3 z-10">
               <div>
@@ -9426,7 +11100,7 @@ showToast(
         </div>
       )}
 {systemDocWorkspace === 'takeoff' && (
-          <div className="fixed inset-0 z-[85] bg-zinc-50 overflow-y-auto">
+          <div className={documentWorkspaceClass}>
             <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-20">
               <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
                 <div>
@@ -9508,7 +11182,7 @@ showToast(
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
                 <button
                   type="button"
-                  className="w-full rounded-2xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-800 font-medium py-3.5 text-base transition-colors"
+                  className="btn-primary btn-primary-lg w-full rounded-full"
                   onClick={() => {
                     const lines = Object.entries(takeoffForm || {}).map(
                       ([k, v]) => `${k}: ${v || ''}`
@@ -9529,7 +11203,7 @@ showToast(
                 {currentLeadId != null ? (
                   <button
                     type="button"
-                    className="w-full rounded-2xl border-2 border-sky-500 bg-white hover:bg-sky-50 text-sky-700 font-medium py-3.5 text-base transition"
+                    className="btn-primary btn-primary-lg w-full rounded-full"
                     onClick={() => {
                       saveTakeoff(true);
                       setSystemDocWorkspace(null);
@@ -9543,7 +11217,7 @@ showToast(
                 ) : (
                   <button
                     type="button"
-                    className="w-full rounded-2xl border-2 border-sky-500 bg-white hover:bg-sky-50 text-sky-700 font-medium py-3.5 text-base transition"
+                    className="btn-primary btn-primary-lg w-full rounded-full"
                     onClick={() => setTakeoffAssignOpen(true)}
                   >
                     Assign to lead
@@ -9798,7 +11472,14 @@ showToast(
 
 
 
-        {activeTab === 'invoices' && (
+        {activeTab === 'invoices' && (() => {
+              const activeLeadIds = new Set(leads.map((l) => l.id));
+              // Hide invoices whose lead is trashed/gone; they return when the lead is restored
+              const visibleInvoices = appInvoices.filter(
+                (inv) =>
+                  inv.leadId == null || activeLeadIds.has(inv.leadId)
+              );
+              return (
           <div className="pb-8 w-full">
             <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-8">
               <div>
@@ -9806,9 +11487,9 @@ showToast(
                   Invoices
                 </h1>
                 <p className="text-zinc-500 mt-1">
-                  {appInvoices.length === 0
+                  {visibleInvoices.length === 0
                     ? 'All invoices across leads'
-                    : `${appInvoices.length} invoice${appInvoices.length === 1 ? '' : 's'}`}
+                    : `${visibleInvoices.length} invoice${visibleInvoices.length === 1 ? '' : 's'}`}
                 </p>
               </div>
               <button
@@ -9820,7 +11501,7 @@ showToast(
               </button>
             </div>
 
-            {appInvoices.length === 0 ? (
+            {visibleInvoices.length === 0 ? (
               <div className="rounded-3xl border border-dashed border-zinc-200 bg-white px-6 py-16 text-center">
                 <p className="text-sm font-medium text-zinc-800">No invoices yet</p>
                 <p className="text-sm text-zinc-500 mt-2 max-w-md mx-auto">
@@ -9845,24 +11526,31 @@ showToast(
               </div>
             ) : (
               <div className="space-y-3">
-                {appInvoices.map((inv) => (
+                {visibleInvoices.map((inv) => (
                   <div
                     key={inv.id}
-                    className="bg-white border border-zinc-200 rounded-3xl p-5 hover:border-sky-300 hover:shadow-sm transition-all"
+                    role="button"
+                    tabIndex={0}
+                    className="bg-white border border-zinc-200 rounded-3xl p-5 hover:border-sky-300 hover:shadow-sm transition-all cursor-pointer"
+                    onClick={() => {
+                      if (inv.leadId == null) return;
+                      setCurrentLeadId(inv.leadId);
+                      setIsEditingLead(true);
+                      setProfileTab('documents');
+                      setActiveTab('leads');
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== 'Enter' && e.key !== ' ') return;
+                      e.preventDefault();
+                      if (inv.leadId == null) return;
+                      setCurrentLeadId(inv.leadId);
+                      setIsEditingLead(true);
+                      setProfileTab('documents');
+                      setActiveTab('leads');
+                    }}
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                      <button
-                        type="button"
-                        className="text-left min-w-0 flex-1"
-                        onClick={() => {
-                          if (inv.leadId) {
-                            setCurrentLeadId(inv.leadId);
-                            setIsEditingLead(true);
-                            setProfileTab('documents');
-                            setActiveTab('leads');
-                          }
-                        }}
-                      >
+                      <div className="text-left min-w-0 flex-1">
                         <div className="font-semibold text-zinc-900 truncate">
                           {inv.leadLabel || 'Unknown lead'}
                         </div>
@@ -9871,14 +11559,20 @@ showToast(
                           {inv.job ? ` · ${inv.job}` : ''}
                           {inv.title ? ` · ${inv.title}` : ''}
                         </div>
-                      </button>
+                      </div>
                       <div className="flex items-center gap-3 shrink-0">
                         <div className="text-xl font-semibold tabular-nums text-emerald-700">
-                          ${Number(inv.total).toLocaleString()}
+                          $
+                          {Number(inv.total).toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
                         </div>
                         <a
                           href={inv.url}
                           download={inv.fileName}
+                          target="_blank"
+                          rel="noreferrer"
                           className="btn-primary px-3 py-1.5 text-xs font-semibold rounded-lg no-underline"
                           onClick={(e) => e.stopPropagation()}
                         >
@@ -9886,17 +11580,13 @@ showToast(
                         </a>
                         <button
                           type="button"
-                          onClick={() => {
-                            if (inv.leadId) {
-                              setCurrentLeadId(inv.leadId);
-                              setIsEditingLead(true);
-                              setProfileTab('documents');
-                              setActiveTab('leads');
-                            }
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removeAppInvoice(inv.id);
                           }}
-                          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                          className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
                         >
-                          Lead
+                          Delete
                         </button>
                       </div>
                     </div>
@@ -9905,7 +11595,8 @@ showToast(
               </div>
             )}
           </div>
-        )}
+              );
+            })()}
 
         {activeTab === 'estimates' && (() => {
           const items = allEstimates();
@@ -10900,7 +12591,7 @@ showToast(
                     placeholder="Summit Roofing"
                   />
                   <p className="text-xs text-zinc-400 mt-1.5">
-                    Shown on estimates and PDFs as your company brand.
+                    Shown on estimates, mitigation invoices, photo reports, and PDFs as your company brand.
                   </p>
                 </div>
                 <div>
@@ -11089,7 +12780,7 @@ showToast(
             {leadsView === 'trash' ? (
               <div className="space-y-3">
                 {trash.length === 0 ? (
-                  <div className="text-center py-16 text-slate-500">
+                  <div className="text-center py-16 text-zinc-500">
                     <p className="font-medium">Trash is empty</p>
                     <p className="text-sm mt-1">
                       Deleted leads and documents will appear here
@@ -11146,10 +12837,34 @@ showToast(
                             'Roof measurement';
                           subtitle = `Map measurement · ${item.leadLabel || 'Lead'} · ${item.deletedAt}`;
                         } else if (item.kind === 'estimate' && item.estimate) {
-                          title =
-                            item.estimate.selectedShingle ||
-                            `Estimate · $${Number(item.estimate.total || 0).toLocaleString()}`;
-                          subtitle = `Estimate · ${item.leadLabel || 'Lead'} · ${item.deletedAt}`;
+                          const leadName =
+                            item.leadLabel ||
+                            [
+                              item.estimate.clientFirstName,
+                              item.estimate.clientLastName,
+                            ]
+                              .filter(Boolean)
+                              .join(' ') ||
+                            'Lead';
+                          const product = item.estimate.selectedShingle || '';
+                          const total = Number(
+                            item.estimate.negotiatedPrice ||
+                              item.estimate.total ||
+                              0
+                          );
+                          title = `${leadName} · Estimate`;
+                          subtitle = [
+                            product || null,
+                            total > 0
+                              ? `$${total.toLocaleString(undefined, {
+                                  minimumFractionDigits: 0,
+                                  maximumFractionDigits: 0,
+                                })}`
+                              : null,
+                            item.deletedAt || null,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ');
                         } else if (item.kind === 'note' && item.note) {
                           title =
                             (item.note.text || 'Note').slice(0, 80) || 'Note';
@@ -11181,13 +12896,13 @@ showToast(
                       return (
                         <div
                           key={item.id}
-                          className="flex items-center justify-between gap-3 p-4 bg-white border border-slate-200 rounded-xl"
+                          className="flex items-center justify-between gap-3 p-4 bg-white border border-zinc-200 rounded-xl"
                         >
                           <div className="min-w-0">
-                            <div className="font-medium text-slate-900 truncate">
+                            <div className="font-medium text-zinc-900 truncate">
                               {title}
                             </div>
-                            <div className="text-xs text-slate-500 mt-0.5">
+                            <div className="text-xs text-zinc-500 mt-0.5">
                               {subtitle}
                             </div>
                           </div>
@@ -11195,7 +12910,7 @@ showToast(
                             <button
                               type="button"
                               onClick={() => restoreFromTrash(item.id)}
-                              className="px-3 py-1.5 rounded-xl text-sm font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                              className="btn-primary px-4 py-1.5 rounded-full text-sm font-semibold"
                             >
                               Restore
                             </button>
@@ -11421,7 +13136,7 @@ showToast(
                 <button
                   type="button"
                   onClick={() => leaveEstimator({ returnToLead: true })}
-                  className="shrink-0 px-4 py-2 rounded-xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-100"
+                  className="btn-primary shrink-0 px-8 py-3 rounded-full text-sm font-semibold"
                 >
                   ← Back to lead
                 </button>
@@ -11813,7 +13528,7 @@ showToast(
                             );
                           }
                         }}
-                        className="btn-primary px-4 py-2 rounded-xl text-sm font-semibold"
+                        className="btn-primary px-8 py-3 rounded-full text-sm font-semibold"
                       >
                         Apply latest measurement
                       </button>
@@ -11824,7 +13539,7 @@ showToast(
                       if (currentLeadId) openMeasureRoof(currentLeadId);
                       else openHomeMeasurements();
                     }}
-                    className="px-4 py-2 rounded-xl text-sm font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-100"
+                    className="btn-primary px-8 py-3 rounded-full text-sm font-semibold"
                   >
                     Measure by address
                   </button>
@@ -13012,8 +14727,8 @@ showToast(
               </div>
             </div>
             <div className="sticky bottom-0 bg-white/95 backdrop-blur border-t border-zinc-200 py-4 z-40 -mx-[var(--page-pad-x)] px-[var(--page-pad-x)]">
-              <div className="w-full flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
-                <div>
+              <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="min-w-0">
                   <div className="text-xs text-zinc-500">TOTAL PRICE</div>
                   {selectedShingle === '' ? (
                     <div className="text-2xl font-semibold text-zinc-400">
@@ -13026,7 +14741,7 @@ showToast(
                 <button
                   type="button"
                   onClick={() => setShowProfessionalEstimate(true)}
-                  className="btn-primary px-8 py-4 rounded-3xl font-semibold w-full sm:w-auto"
+                  className="btn-primary px-8 py-4 rounded-3xl font-semibold w-full sm:w-auto sm:shrink-0"
                 >
                   See Estimate
                 </button>
