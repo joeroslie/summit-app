@@ -27,8 +27,8 @@ html[data-theme="day"] {
   --amber-soft: #fffbeb;
   --scrollbar: #c5cad1;
 
-  /* Perfect proportions — estimator base */
-  --page-max: 64rem; /* 1024px */
+  /* Shared shell — twins pipeline / leads / calendar / docs (max-w-6xl) */
+  --page-max: 72rem; /* 1152px */
   --page-pad-x: clamp(1rem, 2.5vw, 1.5rem);
   --page-pad-y: clamp(1.25rem, 2vw, 1.75rem);
   --header-h: 3.5rem;

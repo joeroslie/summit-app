@@ -18,6 +18,14 @@ import {
   type RoofType,
 } from '@/lib/roof-geometry';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import {
+  createDefaultTaskList,
+  DEFAULT_TASK_LIST_ID,
+  newSummitTaskId,
+  newSummitTaskListId,
+  type SummitTask,
+  type SummitTaskList,
+} from '@/lib/google-tasks';
 
 const PITCH_OPTIONS = [
   'Flat',
@@ -53,6 +61,7 @@ type AppTab =
   | 'estimates'
   | 'invoices'
   | 'calendar'
+  | 'tasks'
   | 'performance'
   | 'tools'
   | 'documents'
@@ -69,11 +78,89 @@ const APP_TABS: AppTab[] = [
   'estimates',
   'invoices',
   'calendar',
+  'tasks',
   'performance',
   'tools',
   'documents',
   'settings',
 ];
+
+const SUMMIT_TASKS_KEY = 'summitTasks';
+const SUMMIT_TASK_LISTS_KEY = 'summitTaskLists';
+const SUMMIT_ACTIVE_TASK_LIST_KEY = 'summitActiveTaskListId';
+
+function normalizeStoredTasks(raw: unknown): SummitTask[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SummitTask[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const t = item as Partial<SummitTask>;
+    const title = typeof t.title === 'string' ? t.title.trim() : '';
+    if (!title) continue;
+    const id =
+      typeof t.id === 'string' && t.id
+        ? t.id
+        : newSummitTaskId();
+    const dueDate =
+      typeof t.dueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(t.dueDate)
+        ? t.dueDate
+        : undefined;
+    const now = new Date().toISOString();
+    const listId =
+      typeof t.listId === 'string' && t.listId.trim()
+        ? t.listId.trim()
+        : DEFAULT_TASK_LIST_ID;
+    out.push({
+      id,
+      title,
+      notes: typeof t.notes === 'string' && t.notes.trim() ? t.notes : undefined,
+      dueDate,
+      completed: Boolean(t.completed),
+      completedAt:
+        typeof t.completedAt === 'string' ? t.completedAt : undefined,
+      googleTaskId:
+        typeof t.googleTaskId === 'string' ? t.googleTaskId : undefined,
+      listId,
+      updatedAt: typeof t.updatedAt === 'string' ? t.updatedAt : now,
+      createdAt: typeof t.createdAt === 'string' ? t.createdAt : now,
+    });
+  }
+  return out;
+}
+
+function normalizeStoredTaskLists(raw: unknown): SummitTaskList[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return [createDefaultTaskList()];
+  }
+  const out: SummitTaskList[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const l = item as Partial<SummitTaskList>;
+    const title = typeof l.title === 'string' ? l.title.trim() : '';
+    if (!title) continue;
+    const id =
+      typeof l.id === 'string' && l.id.trim()
+        ? l.id.trim()
+        : newSummitTaskListId();
+    const now = new Date().toISOString();
+    out.push({
+      id,
+      title,
+      googleListId:
+        typeof l.googleListId === 'string' && l.googleListId.trim()
+          ? l.googleListId.trim()
+          : undefined,
+      createdAt: typeof l.createdAt === 'string' ? l.createdAt : now,
+      updatedAt: typeof l.updatedAt === 'string' ? l.updatedAt : now,
+    });
+  }
+  if (out.length === 0) return [createDefaultTaskList()];
+  if (!out.some((l) => l.id === DEFAULT_TASK_LIST_ID)) {
+    // Keep a default slot so legacy tasks with listId "default" stay valid
+    out.unshift(createDefaultTaskList());
+  }
+  return out;
+}
 
 const NEGOTIATION_BUFFER_CAP = 3500;
 /** Mitigation discount room off list sell total (small field discounts). */
@@ -84,11 +171,11 @@ const SIDEBAR_WIDTH_COLLAPSED = '4.25rem';
 const SIDEBAR_COLLAPSED_KEY = 'summitSidebarCollapsed';
 
 const DEFAULT_USER_PROFILE = {
-  name: 'Joe Roslie',
-  title: 'Project Manager',
-  company: 'Summit Roofing',
-  phone: '2533812035',
-  email: 'joe.roslie@prowest.com',
+  name: '',
+  title: '',
+  company: '',
+  phone: '',
+  email: '',
 } as const;
 
 /** Appearance: Day, Night, or Auto (by local clock). */
@@ -498,11 +585,18 @@ type Estimate = {
   measurementId?: string;
   /** Supabase `estimates.id` when synced to cloud */
   supabaseId?: string;
+  /** Saved estimate PDF (owned by Estimates — not duplicated in Documents) */
+  pdfDocumentId?: string;
+  pdfUrl?: string;
+  pdfName?: string;
 };
 
 type LeadNote = {
+  /** Stable id for list keys (older notes may omit until normalized) */
+  id?: string;
   text: string;
   date: string;
+  createdAt?: string;
 };
 
 /** Field guide for Company pricing document (sell + known costs + crews/contacts). */
@@ -654,7 +748,100 @@ const SYSTEM_DOCUMENTS = [
     name: 'Mitigation invoice',
     description: '',
   },
+  {
+    id: 'emergency',
+    name: 'Mitigation Service Agreement',
+    description: 'Mitigation only · separate PDF',
+  },
 ] as const;
+
+/** Company / billing entity — filled in Settings (empty until configured). */
+type CompanySettings = {
+  /** Company display name (headers, nav when set). Was `brandName`. */
+  company: string;
+  /** Project manager name on estimates. Was `legalName`. */
+  projectManager: string;
+  /** Project manager phone on estimates. */
+  projectManagerPhone: string;
+  /** Business address */
+  address: string;
+  /** Office phone */
+  phone: string;
+  /** Business fax */
+  fax: string;
+  /** Kept for older PDFs / localStorage; not shown in Settings. */
+  email: string;
+  /** ROC# */
+  license: string;
+  /** Uploaded company logo (data URL). Empty → Summit mark. */
+  logoDataUrl: string;
+};
+
+const emptyCompanySettings = (): CompanySettings => ({
+  company: '',
+  projectManager: '',
+  projectManagerPhone: '',
+  address: '',
+  phone: '',
+  fax: '',
+  email: '',
+  license: '',
+  logoDataUrl: '',
+});
+
+/** Normalize company settings from localStorage (supports legacy brandName/legalName). */
+function normalizeCompanySettings(
+  raw: Partial<CompanySettings> & {
+    brandName?: string;
+    legalName?: string;
+  }
+): CompanySettings {
+  // New keys first; brandName → company. Legacy legalName was company entity text —
+  // fold into company only when company is still empty (do not treat as PM name).
+  const company =
+    (typeof raw.company === 'string' && raw.company) ||
+    (typeof raw.brandName === 'string' && raw.brandName) ||
+    (typeof raw.legalName === 'string' && raw.legalName) ||
+    '';
+  const projectManager =
+    typeof raw.projectManager === 'string' ? raw.projectManager : '';
+  return {
+    company,
+    projectManager,
+    projectManagerPhone:
+      typeof raw.projectManagerPhone === 'string' ? raw.projectManagerPhone : '',
+    address: typeof raw.address === 'string' ? raw.address : '',
+    phone: typeof raw.phone === 'string' ? raw.phone : '',
+    fax: typeof raw.fax === 'string' ? raw.fax : '',
+    email: typeof raw.email === 'string' ? raw.email : '',
+    license: typeof raw.license === 'string' ? raw.license : '',
+    logoDataUrl: typeof raw.logoDataUrl === 'string' ? raw.logoDataUrl : '',
+  };
+}
+
+/** Mitigation billing: personal LLC vs company (ProWest) settings. */
+type MitigationEntity = 'roslie' | 'prowest';
+
+type EmergencyAgreementDraft = {
+  /** Same billing entity as mitigation invoice (personal vs company). */
+  entity: MitigationEntity;
+  clientName: string;
+  propertyAddress: string;
+  phone: string;
+  email: string;
+  scope: string;
+  serviceStart: string;
+  serviceComplete: string;
+  /** 'cash' | 'insurance' | '' */
+  paymentMode: 'cash' | 'insurance' | '';
+  paymentAmount: string;
+  date: string;
+  /** Printed / typed name under signature — hooks for email confirmation later. */
+  signerName: string;
+  clientSignatureDataUrl: string | null;
+  /** ISO timestamp when signature was captured. */
+  clientSignedAt: string | null;
+};
 
 type TakeoffSheet = {
   roofTypeLayers: string;
@@ -1102,8 +1289,6 @@ function MitigationTarpAddRow({
     </div>
   );
 }
-
-type MitigationEntity = 'roslie' | 'prowest';
 
 type MitigationLineItem = {
   id: string;
@@ -1789,7 +1974,7 @@ function normalizePipelineStage(raw: unknown): PipelineStage {
 /** Normalize legacy localStorage leads (e.g. clientJobNumber → jobNumber). */
 function normalizeLead(raw: Partial<Lead> & { clientJobNumber?: string }): Lead {
   return {
-    id: raw.id ?? Date.now(),
+    id: raw.id ?? newLeadNumericId(),
     date: raw.date ?? new Date().toLocaleDateString(),
     clientFirstName: raw.clientFirstName ?? '',
     clientLastName: raw.clientLastName ?? '',
@@ -1829,7 +2014,7 @@ function normalizeLead(raw: Partial<Lead> & { clientJobNumber?: string }): Lead 
       raw.category ?? (raw as { milestone?: unknown }).milestone
     ),
     estimates: raw.estimates ?? [],
-    notes: Array.isArray(raw.notes) ? raw.notes : [],
+    notes: normalizeLeadNotes(raw.notes),
     photos: raw.photos ?? [],
     photoReports: raw.photoReports ?? [],
     documents: raw.documents ?? [],
@@ -1852,9 +2037,246 @@ function normalizeLead(raw: Partial<Lead> & { clientJobNumber?: string }): Lead 
   };
 }
 
+function newLeadNumericId(): number {
+  // Avoid Date.now() collisions when creating multiple leads in the same ms
+  return Date.now() * 1000 + Math.floor(Math.random() * 1000);
+}
+
+function newClientId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+/** Repair duplicate lead.id values (causes React key warnings / broken lists). */
+function uniquifyLeadIds(leads: Lead[]): Lead[] {
+  const seen = new Set<number>();
+  let changed = false;
+  const next = leads.map((lead) => {
+    if (Number.isFinite(lead.id) && !seen.has(lead.id)) {
+      seen.add(lead.id);
+      return lead;
+    }
+    changed = true;
+    let id = newLeadNumericId();
+    while (seen.has(id)) id = newLeadNumericId();
+    seen.add(id);
+    return { ...lead, id };
+  });
+  return changed ? next : leads;
+}
+
+/** Estimate PDFs used to be dual-written into Documents — detect those orphans. */
+function isEstimatePdfDocument(doc: LeadDocument): boolean {
+  if (doc.id.startsWith('est-')) return true;
+  if (/\/estimates\//i.test(doc.url || '')) return true;
+  if (/_Estimate_/i.test(doc.name || '')) return true;
+  return false;
+}
+
+function storagePathFromLeadDocUrl(url: string): string | null {
+  const marker = '/lead-docs/';
+  const idx = url.indexOf(marker);
+  if (idx < 0) return null;
+  try {
+    return decodeURIComponent(url.slice(idx + marker.length).split('?')[0]);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Move estimate PDFs out of Documents onto the Estimate records (or drop orphans).
+ * Estimates tab owns quotes; Documents stays for contracts / misc files.
+ */
+function detachEstimatePdfsFromDocuments(leads: Lead[]): Lead[] {
+  let changed = false;
+  const next = leads.map((lead) => {
+    const docs = lead.documents || [];
+    const estimateDocs = docs.filter(isEstimatePdfDocument);
+    if (estimateDocs.length === 0) return lead;
+
+    changed = true;
+    const keepDocs = docs.filter((d) => !isEstimatePdfDocument(d));
+    const estimates = [...(lead.estimates || [])];
+    const unused = [...estimateDocs];
+
+    // Prefer matching by already-linked id, then attach leftover PDFs to estimates missing a PDF (newest first)
+    for (const est of estimates) {
+      if (!est.pdfDocumentId && !est.pdfUrl) continue;
+      const i = unused.findIndex(
+        (d) => d.id === est.pdfDocumentId || d.url === est.pdfUrl
+      );
+      if (i >= 0) unused.splice(i, 1);
+    }
+
+    const needPdf = estimates
+      .map((e, idx) => ({ e, idx }))
+      .filter(({ e }) => !e.pdfUrl)
+      .sort((a, b) => b.e.id - a.e.id);
+
+    for (const { idx } of needPdf) {
+      const doc = unused.shift();
+      if (!doc) break;
+      estimates[idx] = {
+        ...estimates[idx],
+        pdfDocumentId: doc.id,
+        pdfUrl: doc.url,
+        pdfName: doc.name,
+      };
+    }
+
+    return { ...lead, documents: keepDocs, estimates };
+  });
+  return changed ? next : leads;
+}
+
+/** Repair duplicate Estimate.id values within each lead (same Date.now() collision bug). */
+function uniquifyEstimateIds(leads: Lead[]): Lead[] {
+  let changed = false;
+  const next = leads.map((lead) => {
+    const estimates = lead.estimates || [];
+    if (estimates.length === 0) return lead;
+    const seen = new Set<number>();
+    let leadChanged = false;
+    const fixed = estimates.map((est) => {
+      if (Number.isFinite(est.id) && !seen.has(est.id)) {
+        seen.add(est.id);
+        return est;
+      }
+      leadChanged = true;
+      let id = newLeadNumericId();
+      while (seen.has(id)) id = newLeadNumericId();
+      seen.add(id);
+      return { ...est, id };
+    });
+    if (!leadChanged) return lead;
+    changed = true;
+    return { ...lead, estimates: fixed };
+  });
+  return changed ? next : leads;
+}
+
+/** Normalize string fields for estimate content comparison. */
+function normEstimateField(v: unknown): string {
+  return String(v ?? '')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Content fingerprint for exact-duplicate detection.
+ * Ignores id/date/supabaseId/pdf* — same quote data = same estimate.
+ */
+function estimateContentKey(est: Partial<Estimate>): string {
+  const neg = Number(est.negotiatedPrice) || 0;
+  const tot = Number(est.total) || 0;
+  const price = neg > 0 ? neg : tot;
+  return [
+    normEstimateField(est.squares),
+    normEstimateField(est.layers),
+    normEstimateField(est.waste),
+    normEstimateField(est.pitch),
+    normEstimateField(est.stories),
+    normEstimateField(est.selectedShingle),
+    normEstimateField(est.cambridgeColor),
+    normEstimateField(est.dynastyColor),
+    normEstimateField(est.armourshakeColor),
+    normEstimateField(est.selectedUnderlayment),
+    normEstimateField(est.fasciaMode),
+    normEstimateField(est.deckingMode),
+    normEstimateField(est.fasciaType),
+    normEstimateField(est.modifiedBitumenSquares),
+    normEstimateField(est.modifiedBitumenColor),
+    normEstimateField(est.dripEdgeColor),
+    String(price),
+    normEstimateField(est.gutterMode || 'none'),
+    normEstimateField(est.gutterLF),
+    normEstimateField(est.ridgeVentLF),
+    normEstimateField(est.fasciaLF),
+    normEstimateField(est.deckingSheets),
+    normEstimateField(est.deckingOsbSheets),
+    normEstimateField(est.deckingCdxSheets),
+    normEstimateField(est.solarPanels),
+    normEstimateField(est.hvacUnits),
+    normEstimateField(est.skylights),
+  ].join('\u0001');
+}
+
+function findExactDuplicateEstimate(
+  estimates: Estimate[],
+  candidate: Partial<Estimate>,
+  opts?: { excludeId?: number; excludeSupabaseId?: string }
+): { estimate: Estimate; index: number } | null {
+  const key = estimateContentKey(candidate);
+  for (let i = 0; i < estimates.length; i++) {
+    const e = estimates[i];
+    if (opts?.excludeSupabaseId && e.supabaseId === opts.excludeSupabaseId) {
+      continue;
+    }
+    if (
+      opts?.excludeId != null &&
+      e.id === opts.excludeId &&
+      (!opts.excludeSupabaseId || !e.supabaseId)
+    ) {
+      continue;
+    }
+    if (estimateContentKey(e) === key) return { estimate: e, index: i };
+  }
+  return null;
+}
+
+/** Replace exactly one estimate row (prefer supabaseId, then first matching id). */
+function replaceOneEstimate(
+  prev: Estimate[],
+  next: Estimate
+): { estimates: Estimate[]; replaced: boolean } {
+  let replaced = false;
+  const estimates = prev.map((e) => {
+    if (replaced) return e;
+    if (next.supabaseId && e.supabaseId === next.supabaseId) {
+      replaced = true;
+      return next;
+    }
+    if (
+      e.id === next.id &&
+      (!next.supabaseId || !e.supabaseId || e.supabaseId === next.supabaseId)
+    ) {
+      replaced = true;
+      return next;
+    }
+    return e;
+  });
+  return { estimates, replaced };
+}
+
+function sanitizeLeads(leads: Lead[]): Lead[] {
+  return detachEstimatePdfsFromDocuments(
+    uniquifyEstimateIds(uniquifyLeadIds(leads))
+  );
+}
+
+function normalizeLeadNotes(raw: unknown): LeadNote[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((n, i) => {
+    if (typeof n === 'string') {
+      return {
+        id: newClientId('note'),
+        text: n,
+        date: new Date().toLocaleString(),
+      };
+    }
+    const note = (n || {}) as Partial<LeadNote>;
+    return {
+      id: note.id || newClientId('note'),
+      text: String(note.text || ''),
+      date: String(note.date || ''),
+      createdAt: note.createdAt,
+    };
+  });
+}
+
 function createEmptyLead(overrides: Partial<Lead> = {}): Lead {
   return normalizeLead({
-    id: Date.now(),
+    id: newLeadNumericId(),
     date: new Date().toLocaleDateString(),
     category: 'Lead',
     mailingSameAsBilling: true,
@@ -1937,6 +2359,8 @@ function mapAppLeadToDb(lead: Lead) {
     calendarEventId: lead.calendarEventId || '',
     calendarHtmlLink: lead.calendarHtmlLink || '',
     calendarSyncedAt: lead.calendarSyncedAt || '',
+    // Keep a stable React/client id across cloud reloads (UUID hash can collide)
+    clientNumericId: lead.id,
     // estimates live in `estimates` table; keep a denormalized copy in details if useful
     estimates: lead.estimates || [],
   };
@@ -1963,9 +2387,20 @@ function stableLeadIdFromDb(id: unknown): number {
   if (typeof id === 'number' && Number.isFinite(id)) return id;
   if (typeof id === 'string' && /^\d+$/.test(id)) return parseInt(id, 10);
   const s = String(id ?? '');
-  let h = 0;
+  // Prefer first 13 hex chars of a UUID → ~52-bit unique id (safe integer)
+  const hex = s.replace(/-/g, '');
+  if (/^[0-9a-f]{32}$/i.test(hex)) {
+    try {
+      const n = Number(BigInt(`0x${hex.slice(0, 13)}`));
+      if (Number.isFinite(n) && n > 0) return n;
+    } catch {
+      /* fall through */
+    }
+  }
+  let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
-    h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
   }
   return Math.abs(h) || Date.now();
 }
@@ -2123,9 +2558,14 @@ function mapDbLeadToApp(row: Record<string, unknown>): Lead {
   }
 
   const dbId = row.id != null ? String(row.id) : undefined;
+  const storedClientId = Number(d.clientNumericId);
+  const resolvedId =
+    Number.isFinite(storedClientId) && storedClientId > 0
+      ? storedClientId
+      : stableLeadIdFromDb(row.id);
 
   return normalizeLead({
-    id: stableLeadIdFromDb(row.id),
+    id: resolvedId,
     clientFirstName: firstName,
     clientLastName: lastName,
     clientAddress: address,
@@ -2228,12 +2668,6 @@ export default function SummitApp() {
   const supabase = useMemo(() => getSupabase(), []);
   const supabaseEnabled = isSupabaseConfigured() && supabase != null;
 
-  // TEMP TEST - remove later
-  useEffect(() => {
-    console.log('Supabase test - configured?', isSupabaseConfigured());
-    console.log('Supabase client?', getSupabase() ? 'yes' : 'no');
-  }, []);
-
   /** False until localStorage is read — keeps SSR and first client paint identical */
   const [sessionReady, setSessionReady] = useState(false);
   const [activeTab, setActiveTab] = useState<AppTab>('home');
@@ -2335,7 +2769,13 @@ export default function SummitApp() {
     | 'mitigation'
     | 'mitigation_personal'
     | 'mitigation_company'
+    | 'emergency'
   >(null);
+  const [emergencyDraft, setEmergencyDraft] =
+    useState<EmergencyAgreementDraft | null>(null);
+  const [emergencyPreview, setEmergencyPreview] = useState(false);
+  const emergencySigPadRef = useRef<HTMLCanvasElement | null>(null);
+  const emergencySigDrawing = useRef(false);
   const [takeoffAssignOpen, setTakeoffAssignOpen] = useState(false);
   const [takeoffAssignSearch, setTakeoffAssignSearch] = useState('');
   const [lightboxPhoto, setLightboxPhoto] = useState<LeadPhoto | null>(null);
@@ -2347,6 +2787,9 @@ export default function SummitApp() {
   const [photoReportSelected, setPhotoReportSelected] = useState<string[]>([]);
   const [photoReportCaptions, setPhotoReportCaptions] = useState<Record<string, string>>({});
   const [photoReportBusy, setPhotoReportBusy] = useState(false);
+  /** CompanyCam-style: include logo + company on photo report (can turn off for bland LLC jobs). */
+  const [photoReportIncludeBranding, setPhotoReportIncludeBranding] =
+    useState(true);
   const [dragLeadId, setDragLeadId] = useState<number | null>(null);
   const [dragOverStage, setDragOverStage] = useState<PipelineStage | null>(null);
   const suppressCardClickRef = useRef(false);
@@ -2369,6 +2812,35 @@ export default function SummitApp() {
   const [selectedMeasurementId, setSelectedMeasurementId] = useState<string | null>(null);
   const [showTracer, setShowTracer] = useState(false);
   const [solarMeasuring, setSolarMeasuring] = useState(false);
+  const [humanOrdering, setHumanOrdering] = useState(false);
+  const [measureMoreOpen, setMeasureMoreOpen] = useState(false);
+  const [humanOrders, setHumanOrders] = useState<
+    Array<{
+      id: string;
+      leadId: string | null;
+      status: string;
+      reportUrl: string | null;
+      address: string | null;
+      createdAt: string;
+      failureReason: string | null;
+    }>
+  >([]);
+  /** Shown while tracer is open after Auto-measure (Solar area locked on Save). */
+  const [autoMeasureHint, setAutoMeasureHint] = useState<string | null>(null);
+  /**
+   * When Auto-measure seeds the tracer from Google Solar, keep Solar squares
+   * as the area source of truth on Save (outline is for perimeter / adjust).
+   */
+  const solarAreaOverrideRef = useRef<{
+    squares: number;
+    footprintSqFt: number;
+    surfaceSqFt: number;
+    pitch: string;
+    secondaryPitch?: string;
+    secondaryFraction?: number;
+    waste?: number;
+    measureSource: RoofMeasurement['measureSource'];
+  } | null>(null);
   const [activeMeasurementId, setActiveMeasurementId] = useState<string | null>(null);
   const [mapCenter, setMapCenter] = useState<LatLngPoint | null>(null);
   const [showMeasureAddressModal, setShowMeasureAddressModal] = useState(false);
@@ -2387,6 +2859,10 @@ export default function SummitApp() {
   const [mapSessionKey, setMapSessionKey] = useState(0);
   /** Invalidates in-flight geocode when user switches lead/address */
   const geocodeReqIdRef = useRef(0);
+  /** Prevents double-insert of the same estimate when persistLeads races */
+  const estimateSyncInFlightRef = useRef(new Set<string>());
+  /** Local leadId:estimateId keys that need a cloud UPDATE (not insert) */
+  const dirtyEstimateKeysRef = useRef(new Set<string>());
   /** Hub report drawer: measurement opened from Measurements list */
   const [hubReport, setHubReport] = useState<{
     leadId: number;
@@ -2494,6 +2970,12 @@ export default function SummitApp() {
     displayPhoneUS(DEFAULT_USER_PROFILE.phone)
   );
   const [userEmail, setUserEmail] = useState<string>(DEFAULT_USER_PROFILE.email);
+  /** Company billing entity (ProWest) — used on company mitigation + estimates when set. */
+  const [companySettings, setCompanySettings] = useState<CompanySettings>(
+    emptyCompanySettings
+  );
+  /** Company logo flattened onto white for PDFs (jsPDF often paints PNG alpha as black). */
+  const companyLogoPdfRef = useRef('');
   const [themePref, setThemePref] = useState<ThemePreference>('auto');
   const [themeMode, setThemeMode] = useState<ThemeMode>('day');
   /** Google Calendar connection (from /api/google/calendar/status) */
@@ -2521,6 +3003,22 @@ export default function SummitApp() {
     }>
   >([]);
   const [googleEventsLoading, setGoogleEventsLoading] = useState(false);
+  /** Local + Google Tasks (Google Tasks-style lists + calendar chips) */
+  const [tasks, setTasks] = useState<SummitTask[]>([]);
+  const [taskLists, setTaskLists] = useState<SummitTaskList[]>(() => [
+    createDefaultTaskList(),
+  ]);
+  const [activeTaskListId, setActiveTaskListId] = useState(DEFAULT_TASK_LIST_ID);
+  const [tasksBusy, setTasksBusy] = useState(false);
+  const [gtasksNeedsReconnect, setGtasksNeedsReconnect] = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskDue, setNewTaskDue] = useState('');
+  const [newTaskNotes, setNewTaskNotes] = useState('');
+  const [taskListDraftTitle, setTaskListDraftTitle] = useState('');
+  const [renamingTaskListId, setRenamingTaskListId] = useState<string | null>(
+    null
+  );
+  const [renameTaskListTitle, setRenameTaskListTitle] = useState('');
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   /** Desktop: icon rail vs full labels. Mobile uses drawer (`sidebarOpen`). */
@@ -2582,6 +3080,39 @@ export default function SummitApp() {
     }
   };
 
+  const persistTasks = (next: SummitTask[]) => {
+    setTasks(next);
+    try {
+      localStorage.setItem(SUMMIT_TASKS_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const persistTaskLists = (next: SummitTaskList[]) => {
+    const safe = next.length > 0 ? next : [createDefaultTaskList()];
+    setTaskLists(safe);
+    try {
+      localStorage.setItem(SUMMIT_TASK_LISTS_KEY, JSON.stringify(safe));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const persistActiveTaskListId = (listId: string) => {
+    setActiveTaskListId(listId);
+    try {
+      localStorage.setItem(SUMMIT_ACTIVE_TASK_LIST_KEY, listId);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const activeTaskList =
+    taskLists.find((l) => l.id === activeTaskListId) || taskLists[0];
+  const googleListIdFor = (list: SummitTaskList | undefined) =>
+    list?.googleListId || (list?.id === DEFAULT_TASK_LIST_ID ? '@default' : '');
+
   /** Remove invoice from Invoices index (+ matching lead doc / Storage when possible). */
   const removeAppInvoice = (invoiceId: string) => {
     const inv = appInvoices.find((i) => i.id === invoiceId);
@@ -2630,16 +3161,273 @@ export default function SummitApp() {
     showToast('Invoice removed');
   };
 
-  const mitigationPersonalBrand = () =>
-    userCompany.trim() || 'Roslie Consulting Firm LLC';
+  const mitigationPersonalBrand = () => userCompany.trim() || '';
+
+  /** Display name for company billing entity (Settings → Company). */
+  const companyBrandName = () => (companySettings.company || '').trim();
+
+  const companySettingsConfigured = () =>
+    Boolean(
+      (companySettings.company || '').trim() ||
+        (companySettings.projectManager || '').trim() ||
+        (companySettings.projectManagerPhone || '').trim() ||
+        (companySettings.address || '').trim() ||
+        (companySettings.phone || '').trim() ||
+        (companySettings.fax || '').trim() ||
+        (companySettings.email || '').trim() ||
+        (companySettings.license || '').trim() ||
+        (companySettings.logoDataUrl || '').trim()
+    );
+
+  /** Nav / login / chrome product name — company when set, else Summit. */
+  const appDisplayName = () => companyBrandName() || 'Summit';
+
+  const appLogoDataUrl = () => (companySettings.logoDataUrl || '').trim();
+
+  /** Project Manager block on estimates (company settings, else profile). */
+  const estimatePmName = () =>
+    (companySettings.projectManager || '').trim() || userName.trim() || '';
+
+  const estimatePmPhone = () => {
+    const fromCompany = (companySettings.projectManagerPhone || '').trim();
+    if (fromCompany) return displayPhoneUS(fromCompany) || fromCompany;
+    return displayPhoneUS(userPhone) || userPhone || '';
+  };
+
+  /** Settings PM filled — company-branded mitigation / photo docs should show the block. */
+  const companyPmFieldsFilled = () =>
+    Boolean(
+      (companySettings.projectManager || '').trim() ||
+        (companySettings.projectManagerPhone || '').trim()
+    );
+
+  /** Show PM on company-billed mitigation / branded photo PDFs when Settings PM is set. */
+  const showCompanyPmOnDoc = (entity?: MitigationEntity) => {
+    if (entity === 'roslie') return false;
+    return companyPmFieldsFilled();
+  };
+
+  const mitigationBillingBrand = (entity: MitigationEntity) =>
+    entity === 'prowest'
+      ? companyBrandName() || 'Company name'
+      : mitigationPersonalBrand();
 
   const mitigationPayableTo = (entity: MitigationEntity) =>
-    entity === 'prowest' ? 'ProWest Roofing' : mitigationPersonalBrand();
+    mitigationBillingBrand(entity);
 
-  const mitigationInvoiceTitle = (entity: MitigationEntity) =>
-    entity === 'prowest'
-      ? 'Mitigation invoice'
-      : 'Mitigation invoice';
+  /**
+   * Party role on mitigation docs only:
+   * personal LLC → "Service Provider"; company (ProWest) → "Contractor".
+   * Estimates always use "Contractor" (company does the roofing) — never Service provider.
+   */
+  const mitigationPartyRole = (entity: MitigationEntity) =>
+    entity === 'prowest' ? 'Contractor' : 'Service Provider';
+
+  /** UI / fallback casing (signature column, empty legal name). */
+  const mitigationPartyRoleLabel = (entity: MitigationEntity) =>
+    entity === 'prowest' ? 'Contractor' : 'Service provider';
+
+  const mitigationInvoiceTitle = (_entity: MitigationEntity) =>
+    'Mitigation invoice';
+
+  /** Subline under brand name — company license only; personal LLC has no "Joe · phone" brand row. */
+  const mitigationBrandSub = (entity: MitigationEntity) => {
+    if (entity === 'prowest') {
+      const lic = (companySettings.license || '').trim();
+      if (lic) return `ROC# ${lic}`;
+      return companySettingsConfigured() ? '' : 'Company · fill in Settings';
+    }
+    return '';
+  };
+
+  const mitigationBrandPhone = (entity: MitigationEntity) => {
+    if (entity === 'prowest') {
+      const office = (companySettings.phone || '').trim();
+      return displayPhoneUS(office) || office || '';
+    }
+    return displayPhoneUS(userPhone) || userPhone || '';
+  };
+
+  /**
+   * PDF header logo: uploaded company logo (contain-fit), else Summit "S" mark.
+   * Returns the occupied width (mm) so callers can place brand text after the mark.
+   */
+  const drawDocLogo = (
+    doc: jsPDF,
+    x: number,
+    y: number,
+    opts?: { show?: boolean; logoDataUrl?: string | null }
+  ): number => {
+    if (opts?.show === false) return 0;
+    // Tall enough for circular emblems; wide enough for wordmarks — never stretch.
+    const maxW = 28;
+    const maxH = 18;
+    // Explicit '' (e.g. personal entity) must not fall back to company logo.
+    const requested = (
+      (opts?.logoDataUrl !== undefined
+        ? opts.logoDataUrl
+        : companySettings.logoDataUrl) || ''
+    ).trim();
+    const companyLogo = (companySettings.logoDataUrl || '').trim();
+    const logo =
+      requested &&
+      requested === companyLogo &&
+      companyLogoPdfRef.current
+        ? companyLogoPdfRef.current
+        : requested;
+    if (logo) {
+      try {
+        const fmt = logo.startsWith('data:image/png')
+          ? 'PNG'
+          : logo.startsWith('data:image/webp')
+            ? 'WEBP'
+            : 'JPEG';
+        let drawW = Math.min(maxW, maxH);
+        let drawH = drawW;
+        try {
+          const { width: iw, height: ih } = doc.getImageProperties(logo);
+          if (iw > 0 && ih > 0) {
+            const scale = Math.min(maxW / iw, maxH / ih);
+            drawW = iw * scale;
+            drawH = ih * scale;
+          }
+        } catch {
+          /* props unavailable — assume square emblem, never stretch to maxW×maxH */
+        }
+        // Left-align; vertically center in the header band.
+        const drawY = y + (maxH - drawH) / 2;
+        doc.addImage(logo, fmt, x, drawY, drawW, drawH);
+        return drawW;
+      } catch {
+        /* fall through to Summit mark */
+      }
+    }
+    const boxW = 14;
+    const boxH = 14;
+    const markY = y + (maxH - boxH) / 2;
+    doc.setFillColor(24, 24, 27);
+    doc.roundedRect(x, markY, boxW, boxH, 1, 1, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text('S', x + boxW / 2, markY + 9.2, { align: 'center' });
+    return boxW;
+  };
+
+  /** Company header contact: office phone · fax · ROC#. */
+  const companyContactLine = () => {
+    const office = (companySettings.phone || '').trim();
+    const fax = (companySettings.fax || '').trim();
+    const lic = (companySettings.license || '').trim();
+    return [
+      office ? displayPhoneUS(office) || office : '',
+      fax ? `Fax ${displayPhoneUS(fax) || fax}` : '',
+      lic ? `ROC# ${lic}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  };
+
+  /** UI chrome mark: company logo or Summit "S". */
+  const renderAppMark = (opts?: {
+    size?: 'sm' | 'md' | 'lg' | 'xl';
+    className?: string;
+    imgClassName?: string;
+  }) => {
+    const size = opts?.size ?? 'md';
+    const box =
+      size === 'sm'
+        ? 'w-8 h-8'
+        : size === 'lg'
+          ? 'h-14 w-14'
+          : size === 'xl'
+            ? 'w-20 h-20'
+            : 'w-8 h-8';
+    const text =
+      size === 'sm'
+        ? 'text-sm'
+        : size === 'lg'
+          ? 'text-xl'
+          : size === 'xl'
+            ? 'text-6xl'
+            : 'text-lg';
+    const radius =
+      size === 'xl' ? 'rounded-3xl' : size === 'lg' ? 'rounded-xl' : 'rounded-xl';
+    const logo = appLogoDataUrl();
+    if (logo) {
+      return (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={logo}
+          alt=""
+          className={
+            opts?.imgClassName ||
+            `${box} ${radius} object-contain border border-zinc-200 bg-white shrink-0 ${opts?.className || ''}`
+          }
+        />
+      );
+    }
+    return (
+      <div
+        className={`${box} ${radius} bg-zinc-900 flex items-center justify-center shrink-0 ring-1 ring-zinc-700/40 ${opts?.className || ''}`}
+      >
+        <span
+          className={`text-white ${text} font-bold tracking-tight${size === 'xl' ? ' tracking-tighter' : ''}`}
+        >
+          S
+        </span>
+      </div>
+    );
+  };
+
+  const handleCompanyLogoFile = async (file: File) => {
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const img = new Image();
+        const objectUrl = URL.createObjectURL(file);
+        img.onload = () => {
+          try {
+            const max = 1024;
+            let w = img.naturalWidth;
+            let h = img.naturalHeight;
+            if (w > max || h > max) {
+              const s = max / Math.max(w, h);
+              w = Math.round(w * s);
+              h = Math.round(h * s);
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              reject(new Error('canvas'));
+              return;
+            }
+            // Flatten transparency onto white so PDFs don't get black corner boxes.
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, w, h);
+            ctx.drawImage(img, 0, 0, w, h);
+            URL.revokeObjectURL(objectUrl);
+            const out = canvas.toDataURL('image/png');
+            companyLogoPdfRef.current = out;
+            resolve(out);
+          } catch (e) {
+            URL.revokeObjectURL(objectUrl);
+            reject(e);
+          }
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(objectUrl);
+          reject(new Error('load'));
+        };
+        img.src = objectUrl;
+      });
+      setCompanySettings({ ...companySettings, logoDataUrl: dataUrl });
+      showToast('Logo updated — save Settings to keep');
+    } catch {
+      showToast('Could not read logo image');
+    }
+  };
 
   /**
    * New invoice: always tied to a lead (same idea as estimates).
@@ -2659,7 +3447,51 @@ export default function SummitApp() {
     setShowEstimatePicker(true);
   };
 
-  
+  // Flatten stored company logo onto white for PDF drawing (fixes PNG alpha → black).
+  useEffect(() => {
+    const src = (companySettings.logoDataUrl || '').trim();
+    if (!src) {
+      companyLogoPdfRef.current = '';
+      return;
+    }
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+      try {
+        const max = 1024;
+        let w = img.naturalWidth;
+        let h = img.naturalHeight;
+        if (w > max || h > max) {
+          const s = max / Math.max(w, h);
+          w = Math.round(w * s);
+          h = Math.round(h * s);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          companyLogoPdfRef.current = src;
+          return;
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        companyLogoPdfRef.current = canvas.toDataURL('image/png');
+      } catch {
+        companyLogoPdfRef.current = src;
+      }
+    };
+    img.onerror = () => {
+      if (!cancelled) companyLogoPdfRef.current = src;
+    };
+    img.src = src;
+    return () => {
+      cancelled = true;
+    };
+  }, [companySettings.logoDataUrl]);
+
   // Persist mitigation invoice workspace across refresh
   useEffect(() => {
     try {
@@ -2672,6 +3504,16 @@ export default function SummitApp() {
       }
     } catch (e) {}
   }, []);
+
+  // Poll Instant Roofer human orders while on Measurements (field notification path)
+  useEffect(() => {
+    if (!isEditingLead || profileTab !== 'measurements' || !currentLeadId) return;
+    void refreshHumanOrders(currentLeadId);
+    const id = window.setInterval(() => {
+      void refreshHumanOrders(currentLeadId);
+    }, 30000);
+    return () => window.clearInterval(id);
+  }, [isEditingLead, profileTab, currentLeadId]);
 
   useEffect(() => {
     try {
@@ -2729,7 +3571,7 @@ export default function SummitApp() {
     setSystemDocWorkspace(id);
   };
 
-  /** One exit contract for mitigation / takeoff / pricing → back on the lead */
+  /** One exit contract for mitigation / takeoff / pricing / emergency → back on the lead */
   const exitLeadDocumentWorkspace = (opts?: { returnTab?: ProfileTab }) => {
     const raw = opts?.returnTab ?? leadToolReturnTab ?? 'documents';
     const returnTab: ProfileTab =
@@ -2742,6 +3584,8 @@ export default function SummitApp() {
     setMitigationWorkspace('invoice');
     setShowMitigationCostBreakdown(false);
     setActiveTarpGroupId(null);
+    setEmergencyDraft(null);
+    setEmergencyPreview(false);
     try {
       sessionStorage.removeItem('summitMitigationWorkspace');
     } catch {
@@ -2824,6 +3668,573 @@ export default function SummitApp() {
     setDocAddMenuOpen(false);
     setInvoicePickerMode(false);
     setShowEstimatePicker(false);
+  };
+
+  const openEmergencyAgreement = (fromLeadId?: number | null) => {
+    const leadId =
+      fromLeadId != null
+        ? fromLeadId
+        : currentLeadId != null
+          ? currentLeadId
+          : null;
+    if (leadId == null) {
+      setSystemDocWorkspace(null);
+      setEmergencyDraft(null);
+      setInvoicePickerMode(true);
+      setEstimatePickerQuery('');
+      setShowEstimatePicker(true);
+      showToast(
+        'Select a lead first — Mitigation Service Agreement is for mitigation jobs'
+      );
+      return;
+    }
+    const lead = leads.find((l) => l.id === leadId) || null;
+    if (!lead) {
+      showToast('Lead not found');
+      return;
+    }
+    const name = [lead.clientFirstName, lead.clientLastName]
+      .filter(Boolean)
+      .join(' ');
+    const addr = [
+      lead.clientAddress,
+      lead.clientCity,
+      lead.clientState,
+      lead.clientZip,
+    ]
+      .filter(Boolean)
+      .join(', ');
+
+    // Prefer open mitigation draft lines for scope; else blank for field entry
+    let scope = '';
+    if (
+      mitigationDraft &&
+      Array.isArray(mitigationDraft.lines) &&
+      mitigationDraft.lines.length > 0
+    ) {
+      scope = mitigationDraft.lines
+        .map((ln) => formatMitigationLineDescription(ln))
+        .join('\n');
+    }
+
+    const listSell =
+      mitigationDraft && mitigationDraft.lines.length > 0
+        ? mitigationDraft.lines.reduce(
+            (s, ln) => s + (Number(ln.amount) || 0),
+            0
+          )
+        : 0;
+    const negotiated =
+      mitigationDraft?.negotiatedTotal != null &&
+      Number.isFinite(Number(mitigationDraft.negotiatedTotal))
+        ? Number(mitigationDraft.negotiatedTotal)
+        : listSell;
+    const amountFromMit =
+      negotiated > 0 ? String(Math.round(negotiated * 100) / 100) : '';
+    const paymentModeFromMit =
+      mitigationDraft?.rateMode === 'cash' ? 'cash' : 'insurance';
+
+    setCurrentLeadId(leadId);
+    if (isEditingLead && profileTab !== 'estimator') {
+      setLeadToolReturnTab(profileTab);
+    } else {
+      setLeadToolReturnTab('documents');
+    }
+    setActiveTab('leads');
+    setIsEditingLead(true);
+    setShowMitigationPreview(false);
+    const entityFromMit: MitigationEntity =
+      mitigationDraft?.entity === 'prowest' ? 'prowest' : 'roslie';
+    setEmergencyDraft({
+      entity: entityFromMit,
+      clientName: name,
+      propertyAddress: addr,
+      phone: lead.clientPhone || '',
+      email: lead.clientEmail || '',
+      scope,
+      serviceStart: '',
+      serviceComplete: '',
+      paymentMode: paymentModeFromMit,
+      paymentAmount: amountFromMit,
+      date: new Date().toLocaleDateString(),
+      signerName: name,
+      clientSignatureDataUrl: null,
+      clientSignedAt: null,
+    });
+    setEmergencyPreview(false);
+    setSystemDocWorkspace('emergency');
+    setDocAddMenuOpen(false);
+    setInvoicePickerMode(false);
+    setShowEstimatePicker(false);
+  };
+
+  const clearEmergencySignaturePad = () => {
+    const canvas = emergencySigPadRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#18181b';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+  };
+
+  const commitEmergencySignature = () => {
+    const canvas = emergencySigPadRef.current;
+    if (!canvas || !emergencyDraft) return;
+    const signer =
+      emergencyDraft.signerName.trim() ||
+      emergencyDraft.clientName.trim() ||
+      '';
+    if (!signer) {
+      showToast('Enter the signer’s full legal name first');
+      return;
+    }
+    const dataUrl = canvas.toDataURL('image/png');
+    // Ignore blank-ish pads
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      let ink = 0;
+      for (let i = 0; i < pixels.length; i += 4) {
+        if (pixels[i] < 250 || pixels[i + 1] < 250 || pixels[i + 2] < 250) {
+          ink++;
+          if (ink > 40) break;
+        }
+      }
+      if (ink <= 40) {
+        showToast('Draw a signature first');
+        return;
+      }
+    }
+    const signedAt = new Date().toISOString();
+    setEmergencyDraft({
+      ...emergencyDraft,
+      signerName: signer,
+      clientSignatureDataUrl: dataUrl,
+      clientSignedAt: signedAt,
+    });
+    showToast('Electronically signed');
+  };
+
+  const formatSignedAtDisplay = (iso: string | null | undefined) => {
+    if (!iso) return '';
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t)) return iso;
+    return new Date(t).toLocaleString();
+  };
+
+  const generateEmergencyAgreementPdf = async (opts?: {
+    download?: boolean;
+    save?: boolean;
+  }) => {
+    if (!emergencyDraft) {
+      showToast('Open the agreement first');
+      return;
+    }
+    const d = emergencyDraft;
+    const entity: MitigationEntity = d.entity || 'roslie';
+    const wantDownload = opts?.download !== false && opts?.save !== true
+      ? true
+      : opts?.download === true;
+    const wantSave = opts?.save === true;
+    const doDownload = opts == null ? true : wantDownload;
+
+    // Twin of generateMitigationPdf: letter, same margins / header / footer pattern
+    const doc = new jsPDF({ unit: 'mm', format: 'letter' });
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const left = 18;
+    const right = pageW - 18;
+    const ink = { r: 28, g: 28, b: 30 };
+    const muted = { r: 100, g: 100, b: 105 };
+    const rule = { r: 190, g: 190, b: 195 };
+    const brandName = mitigationBillingBrand(entity);
+    const brandSub = mitigationBrandSub(entity);
+    const brandPhone = mitigationBrandPhone(entity);
+    const partyRole = mitigationPartyRole(entity);
+    const billingPartyLegal =
+      entity === 'prowest'
+        ? companyBrandName() || brandName
+        : mitigationPersonalBrand();
+    const providerLabel =
+      billingPartyLegal.trim() || mitigationPartyRoleLabel(entity);
+    const signedAtDisp =
+      formatSignedAtDisplay(d.clientSignedAt) || d.date || '';
+
+    // --- Header: company logo only for company billing; else Summit ---
+    let y = 16;
+    const logoW = drawDocLogo(doc, left, y, {
+      logoDataUrl:
+        entity === 'prowest' ? (companySettings.logoDataUrl || '').trim() : '',
+    });
+    const textX = left + logoW + 4;
+
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.text(brandName, textX, y + 5.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    const agreementSubBits = [brandSub, brandPhone].filter(Boolean);
+    if (agreementSubBits[0]) {
+      doc.text(agreementSubBits[0], textX, y + 10.5);
+    }
+    if (agreementSubBits[1]) {
+      doc.text(agreementSubBits[1], textX, y + 14.5);
+    } else if (
+      entity === 'prowest' &&
+      (companySettings.address || '').trim() &&
+      !brandSub
+    ) {
+      doc.text((companySettings.address || '').trim(), textX, y + 10.5);
+      if (brandPhone) doc.text(brandPhone, textX, y + 14.5);
+    }
+
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(18);
+    doc.text('AGREEMENT', right, y + 6, { align: 'right' });
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.text('Mitigation Service Agreement', right, y + 11.5, {
+      align: 'right',
+    });
+    doc.text(d.date || new Date().toLocaleDateString(), right, y + 16, {
+      align: 'right',
+    });
+
+    y = 38;
+    doc.setDrawColor(rule.r, rule.g, rule.b);
+    doc.setLineWidth(0.4);
+    doc.line(left, y, right, y);
+    y += 8;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.text('Mitigation Service Agreement', left, y);
+    y += 6;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    const intro = doc.splitTextToSize(
+      `This Mitigation Service Agreement ("Agreement") is entered into as of the date electronically signed below between ${providerLabel} ("${partyRole}") and the Client named below.`,
+      right - left
+    );
+    doc.text(intro, left, y);
+    y += intro.length * 4 + 4;
+
+    // --- Client / billed-by meta (twin of invoice bill-to layout) ---
+    const metaLeft = left;
+    const metaRight = pageW / 2 + 4;
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CLIENT', metaLeft, y);
+    doc.text('BILLED BY', metaRight, y);
+    y += 5;
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.text(d.clientName || '—', metaLeft, y);
+    doc.text(providerLabel, metaRight, y);
+    y += 5;
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.setFontSize(9);
+    doc.text(d.phone || '—', metaLeft, y);
+    doc.text(brandPhone || '—', metaRight, y);
+    y += 5;
+    doc.text(d.email || '—', metaLeft, y);
+    if (entity === 'prowest' && (companySettings.email || '').trim()) {
+      doc.text((companySettings.email || '').trim(), metaRight, y);
+    } else if (entity !== 'prowest') {
+      doc.text(userEmail || '—', metaRight, y);
+    }
+    y += 8;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('PROPERTY', metaLeft, y);
+    const showPm = showCompanyPmOnDoc(entity);
+    if (showPm) {
+      doc.text('PROJECT MANAGER', metaRight, y);
+    }
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    const propLines = doc.splitTextToSize(
+      d.propertyAddress || '—',
+      showPm ? pageW / 2 - 28 : right - left
+    );
+    const propY = y;
+    doc.text(propLines, metaLeft, propY);
+    if (showPm) {
+      const pmName = estimatePmName();
+      const pmPhone = estimatePmPhone();
+      doc.text(pmName || '—', metaRight, propY);
+      doc.setTextColor(muted.r, muted.g, muted.b);
+      doc.setFontSize(9);
+      if (pmPhone) doc.text(pmPhone, metaRight, propY + 5);
+      doc.setTextColor(ink.r, ink.g, ink.b);
+      doc.setFontSize(10);
+    }
+    y =
+      propY +
+      Math.max(showPm ? 12 : 5, propLines.length * 5) +
+      6;
+
+    const ensureSpace = (need: number) => {
+      if (y > pageH - need) {
+        doc.addPage();
+        y = 20;
+      }
+    };
+
+    ensureSpace(40);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.text('1. Scope of Work', left, y);
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    const scopeIntro = doc.splitTextToSize(
+      `${partyRole} agrees to perform mitigation / emergency roofing services as deemed necessary to prevent further property damage. Services may include tarping, patching, sealing, or temporary structural reinforcement.`,
+      right - left
+    );
+    doc.text(scopeIntro, left, y);
+    y += scopeIntro.length * 3.6 + 3;
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.setFontSize(9);
+    const scopeLines = doc.splitTextToSize(
+      d.scope.trim() || '________________',
+      right - left
+    );
+    doc.text(scopeLines, left, y);
+    y += Math.min(28, scopeLines.length * 4 + 4);
+    doc.setFontSize(8);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.text(`Est. start: ${d.serviceStart || '—'}`, left, y);
+    y += 4;
+    doc.text(`Est. complete: ${d.serviceComplete || '—'}`, left, y);
+    y += 7;
+
+    ensureSpace(35);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.text('2. Payment Terms', left, y);
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    const payCash =
+      d.paymentMode === 'cash'
+        ? `[X] Cash / insurance proceeds upon completion: $${d.paymentAmount || '________'}`
+        : `[ ] Cash / insurance proceeds upon completion: $${d.paymentAmount || '________'}`;
+    const payIns =
+      d.paymentMode === 'insurance'
+        ? '[X] Payment upon insurance claim approval / disbursement (direct pay authorized if applicable).'
+        : '[ ] Payment upon insurance claim approval / disbursement (direct pay authorized if applicable).';
+    doc.text(payCash, left, y);
+    y += 4;
+    doc.text(payIns, left, y);
+    y += 4;
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    const payNote = doc.splitTextToSize(
+      'Client remains financially responsible if the insurance provider denies or reduces the claim. Payment is due Net 15 of completed work.',
+      right - left
+    );
+    doc.text(payNote, left, y);
+    y += payNote.length * 3.6 + 5;
+
+    ensureSpace(35);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.text('3. Limitation of Liability', left, y);
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    const lim = doc.splitTextToSize(
+      `Mitigation / emergency repairs are temporary and intended to prevent further damage until permanent repairs can be made. ${partyRole} is not liable for pre-existing damage or consequential / incidental damages from weather, pre-existing conditions, or limitations of temporary repairs. Client agrees to hold harmless and indemnify ${partyRole} from claims arising from performance of these services.`,
+      right - left
+    );
+    doc.text(lim, left, y);
+    y += lim.length * 3.6 + 5;
+
+    ensureSpace(25);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.text('4. Access and Authorization', left, y);
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.text(
+      `Client grants ${partyRole} access to the property and authorizes actions needed to perform mitigation work.`,
+      left,
+      y
+    );
+    y += 7;
+
+    ensureSpace(25);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.text('5. Entire Agreement · Electronic signature', left, y);
+    y += 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    const entire = doc.splitTextToSize(
+      'This Agreement constitutes the full understanding between the parties and supersedes prior agreements. By signing below, Client agrees that an electronic signature (including a drawn signature captured on a device) is the legal equivalent of a handwritten signature.',
+      right - left
+    );
+    doc.text(entire, left, y);
+    y += entire.length * 3.6 + 10;
+
+    ensureSpace(55);
+    const sigW = (right - left - 10) / 2;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.text('CLIENT — ELECTRONIC SIGNATURE', left, y);
+    doc.text(partyRole.toUpperCase(), left + sigW + 10, y);
+    y += 3;
+    if (d.clientSignatureDataUrl) {
+      try {
+        doc.addImage(d.clientSignatureDataUrl, 'PNG', left, y, sigW, 18);
+      } catch {
+        doc.setDrawColor(rule.r, rule.g, rule.b);
+        doc.line(left, y + 16, left + sigW, y + 16);
+      }
+    } else {
+      doc.setDrawColor(rule.r, rule.g, rule.b);
+      doc.line(left, y + 16, left + sigW, y + 16);
+    }
+    doc.setDrawColor(rule.r, rule.g, rule.b);
+    doc.line(left + sigW + 10, y + 16, right, y + 16);
+    y += 20;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    const signerLabel =
+      d.signerName.trim() || d.clientName.trim() || '__________';
+    doc.text(`Signed by: ${signerLabel}`, left, y);
+    doc.text(brandName, left + sigW + 10, y);
+    y += 4;
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.text(
+      d.clientSignatureDataUrl
+        ? `Electronically signed ${signedAtDisp || '__________'}`
+        : `Date: ${d.date || '__________'}`,
+      left,
+      y
+    );
+    doc.text(`Date: ${d.date || '__________'}`, left + sigW + 10, y);
+
+    // Footer — same placement as mitigation invoice
+    doc.setFontSize(7);
+    doc.setTextColor(160, 160, 165);
+    const footerBits = [
+      'Mitigation Service Agreement',
+      entity === 'prowest' && (companySettings.address || '').trim()
+        ? (companySettings.address || '').trim()
+        : '',
+      entity === 'prowest' && (companySettings.phone || '').trim()
+        ? displayPhoneUS(companySettings.phone) ||
+          (companySettings.phone || '').trim()
+        : '',
+      entity === 'prowest' && (companySettings.fax || '').trim()
+        ? `Fax ${displayPhoneUS(companySettings.fax) || (companySettings.fax || '').trim()}`
+        : '',
+      entity === 'prowest' && (companySettings.license || '').trim()
+        ? `ROC# ${(companySettings.license || '').trim()}`
+        : '',
+    ].filter(Boolean);
+    doc.text(footerBits.join(' · ') || 'Mitigation Service Agreement', pageW / 2, pageH - 10, {
+      align: 'center',
+    });
+
+    const safeName =
+      d.clientName.replace(/[^\w]+/g, '_').replace(/^_|_$/g, '') || 'Client';
+    const fileName = `Mitigation_Service_Agreement_${safeName}.pdf`;
+    const blob = doc.output('blob');
+
+    if (doDownload) {
+      doc.save(fileName);
+      if (!wantSave) showToast('Mitigation Service Agreement PDF downloaded');
+    }
+
+    if (!wantSave) return;
+
+    const leadIdAtSave = currentLeadId;
+    if (leadIdAtSave == null) {
+      showToast('Select a lead before saving');
+      doc.save(fileName);
+      return;
+    }
+    if (!supabaseEnabled || !supabase) {
+      showToast('Cloud offline — downloading PDF instead');
+      doc.save(fileName);
+      return;
+    }
+    try {
+      const lead = leads.find((l) => l.id === leadIdAtSave);
+      if (!lead) {
+        showToast('Lead not found');
+        return;
+      }
+      const folderKey = lead.supabaseId?.trim() || String(leadIdAtSave);
+      const id = `esa-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const storagePath = `${folderKey}/agreements/${id}-${fileName}`;
+      const { error: upErr } = await supabase.storage
+        .from('lead-docs')
+        .upload(storagePath, blob, {
+          cacheControl: '3600',
+          upsert: false,
+          contentType: 'application/pdf',
+        });
+      if (upErr) {
+        console.error(upErr);
+        showToast('Cloud save failed — downloading PDF instead');
+        doc.save(fileName);
+        return;
+      }
+      const { data: pub } = supabase.storage
+        .from('lead-docs')
+        .getPublicUrl(storagePath);
+      const stamp = new Date().toISOString();
+      const docEntry: LeadDocument = {
+        id,
+        name: fileName,
+        url: pub.publicUrl,
+        size: blob.size,
+        mimeType: 'application/pdf',
+        createdAt: stamp,
+      };
+      const updated = leads.map((l) =>
+        l.id === leadIdAtSave
+          ? { ...l, documents: [...(l.documents || []), docEntry] }
+          : l
+      );
+      persistLeads(updated);
+      showToast('Mitigation Service Agreement saved to lead Documents');
+      exitLeadDocumentWorkspace({ returnTab: 'documents' });
+    } catch (err) {
+      console.error(err);
+      showToast('Save failed — downloading PDF instead');
+      doc.save(fileName);
+    }
   };
 
   // If workspace is set without a draft (e.g. stale state), re-init with lead
@@ -3113,7 +4524,7 @@ export default function SummitApp() {
 
     const qty = 1;
     const line: MitigationLineItem = {
-      id: `${Date.now()}-${resolvedKey}-${tarpType || fasciaEdge || 'x'}`,
+      id: newClientId(`mit-${resolvedKey}`),
       itemKey: resolvedKey,
       label: formatMitigationLineDescription({
         itemKey: resolvedKey,
@@ -3281,39 +4692,41 @@ export default function SummitApp() {
     const rule = { r: 190, g: 190, b: 195 };
     const title = mitigationInvoiceTitle(entity);
     const payable = mitigationPayableTo(entity);
-    const brandName =
-      entity === 'prowest' ? 'ProWest Roofing' : mitigationPersonalBrand();
-    const brandSub =
-      entity === 'prowest'
-        ? 'Licensed contractor'
-        : `${userName.trim() || 'Joe Roslie'} · ${userTitle.trim() || 'Owner'}`;
-    const brandPhone =
-      displayPhoneUS(userPhone) || userPhone || '(253) 381-2035';
+    const brandName = mitigationBillingBrand(entity);
+    const brandSub = mitigationBrandSub(entity);
+    const brandPhone = mitigationBrandPhone(entity);
     const money = (n: number) =>
       `$${Number(n).toLocaleString(undefined, {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
       })}`;
 
-    // --- Header: logo placeholder + brand (logo settings later) ---
+    // --- Header: company logo only for company billing; else Summit ---
     let y = 16;
-    doc.setDrawColor(rule.r, rule.g, rule.b);
-    doc.setLineWidth(0.3);
-    doc.roundedRect(left, y, 22, 14, 1, 1, 'S');
-    doc.setTextColor(muted.r, muted.g, muted.b);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7);
-    doc.text('LOGO', left + 11, y + 8.2, { align: 'center' });
+    const logoW = drawDocLogo(doc, left, y, {
+      logoDataUrl:
+        entity === 'prowest' ? (companySettings.logoDataUrl || '').trim() : '',
+    });
+    const textX = left + logoW + 4;
 
     doc.setTextColor(ink.r, ink.g, ink.b);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(14);
-    doc.text(brandName, left + 26, y + 5.5);
+    doc.text(brandName, textX, y + 5.5);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
     doc.setTextColor(muted.r, muted.g, muted.b);
-    doc.text(brandSub, left + 26, y + 10.5);
-    doc.text(brandPhone, left + 26, y + 14.5);
+    const mitSubBits = [brandSub, brandPhone].filter(Boolean);
+    if (mitSubBits[0]) doc.text(mitSubBits[0], textX, y + 10.5);
+    if (mitSubBits[1]) doc.text(mitSubBits[1], textX, y + 14.5);
+    else if (
+      entity === 'prowest' &&
+      (companySettings.address || '').trim() &&
+      !brandSub
+    ) {
+      doc.text((companySettings.address || '').trim(), textX, y + 10.5);
+      if (brandPhone) doc.text(brandPhone, textX, y + 14.5);
+    }
 
     doc.setTextColor(ink.r, ink.g, ink.b);
     doc.setFont('helvetica', 'bold');
@@ -3330,7 +4743,7 @@ export default function SummitApp() {
       { align: 'right' }
     );
 
-    y = 36;
+    y = 38;
     doc.setDrawColor(rule.r, rule.g, rule.b);
     doc.setLineWidth(0.4);
     doc.line(left, y, right, y);
@@ -3372,6 +4785,30 @@ export default function SummitApp() {
       y + 5
     );
     y += Math.max(12, locLines.length * 5 + 6);
+
+    // Company billing: Project Manager from Settings (1099 PM under ProWest)
+    if (showCompanyPmOnDoc(entity)) {
+      const pmName = estimatePmName();
+      const pmPhone = estimatePmPhone();
+      doc.setTextColor(muted.r, muted.g, muted.b);
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.text('PROJECT MANAGER', metaLeft, y);
+      y += 5;
+      doc.setTextColor(ink.r, ink.g, ink.b);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      doc.text(pmName || '—', metaLeft, y);
+      if (pmPhone) {
+        doc.setTextColor(muted.r, muted.g, muted.b);
+        doc.setFontSize(9);
+        doc.text(pmPhone, metaLeft, y + 5);
+        y += 10;
+      } else {
+        y += 6;
+      }
+      y += 2;
+    }
 
     // --- Line table header ---
     doc.setFillColor(245, 245, 246);
@@ -3532,9 +4969,12 @@ export default function SummitApp() {
     doc.setFontSize(9);
     doc.text(brandName, left, y);
     y += 4;
-    doc.setTextColor(muted.r, muted.g, muted.b);
-    doc.setFontSize(8);
-    doc.text(`${brandSub}  ·  ${brandPhone}`, left, y);
+    const sigSub = [brandSub, brandPhone].filter(Boolean).join('  ·  ');
+    if (sigSub) {
+      doc.setTextColor(muted.r, muted.g, muted.b);
+      doc.setFontSize(8);
+      doc.text(sigSub, left, y);
+    }
 
     // Footer
     doc.setFontSize(7);
@@ -4019,11 +5459,44 @@ export default function SummitApp() {
         /* ignore */
       }
 
+      try {
+        const cs = localStorage.getItem('summitCompanySettings');
+        if (cs) {
+          const c = JSON.parse(cs) as Partial<CompanySettings> & {
+            brandName?: string;
+            legalName?: string;
+          };
+          setCompanySettings(normalizeCompanySettings(c));
+        }
+      } catch {
+        /* ignore */
+      }
+
       const storedTheme = readStoredThemePref();
       setThemePref(storedTheme);
       const mode = resolveThemeMode(storedTheme);
       setThemeMode(mode);
       applyThemeMode(mode);
+
+      try {
+        const savedLists = localStorage.getItem(SUMMIT_TASK_LISTS_KEY);
+        const lists = normalizeStoredTaskLists(
+          savedLists ? JSON.parse(savedLists) : null
+        );
+        persistTaskLists(lists);
+        const savedActive = localStorage.getItem(SUMMIT_ACTIVE_TASK_LIST_KEY);
+        const activeId =
+          savedActive && lists.some((l) => l.id === savedActive)
+            ? savedActive
+            : lists[0]?.id || DEFAULT_TASK_LIST_ID;
+        persistActiveTaskListId(activeId);
+        const savedTasks = localStorage.getItem(SUMMIT_TASKS_KEY);
+        if (savedTasks) {
+          persistTasks(normalizeStoredTasks(JSON.parse(savedTasks)));
+        }
+      } catch {
+        /* ignore */
+      }
 
       const savedLeads = localStorage.getItem('summitLeads');
       const savedTrash = localStorage.getItem('summitTrash');
@@ -4034,7 +5507,13 @@ export default function SummitApp() {
             const parsed = JSON.parse(savedLeads) as Array<
               Partial<Lead> & { clientJobNumber?: string }
             >;
-            setLeads(parsed.map(normalizeLead));
+            const nextLeads = sanitizeLeads(parsed.map(normalizeLead));
+            setLeads(nextLeads);
+            try {
+              localStorage.setItem('summitLeads', JSON.stringify(nextLeads));
+            } catch {
+              /* ignore */
+            }
           } catch {
             /* ignore */
           }
@@ -4259,7 +5738,16 @@ export default function SummitApp() {
                   const parsed = JSON.parse(savedLeads) as Array<
                     Partial<Lead> & { clientJobNumber?: string }
                   >;
-                  setLeads(parsed.map(normalizeLead));
+                  const nextLeads = sanitizeLeads(parsed.map(normalizeLead));
+                  setLeads(nextLeads);
+                  try {
+                    localStorage.setItem(
+                      'summitLeads',
+                      JSON.stringify(nextLeads)
+                    );
+                  } catch {
+                    /* ignore */
+                  }
                 } catch {
                   /* ignore */
                 }
@@ -4289,18 +5777,36 @@ export default function SummitApp() {
               console.error('Supabase estimates fetch error:', estErr);
             } else if (estRows && estRows.length > 0) {
               const byLead: Record<string, Estimate[]> = {};
+              /** Per-lead client ids already claimed while hydrating cloud rows */
+              const claimedIdsByLead: Record<string, Set<number>> = {};
               for (const row of estRows) {
                 const r = row as Record<string, unknown>;
                 const leadKey = r.lead_id != null ? String(r.lead_id) : '';
                 if (!leadKey) continue;
+                if (!claimedIdsByLead[leadKey]) {
+                  claimedIdsByLead[leadKey] = new Set();
+                }
+                const claimed = claimedIdsByLead[leadKey];
                 const rawData = (r.data && typeof r.data === 'object'
                   ? r.data
                   : r) as Partial<Estimate> & { selectedShingle?: string };
+                // Never reuse a colliding data.id from another row on this lead
+                const fromData =
+                  typeof rawData.id === 'number' && Number.isFinite(rawData.id)
+                    ? rawData.id
+                    : null;
+                const fromCloud = stableLeadIdFromDb(r.id);
+                let clientId =
+                  fromData != null && !claimed.has(fromData)
+                    ? fromData
+                    : fromCloud;
+                if (claimed.has(clientId)) {
+                  clientId = newLeadNumericId();
+                  while (claimed.has(clientId)) clientId = newLeadNumericId();
+                }
+                claimed.add(clientId);
                 const est: Estimate = {
-                  id:
-                    typeof rawData.id === 'number'
-                      ? rawData.id
-                      : stableLeadIdFromDb(r.id),
+                  id: clientId,
                   date: String(rawData.date || ''),
                   clientFirstName: String(rawData.clientFirstName || ''),
                   clientLastName: String(rawData.clientLastName || ''),
@@ -4354,6 +5860,13 @@ export default function SummitApp() {
                   originalTotalForBuffer:
                     Number(rawData.originalTotalForBuffer) || 0,
                   measurementId: rawData.measurementId,
+                  pdfDocumentId: rawData.pdfDocumentId
+                    ? String(rawData.pdfDocumentId)
+                    : undefined,
+                  pdfUrl: rawData.pdfUrl ? String(rawData.pdfUrl) : undefined,
+                  pdfName: rawData.pdfName
+                    ? String(rawData.pdfName)
+                    : undefined,
                   supabaseId: r.id != null ? String(r.id) : undefined,
                 };
                 if (!byLead[leadKey]) byLead[leadKey] = [];
@@ -4362,20 +5875,32 @@ export default function SummitApp() {
               for (const lead of fromDb) {
                 const key = lead.supabaseId || String(lead.id);
                 if (byLead[key]?.length) {
-                  lead.estimates = byLead[key];
+                  const prevById = new Map(
+                    (lead.estimates || []).map((e) => [e.id, e])
+                  );
+                  lead.estimates = byLead[key].map((e) => {
+                    const prev = prevById.get(e.id);
+                    return {
+                      ...e,
+                      pdfDocumentId: e.pdfDocumentId || prev?.pdfDocumentId,
+                      pdfUrl: e.pdfUrl || prev?.pdfUrl,
+                      pdfName: e.pdfName || prev?.pdfName,
+                    };
+                  });
                 }
               }
             }
 
-            setLeads(fromDb);
+            const safeFromDb = sanitizeLeads(fromDb);
+            setLeads(safeFromDb);
             try {
-              localStorage.setItem('summitLeads', JSON.stringify(fromDb));
+              localStorage.setItem('summitLeads', JSON.stringify(safeFromDb));
             } catch {
               /* ignore quota */
             }
             console.log(
               'Loaded',
-              fromDb.length,
+              safeFromDb.length,
               'leads and estimates from Supabase'
             );
           } catch (err) {
@@ -4683,6 +6208,24 @@ export default function SummitApp() {
     }
   }, [sessionReady, userName, userTitle, userCompany, userPhone, userEmail]);
 
+  useEffect(() => {
+    if (!sessionReady) return;
+    try {
+      localStorage.setItem(
+        'summitCompanySettings',
+        JSON.stringify(companySettings)
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [sessionReady, companySettings]);
+
+  useEffect(() => {
+    if (!sessionReady) return;
+    const name = (companySettings.company || '').trim();
+    document.title = name || 'Summit';
+  }, [sessionReady, companySettings.company]);
+
   // Appearance: persist preference + apply day/night (auto rechecks while open)
   useEffect(() => {
     if (!sessionReady) return;
@@ -4748,6 +6291,27 @@ export default function SummitApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot after hydrate
   }, [sessionReady]);
 
+  // Pull Google events while Calendar tab is open (month window)
+  useEffect(() => {
+    if (!sessionReady || !gcalConnected || activeTab !== 'calendar') return;
+    void loadGoogleEvents({ silent: true, cursor: calendarCursor });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload on tab/month/connect
+  }, [
+    sessionReady,
+    gcalConnected,
+    activeTab,
+    calendarCursor.getFullYear(),
+    calendarCursor.getMonth(),
+  ]);
+
+  // Pull Google Tasks when Tasks or Calendar is open
+  useEffect(() => {
+    if (!sessionReady || !gcalConnected) return;
+    if (activeTab !== 'tasks' && activeTab !== 'calendar') return;
+    void syncTasksWithGoogle({ silent: true, pullOnly: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tab/connect only
+  }, [sessionReady, gcalConnected, activeTab]);
+
   useEffect(() => {
     if (!sessionReady) return;
     try {
@@ -4812,7 +6376,7 @@ export default function SummitApp() {
     setHasUnsavedChanges(false);
   };
 
-  /** Explicit save for Profile settings (profile + appearance). */
+  /** Explicit save for Profile settings (profile + company + appearance). */
   const saveUserSettings = () => {
     try {
       localStorage.setItem(
@@ -4824,6 +6388,10 @@ export default function SummitApp() {
           phone: userPhone,
           email: userEmail,
         })
+      );
+      localStorage.setItem(
+        'summitCompanySettings',
+        JSON.stringify(companySettings)
       );
       localStorage.setItem('summitThemePref', themePref);
       const mode = resolveThemeMode(themePref);
@@ -5002,14 +6570,67 @@ export default function SummitApp() {
   };
 
   const saveCurrentEstimate = async (opts?: {
-    /** Also upload PDF to lead Documents (preview Save) */
+    /** Also generate/store PDF on the estimate (preview Save) */
     savePdf?: boolean;
   }) => {
     const client = resolveEstimatorClient();
     const linkId = currentLeadId ?? estimatorSourceLeadId ?? client.lead?.id ?? null;
-    const estimateId = editingEstimateId ?? Date.now();
+    const leadEstimates =
+      linkId != null
+        ? leads.find((l) => l.id === linkId)?.estimates || []
+        : [];
 
-    const currentEstimate = {
+    const editingExisting =
+      editingEstimateId != null &&
+      leadEstimates.some((e) => e.id === editingEstimateId);
+
+    const draftFields: Partial<Estimate> = {
+      squares,
+      layers,
+      waste,
+      pitch,
+      stories,
+      fasciaLF,
+      deckingSheets,
+      deckingOsbSheets,
+      deckingCdxSheets,
+      solarPanels,
+      hvacUnits,
+      skylights,
+      ridgeVentLF,
+      gutterMode,
+      gutterLF,
+      selectedShingle,
+      cambridgeColor,
+      dynastyColor,
+      armourshakeColor,
+      selectedUnderlayment,
+      fasciaMode,
+      deckingMode,
+      fasciaType,
+      modifiedBitumenSquares,
+      modifiedBitumenColor,
+      dripEdgeColor,
+      total: estimatorTotalPrice,
+      negotiatedPrice,
+    };
+
+    // New save (not editing a loaded estimate): block exact duplicates
+    let targetEst: Estimate | undefined = editingExisting
+      ? leadEstimates.find((e) => e.id === editingEstimateId)
+      : undefined;
+    let isUpdate = editingExisting;
+    if (!editingExisting && linkId != null) {
+      const dup = findExactDuplicateEstimate(leadEstimates, draftFields);
+      if (dup) {
+        targetEst = dup.estimate;
+        isUpdate = true;
+      }
+    }
+
+    const estimateId = targetEst?.id ?? editingEstimateId ?? newLeadNumericId();
+
+    const currentEstimate: Estimate = {
       id: estimateId,
       date: new Date().toLocaleDateString(),
       clientFirstName: client.firstName,
@@ -5052,14 +6673,11 @@ export default function SummitApp() {
       negotiatedPrice,
       originalTotalForBuffer,
       measurementId: activeMeasurementId || undefined,
+      supabaseId: targetEst?.supabaseId,
+      pdfDocumentId: targetEst?.pdfDocumentId,
+      pdfUrl: targetEst?.pdfUrl,
+      pdfName: targetEst?.pdfName,
     };
-
-    const updatingExisting =
-      editingEstimateId != null &&
-      linkId != null &&
-      (leads.find((l) => l.id === linkId)?.estimates || []).some(
-        (e) => e.id === editingEstimateId
-      );
 
     let updatedLeads = [...leads];
     let savedLeadId = linkId;
@@ -5067,11 +6685,35 @@ export default function SummitApp() {
       updatedLeads = updatedLeads.map((lead) => {
         if (lead.id !== linkId) return lead;
         const prev = lead.estimates || [];
-        const estimates = updatingExisting
-          ? prev.map((e) => (e.id === editingEstimateId ? currentEstimate : e))
-          : [...prev, currentEstimate];
-        return { ...lead, estimates };
+        if (!isUpdate) {
+          return { ...lead, estimates: [...prev, currentEstimate] };
+        }
+        const { estimates, replaced } = replaceOneEstimate(
+          prev,
+          currentEstimate
+        );
+        if (replaced) return { ...lead, estimates };
+        // Fallback: replace by content fingerprint (never insert a twin)
+        const contentKey = estimateContentKey(currentEstimate);
+        const dupIdx = prev.findIndex(
+          (e) => estimateContentKey(e) === contentKey
+        );
+        if (dupIdx >= 0) {
+          const copy = [...prev];
+          copy[dupIdx] = {
+            ...currentEstimate,
+            id: prev[dupIdx].id,
+            supabaseId: prev[dupIdx].supabaseId || currentEstimate.supabaseId,
+            pdfDocumentId:
+              currentEstimate.pdfDocumentId || prev[dupIdx].pdfDocumentId,
+            pdfUrl: currentEstimate.pdfUrl || prev[dupIdx].pdfUrl,
+            pdfName: currentEstimate.pdfName || prev[dupIdx].pdfName,
+          };
+          return { ...lead, estimates: copy };
+        }
+        return { ...lead, estimates: [...prev, currentEstimate] };
       });
+      dirtyEstimateKeysRef.current.add(`${linkId}:${estimateId}`);
       setCurrentLeadId(linkId);
       setEstimatorSourceLeadId(linkId);
     } else {
@@ -5090,6 +6732,7 @@ export default function SummitApp() {
       });
       updatedLeads.push(newLead);
       savedLeadId = newLead.id;
+      dirtyEstimateKeysRef.current.add(`${newLead.id}:${estimateId}`);
       setCurrentLeadId(newLead.id);
       setEstimatorSourceLeadId(newLead.id);
     }
@@ -5102,14 +6745,13 @@ export default function SummitApp() {
         download: false,
         save: true,
         leadId: savedLeadId,
+        estimateId,
         leadsSnapshot: updatedLeads,
       });
       return;
     }
 
-    showToast(
-      updatingExisting ? 'Estimate updated on lead' : 'Estimate saved to lead'
-    );
+    showToast(isUpdate ? 'Estimate updated' : 'Estimate saved');
   };
 
   const resetEstimatorFields = (keepLeadContact = false) => {
@@ -5184,7 +6826,22 @@ export default function SummitApp() {
   const formatWasteField = (w: number | undefined | null) => {
     const v = Number(w);
     if (!Number.isFinite(v) || v < 0) return '0.10';
-    return Math.min(0.15, Math.max(0, v)).toFixed(2);
+    const capped = Math.min(0.28, Math.max(0, v));
+    // Snap to select options
+    const opts = [
+      0, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16,
+      0.18, 0.2, 0.22, 0.25, 0.28,
+    ];
+    let best = 0.1;
+    let bestDist = Infinity;
+    for (const o of opts) {
+      const d = Math.abs(o - capped);
+      if (d < bestDist) {
+        bestDist = d;
+        best = o;
+      }
+    }
+    return best === 0 ? '' : best.toFixed(2);
   };
 
   const applyMeasurementToEstimator = (m: RoofMeasurement, lead?: Lead | null) => {
@@ -5227,11 +6884,24 @@ export default function SummitApp() {
 
     setWaste(formatWasteField(m.waste));
     setLayers((prev) => prev || '1');
-    if (m.ridgeLF != null && Number(m.ridgeLF) > 0) {
-      setRidgeVentLF(String(Math.round(Number(m.ridgeLF) * 10) / 10));
-    }
-    if (m.eaveLF != null && Number(m.eaveLF) > 0) {
-      setFasciaLF(String(Math.round(Number(m.eaveLF) * 10) / 10));
+    // EagleView lengths stay on the measurement for reference — do NOT auto-fill
+    // ridgeVentLF / fasciaLF. Partial ridge vent and partial fascia are common;
+    // those costs should only appear when the user opts in.
+    // ≤3/12 (primary or secondary portion) → double-underlayment awareness
+    const primaryRise = Number(String(m.pitch || '').split('/')[0]);
+    const secRise = m.secondaryPitch
+      ? Number(String(m.secondaryPitch).split('/')[0])
+      : NaN;
+    const secFrac = Number(m.secondaryFraction) || 0;
+    const primaryLow =
+      Number.isFinite(primaryRise) && primaryRise > 0 && primaryRise <= 3;
+    const secondaryLow =
+      Number.isFinite(secRise) && secRise > 0 && secRise <= 3 && secFrac > 0;
+    if (primaryLow || secondaryLow) {
+      if (!selectedUnderlayment) setSelectedUnderlayment('high-temp');
+      if (secondaryLow) {
+        setLowSlopeMode((prev) => (prev === 'none' ? 'attached' : prev));
+      }
     }
     setActiveMeasurementId(m.id);
     setHasUnsavedChanges(false);
@@ -5257,6 +6927,8 @@ export default function SummitApp() {
   /** Wipe map/trace state so the next session never shows the previous house. */
   const clearMapSession = () => {
     geocodeReqIdRef.current += 1;
+    solarAreaOverrideRef.current = null;
+    setAutoMeasureHint(null);
     setTracePoints([]);
     setMapCenter(null);
     setAddressGeocodeFailed(false);
@@ -5276,16 +6948,26 @@ export default function SummitApp() {
     prefillLabel?: string;
     center?: LatLngPoint | null;
     preferManual?: boolean;
+    initialPoints?: LatLngPoint[];
+    pitch?: string;
+    pitchAuto?: boolean;
+    waste?: number;
+    wasteAuto?: boolean;
   }) => {
-    setTracePoints([]);
+    const pts = opts?.initialPoints?.filter(
+      (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng)
+    ) || [];
+    setTracePoints(pts);
     setSelectedMeasurementId(null);
     setDraftSections([]);
-    setMeasurePitch('6/12');
-    setMeasurePitchAuto(true);
-    setMeasureWaste(0.1);
-    setMeasureWasteAuto(true);
-    sectionKindRef.current = 'pitched';
-    setSectionKind('pitched');
+    const pitch = opts?.pitch || '6/12';
+    const asFlat = pitch === 'Flat';
+    sectionKindRef.current = asFlat ? 'flat' : 'pitched';
+    setSectionKind(asFlat ? 'flat' : 'pitched');
+    setMeasurePitch(asFlat ? 'Flat' : pitch);
+    setMeasurePitchAuto(opts?.pitchAuto ?? !opts?.pitch);
+    setMeasureWaste(opts?.waste ?? (asFlat ? 0.05 : 0.1));
+    setMeasureWasteAuto(opts?.wasteAuto ?? opts?.waste == null);
     setMeasureLabel(opts?.prefillLabel || '');
     setMapCenter(opts?.center ?? null);
     setAddressGeocodeFailed(!!opts?.preferManual || !opts?.center);
@@ -5427,20 +7109,22 @@ export default function SummitApp() {
     lead: Lead;
     estimate: Estimate;
     leadName: string;
+    estimateIndex: number;
   }> => {
     const items: Array<{
       lead: Lead;
       estimate: Estimate;
       leadName: string;
+      estimateIndex: number;
     }> = [];
     for (const lead of leads) {
       const name =
         [lead.clientFirstName, lead.clientLastName].filter(Boolean).join(' ') ||
         lead.clientAddress ||
         'Unassigned lead';
-      for (const estimate of lead.estimates || []) {
-        items.push({ lead, estimate, leadName: name });
-      }
+      (lead.estimates || []).forEach((estimate, estimateIndex) => {
+        items.push({ lead, estimate, leadName: name, estimateIndex });
+      });
     }
     return items.sort((a, b) => {
       const ta = Number(a.estimate.id) || 0;
@@ -5606,8 +7290,13 @@ export default function SummitApp() {
   };
 
   /**
-   * Google Solar auto-measure → saves a measurement on the lead (field-verify).
-   * Requires GOOGLE_SOLAR_API_KEY (or Maps key with Solar enabled).
+   * Auto-measure — accuracy first:
+   * 1) Instant Roofer AI (~$1–3, sandbox free credits) when INSTANT_ROOFER_API_KEY is set
+   * 2) Else Google Solar squares/pitch only (no fake outline)
+   *
+   * Free OSM / Solar bounding-box outlines were removed — they looked auto but
+   * were not roof-accurate. Trace manually, or add Instant Roofer for AI measure.
+   * Ridge/hip/rake stay blank until field entry or Human Certified.
    */
   const runSolarAutoMeasure = async () => {
     if (!currentLeadId) {
@@ -5625,6 +7314,8 @@ export default function SummitApp() {
     }
 
     setSolarMeasuring(true);
+    solarAreaOverrideRef.current = null;
+    setAutoMeasureHint(null);
     try {
       let center = mapCenter;
       if (!center) {
@@ -5640,40 +7331,178 @@ export default function SummitApp() {
         return;
       }
 
-      const res = await fetch(
-        `/api/solar/measure?lat=${encodeURIComponent(String(center.lat))}&lng=${encodeURIComponent(String(center.lng))}`,
-        { headers: { Accept: 'application/json' }, cache: 'no-store' }
-      );
-      const data = (await res.json()) as {
+      const qs = `lat=${encodeURIComponent(String(center.lat))}&lng=${encodeURIComponent(String(center.lng))}`;
+
+      // 1) Instant Roofer AI (accurate) when configured
+      const irRes = await fetch(`/api/instant-roofer/measure?${qs}`, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+      });
+      const ir = (await irRes.json()) as {
         ok?: boolean;
         error?: string;
         message?: string;
         pitch?: string;
+        waste?: number;
         squares?: number;
         footprintSqFt?: number;
         surfaceSqFt?: number;
+        perimeterLF?: number;
+        confidence?: { score?: number | null; label?: string | null };
         center?: { lat: number; lng: number };
-        note?: string;
+        outlinePoints?: LatLngPoint[];
+        outlineImage?: string | null;
       };
 
-      if (!res.ok || !data.ok) {
+      if (irRes.ok && ir.ok && (Number(ir.squares) || 0) > 0) {
+        const squares = Number(ir.squares) || 0;
+        const pitch = ir.pitch || '6/12';
+        const waste = ir.waste ?? 0.1;
+        const isFlat = pitch === 'Flat';
+        const mapCenterPt = ir.center || center;
+        const outlinePoints = Array.isArray(ir.outlinePoints)
+          ? ir.outlinePoints.filter(
+              (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng)
+            )
+          : [];
+        const conf =
+          ir.confidence?.label ||
+          (ir.confidence?.score != null
+            ? `score ${ir.confidence.score}`
+            : null);
+
+        // Only seed map when Instant Roofer returns real LiDAR outline points
+        if (outlinePoints.length >= 3) {
+          solarAreaOverrideRef.current = {
+            squares: isFlat ? 0 : squares,
+            footprintSqFt: Number(ir.footprintSqFt) || squares * 100,
+            surfaceSqFt: Number(ir.surfaceSqFt) || squares * 100,
+            pitch,
+            waste,
+            measureSource: 'instant_roofer',
+          };
+          setAutoMeasureHint(
+            `Instant Roofer · ${squares} sq · ${pitch}${
+              conf ? ` · ${conf}` : ''
+            } — nudge outline if needed, then Save`
+          );
+          beginNewMeasurementSession({
+            prefillLabel: `${street || 'Roof'} · Instant Roofer`,
+            center: mapCenterPt,
+            initialPoints: outlinePoints,
+            pitch: isFlat ? 'Flat' : pitch,
+            pitchAuto: false,
+            waste,
+            wasteAuto: false,
+          });
+          showToast(
+            `Instant Roofer · ${squares} sq · ${pitch}${
+              conf ? ` · ${conf}` : ''
+            }`
+          );
+          return;
+        }
+
+        const measurement = normalizeMeasurement({
+          id: `ir-${Date.now()}`,
+          createdAt: new Date().toLocaleString(),
+          label: `${street || 'Roof'} · Instant Roofer`,
+          points: [],
+          roofType: isFlat ? 'flat-modified-bitumen' : 'pitched-shingles',
+          pitch,
+          pitchAuto: true,
+          waste,
+          wasteAuto: false,
+          footprintSqFt: Number(ir.footprintSqFt) || squares * 100,
+          surfaceSqFt: Number(ir.surfaceSqFt) || squares * 100,
+          squares: isFlat ? 0 : squares,
+          flatSquares: isFlat ? squares : 0,
+          perimeterLF: Number(ir.perimeterLF) || 0,
+          edgeLengthsLF: [],
+          ridgeLF: 0,
+          hipLF: 0,
+          eaveLF: 0,
+          rakeLF: 0,
+          valleyLF: 0,
+          center: mapCenterPt,
+          measureSource: 'instant_roofer',
+          edgesVerified: false,
+        });
+        if (!measurement) {
+          showToast('Could not build measurement from Instant Roofer');
+          return;
+        }
+        const updated = leads.map((lead) =>
+          lead.id === currentLeadId
+            ? {
+                ...lead,
+                measurements: [...(lead.measurements || []), measurement],
+              }
+            : lead
+        );
+        persistLeads(updated);
+        setSelectedMeasurementId(measurement.id);
+        setMapCenter(mapCenterPt);
         showToast(
-          data.message ||
-            (data.error === 'solar_not_configured'
-              ? 'Add GOOGLE_SOLAR_API_KEY to enable auto-measure'
-              : 'Auto-measure failed')
+          `Instant Roofer · ${squares} sq · ${pitch}${
+            conf ? ` · ${conf}` : ''
+          } — Open map to trace outline; ridge/hip blank`
         );
         return;
       }
 
-      const squares = Number(data.squares) || 0;
-      if (squares <= 0) {
-        showToast('Solar found no roof area — try tracing manually');
+      // 2) Google Solar — squares/pitch only (no OSM/box outline — those were inaccurate)
+      if (ir.error !== 'instant_roofer_not_configured' && !irRes.ok) {
+        console.warn('instant-roofer failed, trying Solar', ir.message);
+      }
+
+      const solarRes = await fetch(`/api/solar/measure?${qs}`, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+      });
+      const solar = (await solarRes.json()) as {
+        ok?: boolean;
+        error?: string;
+        message?: string;
+        pitch?: string;
+        secondaryPitch?: string | null;
+        secondaryFraction?: number | null;
+        waste?: number;
+        squares?: number;
+        footprintSqFt?: number;
+        surfaceSqFt?: number;
+        center?: { lat: number; lng: number };
+      };
+
+      const solarOk =
+        solarRes.ok && solar.ok && (Number(solar.squares) || 0) > 0;
+
+      if (!solarOk) {
+        if (ir.error === 'instant_roofer_not_configured') {
+          showToast(
+            'Accurate auto-measure needs Instant Roofer (INSTANT_ROOFER_API_KEY) — or Open map to trace by hand'
+          );
+        } else if (solar.error === 'solar_not_configured') {
+          showToast(
+            ir.message ||
+              'Auto-measure unavailable — add INSTANT_ROOFER_API_KEY, or Open map to trace'
+          );
+        } else {
+          showToast(
+            ir.message ||
+              solar.message ||
+              'Auto-measure failed — Open map to trace'
+          );
+        }
         return;
       }
 
-      const pitch = data.pitch || '6/12';
+      const squares = Number(solar.squares) || 0;
+      const pitch = solar.pitch || '6/12';
+      const waste = solar.waste ?? 0.1;
       const isFlat = pitch === 'Flat' || pitch === '1/12' || pitch === '2/12';
+      const mapCenterPt = solar.center || center;
+
       const measurement = normalizeMeasurement({
         id: `solar-${Date.now()}`,
         createdAt: new Date().toLocaleString(),
@@ -5682,10 +7511,12 @@ export default function SummitApp() {
         roofType: isFlat ? 'flat-modified-bitumen' : 'pitched-shingles',
         pitch,
         pitchAuto: true,
-        waste: 0.1,
+        waste,
         wasteAuto: true,
-        footprintSqFt: Number(data.footprintSqFt) || squares * 100,
-        surfaceSqFt: Number(data.surfaceSqFt) || squares * 100,
+        secondaryPitch: solar.secondaryPitch || undefined,
+        secondaryFraction: solar.secondaryFraction ?? undefined,
+        footprintSqFt: Number(solar.footprintSqFt) || squares * 100,
+        surfaceSqFt: Number(solar.surfaceSqFt) || squares * 100,
         squares: isFlat ? 0 : squares,
         flatSquares: isFlat ? squares : 0,
         perimeterLF: 0,
@@ -5694,7 +7525,10 @@ export default function SummitApp() {
         hipLF: 0,
         eaveLF: 0,
         rakeLF: 0,
-        center: data.center || center,
+        valleyLF: 0,
+        center: mapCenterPt,
+        measureSource: 'google_solar',
+        edgesVerified: false,
       });
       if (!measurement) {
         showToast('Could not build measurement from Solar data');
@@ -5711,15 +7545,140 @@ export default function SummitApp() {
       );
       persistLeads(updated);
       setSelectedMeasurementId(measurement.id);
-      setMapCenter(data.center || center);
+      setMapCenter(mapCenterPt);
       showToast(
-        `Auto-measure · ${squares} sq · ${pitch} — field-verify before ordering`
+        `Solar · ${squares} sq · ${pitch} — numbers only; Open map to trace the real outline`
       );
     } catch (err) {
-      console.error('solar auto-measure', err);
+      console.error('auto-measure', err);
       showToast('Auto-measure failed');
     } finally {
       setSolarMeasuring(false);
+    }
+  };
+
+  const refreshHumanOrders = async (leadId?: number | null) => {
+    try {
+      const qs =
+        leadId != null ? `?leadId=${encodeURIComponent(String(leadId))}` : '';
+      const res = await fetch(`/api/instant-roofer/human${qs}`, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        orders?: Array<{
+          id: string;
+          leadId: string | null;
+          status: string;
+          reportUrl: string | null;
+          address: string | null;
+          createdAt: string;
+          failureReason: string | null;
+        }>;
+      };
+      if (res.ok && data.ok && Array.isArray(data.orders)) {
+        setHumanOrders(data.orders);
+        // Phone-friendly: browser notification when a report completes
+        for (const o of data.orders) {
+          if (o.status === 'completed' && o.reportUrl && typeof Notification !== 'undefined') {
+            if (Notification.permission === 'granted') {
+              // Avoid spamming: only if freshly seen via sessionStorage
+              const key = `ir-notified-${o.id}`;
+              if (!sessionStorage.getItem(key)) {
+                sessionStorage.setItem(key, '1');
+                new Notification('Human roof report ready', {
+                  body: o.address || 'Instant Roofer Human Certified is ready',
+                });
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  };
+
+  /** Instant Roofer Human Certified (~$10, ~1 hr) — edges for materials. */
+  const orderHumanCertifiedMeasure = async () => {
+    if (!currentLeadId) {
+      showToast('Open a lead first');
+      return;
+    }
+    const street = clientAddress.trim();
+    const city = clientCity.trim();
+    const state = clientState.trim();
+    const zip = clientZip.trim();
+    if (!street && !city && !zip) {
+      showToast('Add a property address under Overview first');
+      setProfileTab('overview');
+      return;
+    }
+
+    setHumanOrdering(true);
+    try {
+      let center = mapCenter;
+      if (!center) {
+        center = await geocodeStructuredAddress({
+          street: street || city,
+          city,
+          state,
+          zip,
+        });
+      }
+      if (!center) {
+        showToast('Could not locate address for human measure');
+        return;
+      }
+
+      if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        void Notification.requestPermission();
+      }
+
+      const address = [street, city, state, zip].filter(Boolean).join(', ');
+      const customerName = [clientFirstName, clientLastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+
+      const res = await fetch('/api/instant-roofer/human', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          lat: center.lat,
+          lng: center.lng,
+          leadId: currentLeadId,
+          address,
+          customerName: customerName || undefined,
+          contractorName:
+            companyBrandName() ||
+            userCompany.trim() ||
+            userName.trim() ||
+            undefined,
+        }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        message?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.ok) {
+        showToast(data.message || 'Could not order Human Certified report');
+        return;
+      }
+      showToast(
+        'Human Certified ordered (~1 hr). We’ll flag it here when ready — set Instant Roofer webhook for phone alerts.'
+      );
+      await refreshHumanOrders(currentLeadId);
+    } catch (err) {
+      console.error('human order', err);
+      showToast('Human Certified order failed');
+    } finally {
+      setHumanOrdering(false);
     }
   };
 
@@ -5744,10 +7703,39 @@ export default function SummitApp() {
       return null;
     }
 
-    const measurement = aggregateSectionsToMeasurement(sections, {
-      label: measureLabel.trim() || clientAddress || 'Roof',
-      center: mapCenter || undefined,
-    });
+    const solarOv = solarAreaOverrideRef.current;
+    const totalOverrides =
+      solarOv && sectionKindRef.current !== 'flat' && (solarOv.squares || 0) > 0
+        ? {
+            squares: solarOv.squares,
+            footprintSqFt: solarOv.footprintSqFt,
+            surfaceSqFt: solarOv.surfaceSqFt,
+          }
+        : solarOv && (solarOv.squares || 0) <= 0 && solarOv.footprintSqFt > 0
+          ? {
+              flatSquares: Math.round((solarOv.surfaceSqFt / 100) * 10) / 10,
+              footprintSqFt: solarOv.footprintSqFt,
+              surfaceSqFt: solarOv.surfaceSqFt,
+            }
+          : undefined;
+
+    const measurement = {
+      ...aggregateSectionsToMeasurement(sections, {
+        label: measureLabel.trim() || clientAddress || 'Roof',
+        center: mapCenter || undefined,
+        totalOverrides,
+        measureSource: solarOv?.measureSource || 'trace',
+        edgesVerified: false,
+      }),
+      ...(solarOv?.secondaryPitch
+        ? {
+            secondaryPitch: solarOv.secondaryPitch,
+            secondaryFraction: solarOv.secondaryFraction,
+          }
+        : {}),
+    };
+    solarAreaOverrideRef.current = null;
+    setAutoMeasureHint(null);
 
     const withAddress = leads.map((lead) =>
       lead.id === currentLeadId
@@ -5776,7 +7764,7 @@ export default function SummitApp() {
         ? `Saved report · ${sections.length} sections · ${pitched} pitched + ${flat} flat sq`
         : flat > 0 && pitched <= 0
           ? `Saved · ${flat} flat squares`
-          : `Saved · ${pitched} pitched squares`
+          : `Saved · ${pitched} pitched squares · enter ridge/hip on estimate after field check`
     );
     return measurement;
   };
@@ -5845,21 +7833,60 @@ export default function SummitApp() {
   showToast('Moved to trash');
   };
 
-  /** Soft-delete a single estimate → app trash */
-  const removeLeadEstimate = (estimateId: number) => {
+  /**
+   * Soft-delete a single estimate → app trash.
+   * Prefer index so duplicate Date.now() ids never wipe the whole list.
+   */
+  const removeLeadEstimate = (estimateId: number, estimateIndex?: number) => {
     if (!currentLeadId) return;
     if (!confirm('Move this estimate to trash?')) return;
     const lead = leads.find((l) => l.id === currentLeadId);
     if (!lead) return;
-    const estimate = (lead.estimates || []).find((e) => e.id === estimateId);
+    const list = lead.estimates || [];
+    const idx =
+      typeof estimateIndex === 'number' &&
+      estimateIndex >= 0 &&
+      estimateIndex < list.length &&
+      list[estimateIndex]?.id === estimateId
+        ? estimateIndex
+        : list.findIndex((e) => e.id === estimateId);
+    if (idx < 0) return;
+    const estimate = list[idx];
     if (!estimate) return;
 
-    const updated = leads.map((l) =>
-      l.id === currentLeadId
-        ? { ...l, estimates: (l.estimates || []).filter((e) => e.id !== estimateId) }
-        : l
-    );
+    const pdfId = estimate.pdfDocumentId;
+    const pdfUrl = estimate.pdfUrl;
+    dirtyEstimateKeysRef.current.delete(`${currentLeadId}:${estimateId}`);
+    const updated = leads.map((l) => {
+      if (l.id !== currentLeadId) return l;
+      return {
+        ...l,
+        // Remove exactly one row (by index), never every matching id
+        estimates: (l.estimates || []).filter((_, i) => i !== idx),
+        documents: (l.documents || []).filter((d) => {
+          if (pdfId && d.id === pdfId) return false;
+          if (pdfUrl && d.url === pdfUrl) return false;
+          return true;
+        }),
+      };
+    });
     persistLeads(updated);
+
+    // Drop the cloud row immediately so bootstrap cannot resurrect it
+    if (supabaseEnabled && supabase && estimate.supabaseId) {
+      const cloudEstId = estimate.supabaseId;
+      void (async () => {
+        try {
+          const { error } = await supabase
+            .from('estimates')
+            .delete()
+            .eq('id', cloudEstId);
+          if (error) console.error('Supabase estimate trash error:', error);
+        } catch (err) {
+          console.error('Supabase estimate trash error:', err);
+        }
+      })();
+    }
 
     persistTrash([
       {
@@ -6104,6 +8131,60 @@ export default function SummitApp() {
     setActiveTab(newTab);
   };
 
+  /**
+   * Open a lead and load a saved estimate into the lead estimator.
+   * Used from Estimates hub / picker so we never land in a dead shell.
+   */
+  const openLeadEstimate = (
+    leadId: number,
+    estimate: Estimate,
+    leadOverride?: Lead
+  ) => {
+    const lead = leadOverride ?? leads.find((l) => l.id === leadId);
+    if (!lead) {
+      showToast('Lead not found');
+      return;
+    }
+    // Clear overlays that can leave a blank / partial state under the lead
+    setShowEstimatePicker(false);
+    setShowProfessionalEstimate(false);
+    setShowMeasureAddressModal(false);
+    setHubReport(null);
+    setInvoicePickerMode(false);
+    if (systemDocWorkspace) {
+      setSystemDocWorkspace(null);
+      setTakeoffAssignOpen(false);
+      setEmergencyDraft(null);
+      setEmergencyPreview(false);
+      setMitigationDraft(null);
+      setMitigationWorkspace('invoice');
+      setShowMitigationCostBreakdown(false);
+      setShowMitigationInvoice(false);
+      setShowMitigationPreview(false);
+    }
+    applyLeadFields(lead);
+    setIsEditingLead(true);
+    setActiveTab('leads');
+    loadEstimate(estimate, { leadId: lead.id });
+  };
+
+  /** Open lead profile on Estimates tab (from Estimates hub “Lead” control). */
+  const openLead = (leadId: number, leadOverride?: Lead, tab?: ProfileTab) => {
+    const lead = leadOverride ?? leads.find((l) => l.id === leadId);
+    if (!lead) {
+      showToast('Lead not found');
+      return;
+    }
+    setShowEstimatePicker(false);
+    setShowProfessionalEstimate(false);
+    setShowMeasureAddressModal(false);
+    setHubReport(null);
+    applyLeadFields(lead);
+    setProfileTab(tab ?? 'overview');
+    setIsEditingLead(true);
+    setActiveTab('leads');
+  };
+
   const loadEstimate = (estimate: Estimate, opts?: { leadId?: number }) => {
     skipUnsavedMarkRef.current = true;
     // Roof / product fields from the saved estimate
@@ -6202,6 +8283,8 @@ export default function SummitApp() {
     setEditingEstimateId(estimate.id);
     setHasUnsavedChanges(false);
     setShowEstimatePicker(false);
+    setShowProfessionalEstimate(false);
+    setHubReport(null);
     // Contact always from the live lead, never the estimate snapshot
     const linkId = opts?.leadId ?? currentLeadId;
     if (linkId != null) {
@@ -6220,9 +8303,11 @@ export default function SummitApp() {
       setClientEmail(estimate.clientEmail || '');
       setClientJobNumber(estimate.clientJobNumber || '');
       setIsEditingLead(true);
+      setActiveTab('leads');
       setEstimateFlow('estimate');
       setProfileTab('estimator');
       setEstimateWorkspace('estimate');
+      setEstimatorSourceLeadId(null);
     }
     showToast('Estimate loaded');
   };
@@ -6280,7 +8365,8 @@ export default function SummitApp() {
     systemDocWorkspace === 'pricing' ||
     systemDocWorkspace === 'mitigation' ||
     systemDocWorkspace === 'mitigation_personal' ||
-    systemDocWorkspace === 'mitigation_company';
+    systemDocWorkspace === 'mitigation_company' ||
+    systemDocWorkspace === 'emergency';
 
   // Document workspaces: collapse to icon rail for focus; restore on exit
   useEffect(() => {
@@ -6376,9 +8462,10 @@ export default function SummitApp() {
   };
 
   const persistLeads = (updated: Lead[]) => {
-    setLeads(updated);
+    const safe = sanitizeLeads(updated);
+    setLeads(safe);
     try {
-      localStorage.setItem('summitLeads', JSON.stringify(updated));
+      localStorage.setItem('summitLeads', JSON.stringify(safe));
     } catch {
       /* ignore quota */
     }
@@ -6386,7 +8473,7 @@ export default function SummitApp() {
     // Best-effort cloud write: leads (+ new estimates only)
     if (supabaseEnabled && supabase) {
       void (async () => {
-        for (const lead of updated) {
+        for (const lead of safe) {
           try {
             const payload = mapAppLeadToDb(lead);
             let cloudLeadId = lead.supabaseId?.trim() || '';
@@ -6427,20 +8514,50 @@ export default function SummitApp() {
 
             if (!cloudLeadId || !Array.isArray(lead.estimates)) continue;
 
-            // Only insert estimates that have not been synced yet
             for (const est of lead.estimates) {
-              if (est.supabaseId) continue;
+              const dirtyKey = `${lead.id}:${est.id}`;
+              const estPayload = {
+                lead_id: cloudLeadId,
+                type: 'roof',
+                material: est.selectedShingle || null,
+                rate: null as number | null,
+                labor: null as number | null,
+                status: 'saved',
+                data: est,
+                updated_at: new Date().toISOString(),
+              };
+
+              // Update existing cloud row when this estimate was explicitly dirtied
+              if (est.supabaseId) {
+                if (!dirtyEstimateKeysRef.current.has(dirtyKey)) continue;
+                const syncKey = `upd:${est.supabaseId}`;
+                if (estimateSyncInFlightRef.current.has(syncKey)) continue;
+                estimateSyncInFlightRef.current.add(syncKey);
+                dirtyEstimateKeysRef.current.delete(dirtyKey);
+                try {
+                  const { error: estErr } = await supabase
+                    .from('estimates')
+                    .update(estPayload)
+                    .eq('id', est.supabaseId);
+                  if (estErr) {
+                    console.error('Supabase estimate update error:', estErr);
+                    dirtyEstimateKeysRef.current.add(dirtyKey);
+                  }
+                } catch (e) {
+                  console.error('Estimate update sync error:', e);
+                  dirtyEstimateKeysRef.current.add(dirtyKey);
+                } finally {
+                  estimateSyncInFlightRef.current.delete(syncKey);
+                }
+                continue;
+              }
+
+              // Insert estimates that have not been synced yet
+              const syncKey = `ins:${cloudLeadId}:${est.id}`;
+              if (estimateSyncInFlightRef.current.has(syncKey)) continue;
+              estimateSyncInFlightRef.current.add(syncKey);
+              dirtyEstimateKeysRef.current.delete(dirtyKey);
               try {
-                const estPayload = {
-                  lead_id: cloudLeadId,
-                  type: 'roof',
-                  material: est.selectedShingle || null,
-                  rate: null as number | null,
-                  labor: null as number | null,
-                  status: 'saved',
-                  data: est,
-                  updated_at: new Date().toISOString(),
-                };
                 const { data: estRow, error: estErr } = await supabase
                   .from('estimates')
                   .insert(estPayload)
@@ -6448,6 +8565,7 @@ export default function SummitApp() {
                   .single();
                 if (estErr) {
                   console.error('Supabase estimate insert error:', estErr);
+                  dirtyEstimateKeysRef.current.add(dirtyKey);
                   continue;
                 }
                 if (estRow?.id) {
@@ -6455,14 +8573,18 @@ export default function SummitApp() {
                   setLeads((prev) => {
                     const next = prev.map((l) => {
                       if (l.id !== lead.id) return l;
+                      let patched = false;
                       return {
                         ...l,
                         supabaseId: l.supabaseId || cloudLeadId,
-                        estimates: (l.estimates || []).map((e) =>
-                          e.id === est.id && !e.supabaseId
-                            ? { ...e, supabaseId: estCloudId }
-                            : e
-                        ),
+                        // Patch exactly one local row (duplicate ids must not share one cloud id)
+                        estimates: (l.estimates || []).map((e) => {
+                          if (patched || e.supabaseId || e.id !== est.id) {
+                            return e;
+                          }
+                          patched = true;
+                          return { ...e, supabaseId: estCloudId };
+                        }),
                       };
                     });
                     try {
@@ -6475,6 +8597,9 @@ export default function SummitApp() {
                 }
               } catch (e) {
                 console.error('Estimate sync error:', e);
+                dirtyEstimateKeysRef.current.add(dirtyKey);
+              } finally {
+                estimateSyncInFlightRef.current.delete(syncKey);
               }
             }
           } catch (err) {
@@ -6492,6 +8617,7 @@ export default function SummitApp() {
         isBrowserGcalConfigured,
         readBrowserGcalSession,
         loadGoogleIdentityScript,
+        browserSessionHasTasksScope,
       } = await import('@/lib/gcal-browser');
       setGcalConfigured(isBrowserGcalConfigured());
       void loadGoogleIdentityScript().catch(() => undefined);
@@ -6500,6 +8626,7 @@ export default function SummitApp() {
         setGcalConnected(true);
         setGcalEmail(session.email ?? null);
         setGcalName(null);
+        setGtasksNeedsReconnect(!browserSessionHasTasksScope(session));
         return;
       }
     } catch {
@@ -6527,7 +8654,11 @@ export default function SummitApp() {
     }
   };
 
-  const loadGoogleEvents = async (opts?: { silent?: boolean }) => {
+  const loadGoogleEvents = async (opts?: {
+    silent?: boolean;
+    /** Inclusive month cursor — loads that month’s grid window */
+    cursor?: Date;
+  }) => {
     try {
       const { readBrowserGcalSession, listUpcomingGoogleEvents } = await import(
         '@/lib/gcal-browser'
@@ -6540,14 +8671,21 @@ export default function SummitApp() {
         return;
       }
       setGoogleEventsLoading(true);
+      const cursor = opts?.cursor || calendarCursor;
+      const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+      monthStart.setHours(0, 0, 0, 0);
+      const gridStart = startOfWeekSunday(monthStart);
+      const gridEnd = addDays(gridStart, 42);
       const items = await listUpcomingGoogleEvents(session.accessToken, {
-        maxResults: 25,
+        maxResults: 120,
+        timeMin: gridStart.toISOString(),
+        timeMax: gridEnd.toISOString(),
       });
       setGoogleCalendarEvents(items);
       if (!opts?.silent) {
         showToast(
           items.length === 0
-            ? 'No upcoming Google events'
+            ? 'No Google events this month'
             : `Loaded ${items.length} Google event${items.length === 1 ? '' : 's'}`
         );
       }
@@ -6569,17 +8707,26 @@ export default function SummitApp() {
     }
   };
 
-  const connectGoogleCalendar = async () => {
+  const connectGoogleCalendar = async (opts?: { forceConsent?: boolean }) => {
     setGcalBusy(true);
     try {
-      const { connectGoogleCalendarBrowser } = await import('@/lib/gcal-browser');
-      const session = await connectGoogleCalendarBrowser();
+      const { connectGoogleCalendarBrowser, browserSessionHasTasksScope } =
+        await import('@/lib/gcal-browser');
+      const session = await connectGoogleCalendarBrowser({
+        forceConsent: opts?.forceConsent,
+      });
       setGcalConfigured(true);
       setGcalConnected(true);
       setGcalEmail(session.email ?? null);
       setGcalName(null);
-      showToast('Google Calendar connected');
+      setGtasksNeedsReconnect(!browserSessionHasTasksScope(session));
+      showToast(
+        opts?.forceConsent
+          ? 'Google reconnected (Calendar + Tasks)'
+          : 'Google Calendar connected'
+      );
       void loadGoogleEvents({ silent: true });
+      void syncTasksWithGoogle({ silent: true, pullOnly: false });
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Connection failed';
       // Fall back to server OAuth redirect if browser GIS fails and secret is set
@@ -6619,6 +8766,7 @@ export default function SummitApp() {
       setGcalEmail(null);
       setGcalName(null);
       setGoogleCalendarEvents([]);
+      setGtasksNeedsReconnect(false);
       showToast('Google Calendar disconnected');
     } catch {
       showToast('Could not disconnect');
@@ -6627,10 +8775,403 @@ export default function SummitApp() {
     }
   };
 
+  const pushTaskToGoogle = async (
+    task: SummitTask,
+    listsOverride?: SummitTaskList[]
+  ): Promise<SummitTask> => {
+    const {
+      readBrowserGcalSession,
+      browserSessionHasTasksScope,
+    } = await import('@/lib/gcal-browser');
+    const {
+      createGoogleTask,
+      updateGoogleTask,
+    } = await import('@/lib/google-tasks');
+    const session = readBrowserGcalSession();
+    if (!session?.accessToken) return task;
+    if (!browserSessionHasTasksScope(session)) {
+      setGtasksNeedsReconnect(true);
+      return task;
+    }
+    const lists = listsOverride || taskLists;
+    const list =
+      lists.find((l) => l.id === task.listId) ||
+      lists.find((l) => l.id === activeTaskListId) ||
+      lists[0];
+    const googleListId = googleListIdFor(list);
+    if (!googleListId) {
+      // Local-only list — keep on device until list is linked
+      return task;
+    }
+    try {
+      if (task.googleTaskId) {
+        const gt = await updateGoogleTask(
+          session.accessToken,
+          task.googleTaskId,
+          task,
+          googleListId
+        );
+        setGtasksNeedsReconnect(false);
+        return {
+          ...task,
+          googleTaskId: gt.id,
+          updatedAt: gt.updated || task.updatedAt,
+        };
+      }
+      const gt = await createGoogleTask(
+        session.accessToken,
+        task,
+        googleListId
+      );
+      setGtasksNeedsReconnect(false);
+      return {
+        ...task,
+        googleTaskId: gt.id,
+        updatedAt: gt.updated || task.updatedAt,
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '';
+      if (/Tasks permission|reconnect/i.test(msg)) {
+        setGtasksNeedsReconnect(true);
+      }
+      throw e;
+    }
+  };
+
+  const syncTasksWithGoogle = async (opts?: {
+    silent?: boolean;
+    /** Only pull from Google (no create/update of Summit-only tasks). */
+    pullOnly?: boolean;
+  }) => {
+    if (!gcalConnected) {
+      if (!opts?.silent) showToast('Connect Google first');
+      return;
+    }
+    setTasksBusy(true);
+    try {
+      const {
+        readBrowserGcalSession,
+        browserSessionHasTasksScope,
+      } = await import('@/lib/gcal-browser');
+      const {
+        listGoogleTasks,
+        listGoogleTaskLists,
+        mergeGoogleTasksIntoLocal,
+        mergeGoogleListsIntoLocal,
+      } = await import('@/lib/google-tasks');
+      const session = readBrowserGcalSession();
+      if (!session?.accessToken) {
+        if (!opts?.silent) showToast('Connect Google first');
+        return;
+      }
+      if (!browserSessionHasTasksScope(session)) {
+        setGtasksNeedsReconnect(true);
+        if (!opts?.silent) {
+          showToast('Reconnect Google to enable Tasks sync');
+        }
+        return;
+      }
+
+      const remoteLists = await listGoogleTaskLists(session.accessToken);
+      setGtasksNeedsReconnect(false);
+      const listsMerged = mergeGoogleListsIntoLocal(taskLists, remoteLists);
+      let nextLists = listsMerged.lists;
+      persistTaskLists(nextLists);
+      if (!nextLists.some((l) => l.id === activeTaskListId)) {
+        persistActiveTaskListId(nextLists[0]?.id || DEFAULT_TASK_LIST_ID);
+      }
+
+      let nextTasks = tasks;
+      let imported = 0;
+      let updated = 0;
+      for (const list of nextLists) {
+        const gListId = googleListIdFor(list);
+        if (!gListId) continue;
+        try {
+          const remote = await listGoogleTasks(session.accessToken, {
+            showCompleted: true,
+            listId: gListId,
+          });
+          const merged = mergeGoogleTasksIntoLocal(
+            nextTasks,
+            remote,
+            list.id
+          );
+          nextTasks = merged.tasks;
+          imported += merged.imported;
+          updated += merged.updated;
+        } catch {
+          /* skip one list; continue others */
+        }
+      }
+
+      if (!opts?.pullOnly) {
+        const unsynced = nextTasks.filter((t) => !t.googleTaskId);
+        for (const t of unsynced) {
+          try {
+            const pushed = await pushTaskToGoogle(t, nextLists);
+            nextTasks = nextTasks.map((x) => (x.id === t.id ? pushed : x));
+          } catch {
+            /* keep local; toast below if needed */
+          }
+        }
+      }
+
+      persistTasks(nextTasks);
+      if (!opts?.silent) {
+        const parts = [
+          listsMerged.imported
+            ? `${listsMerged.imported} list${listsMerged.imported === 1 ? '' : 's'} imported`
+            : '',
+          imported ? `${imported} tasks imported` : '',
+          updated ? `${updated} updated` : '',
+          !opts?.pullOnly
+            ? `${nextTasks.filter((t) => t.googleTaskId).length} linked`
+            : '',
+        ].filter(Boolean);
+        showToast(
+          parts.length
+            ? `Tasks synced · ${parts.join(' · ')}`
+            : 'Tasks up to date'
+        );
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Tasks sync failed';
+      if (/Tasks permission|reconnect/i.test(msg)) {
+        setGtasksNeedsReconnect(true);
+      }
+      if (/expired|401/i.test(msg)) {
+        setGcalConnected(false);
+      }
+      if (!opts?.silent) showToast(msg);
+    } finally {
+      setTasksBusy(false);
+    }
+  };
+
+  const createTaskList = async () => {
+    const title = taskListDraftTitle.trim();
+    if (!title) {
+      showToast('Enter a list name');
+      return;
+    }
+    const now = new Date().toISOString();
+    let list: SummitTaskList = {
+      id: newSummitTaskListId(),
+      title,
+      createdAt: now,
+      updatedAt: now,
+    };
+    if (gcalConnected && !gtasksNeedsReconnect) {
+      try {
+        const { readBrowserGcalSession, browserSessionHasTasksScope } =
+          await import('@/lib/gcal-browser');
+        const { createGoogleTaskList } = await import('@/lib/google-tasks');
+        const session = readBrowserGcalSession();
+        if (session?.accessToken && browserSessionHasTasksScope(session)) {
+          const gl = await createGoogleTaskList(session.accessToken, title);
+          list = {
+            ...list,
+            googleListId: gl.id,
+            updatedAt: gl.updated || now,
+          };
+        }
+      } catch (e) {
+        showToast(
+          e instanceof Error
+            ? e.message
+            : 'List saved locally — Google sync failed'
+        );
+      }
+    }
+    persistTaskLists([...taskLists, list]);
+    persistActiveTaskListId(list.id);
+    setTaskListDraftTitle('');
+    showToast(
+      list.googleListId ? 'List created · synced' : 'List created'
+    );
+  };
+
+  const renameTaskList = async (listId: string, title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) {
+      showToast('Enter a list name');
+      return;
+    }
+    const target = taskLists.find((l) => l.id === listId);
+    if (!target) return;
+    let next: SummitTaskList = {
+      ...target,
+      title: trimmed,
+      updatedAt: new Date().toISOString(),
+    };
+    if (
+      target.googleListId &&
+      gcalConnected &&
+      !gtasksNeedsReconnect
+    ) {
+      try {
+        const { readBrowserGcalSession, browserSessionHasTasksScope } =
+          await import('@/lib/gcal-browser');
+        const { renameGoogleTaskList } = await import('@/lib/google-tasks');
+        const session = readBrowserGcalSession();
+        if (session?.accessToken && browserSessionHasTasksScope(session)) {
+          const gl = await renameGoogleTaskList(
+            session.accessToken,
+            target.googleListId,
+            trimmed
+          );
+          next = {
+            ...next,
+            title: (gl.title || trimmed).trim(),
+            updatedAt: gl.updated || next.updatedAt,
+          };
+        }
+      } catch (e) {
+        showToast(
+          e instanceof Error
+            ? e.message
+            : 'Renamed locally — Google sync failed'
+        );
+      }
+    }
+    persistTaskLists(taskLists.map((l) => (l.id === listId ? next : l)));
+    setRenamingTaskListId(null);
+    setRenameTaskListTitle('');
+    showToast('List renamed');
+  };
+
+  const addTask = async () => {
+    const title = newTaskTitle.trim();
+    if (!title) {
+      showToast('Enter a task title');
+      return;
+    }
+    const listId = activeTaskList?.id || DEFAULT_TASK_LIST_ID;
+    const now = new Date().toISOString();
+    const due =
+      newTaskDue && /^\d{4}-\d{2}-\d{2}$/.test(newTaskDue)
+        ? newTaskDue
+        : undefined;
+    let task: SummitTask = {
+      id: newSummitTaskId(),
+      title,
+      notes: newTaskNotes.trim() || undefined,
+      dueDate: due,
+      completed: false,
+      listId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    if (gcalConnected && !gtasksNeedsReconnect) {
+      try {
+        task = await pushTaskToGoogle(task);
+      } catch (e) {
+        showToast(
+          e instanceof Error
+            ? e.message
+            : 'Saved locally — Google sync failed'
+        );
+      }
+    }
+    persistTasks([task, ...tasks]);
+    setNewTaskTitle('');
+    setNewTaskDue('');
+    setNewTaskNotes('');
+    showToast(task.googleTaskId ? 'Task added · synced' : 'Task added');
+  };
+
+  const updateTaskLocal = async (
+    taskId: string,
+    patch: Partial<Pick<SummitTask, 'title' | 'notes' | 'dueDate' | 'completed'>>,
+    opts?: { syncGoogle?: boolean }
+  ) => {
+    const now = new Date().toISOString();
+    const syncGoogle = opts?.syncGoogle !== false;
+    let next = tasks.map((t) => {
+      if (t.id !== taskId) return t;
+      const completed =
+        patch.completed !== undefined ? patch.completed : t.completed;
+      return {
+        ...t,
+        ...patch,
+        completed,
+        completedAt: completed
+          ? t.completedAt || now
+          : undefined,
+        updatedAt: now,
+      };
+    });
+    const updated = next.find((t) => t.id === taskId);
+    if (
+      syncGoogle &&
+      updated &&
+      gcalConnected &&
+      !gtasksNeedsReconnect
+    ) {
+      try {
+        const pushed = await pushTaskToGoogle(updated);
+        next = next.map((t) => (t.id === taskId ? pushed : t));
+      } catch {
+        /* local save still applies */
+      }
+    }
+    persistTasks(next);
+  };
+
+  const flushTaskToGoogle = async (taskId: string) => {
+    if (!gcalConnected || gtasksNeedsReconnect) return;
+    let current: SummitTask | undefined;
+    try {
+      const raw = localStorage.getItem(SUMMIT_TASKS_KEY);
+      current = normalizeStoredTasks(raw ? JSON.parse(raw) : []).find(
+        (t) => t.id === taskId
+      );
+    } catch {
+      current = tasks.find((t) => t.id === taskId);
+    }
+    if (!current) return;
+    try {
+      const pushed = await pushTaskToGoogle(current);
+      const raw = localStorage.getItem(SUMMIT_TASKS_KEY);
+      const list = normalizeStoredTasks(raw ? JSON.parse(raw) : tasks);
+      persistTasks(list.map((t) => (t.id === taskId ? pushed : t)));
+    } catch {
+      /* local already saved */
+    }
+  };
+
+  const deleteTask = async (taskId: string) => {
+    const target = tasks.find((t) => t.id === taskId);
+    if (!target) return;
+    if (target.googleTaskId && gcalConnected && !gtasksNeedsReconnect) {
+      try {
+        const { readBrowserGcalSession } = await import('@/lib/gcal-browser');
+        const { deleteGoogleTask } = await import('@/lib/google-tasks');
+        const session = readBrowserGcalSession();
+        const list = taskLists.find((l) => l.id === target.listId);
+        const gListId = googleListIdFor(list);
+        if (session?.accessToken && gListId) {
+          await deleteGoogleTask(
+            session.accessToken,
+            target.googleTaskId,
+            gListId
+          );
+        }
+      } catch {
+        /* still remove locally */
+      }
+    }
+    persistTasks(tasks.filter((t) => t.id !== taskId));
+    showToast('Task deleted');
+  };
+
   /** Push open jobs/leads to the connected Google Calendar (all-day follow-ups). */
   const syncLeadsToGoogleCalendar = async (opts?: {
     leadIds?: number[];
     silent?: boolean;
+    /** Use when leads state may not have flushed yet (e.g. just scheduled). */
+    leadsOverride?: Lead[];
   }) => {
     if (!gcalConnected) {
       if (!opts?.silent) showToast('Connect Google Calendar in Settings first');
@@ -6638,9 +9179,10 @@ export default function SummitApp() {
     }
     setGcalBusy(true);
     try {
+      const base = opts?.leadsOverride || leads;
       const source = opts?.leadIds
-        ? leads.filter((l) => opts.leadIds!.includes(l.id))
-        : leads;
+        ? base.filter((l) => opts.leadIds!.includes(l.id))
+        : base;
       // Merge open profile form so follow-up date / contact edits sync immediately
       const payload = source.map((l) => {
         const live =
@@ -6762,6 +9304,8 @@ export default function SummitApp() {
             : `Synced ${n} job${n === 1 ? '' : 's'} to Google Calendar`
         );
       }
+      // Pull Google side so Summit calendar reflects any remote changes
+      void loadGoogleEvents({ silent: true });
     } catch (e) {
       if (!opts?.silent) {
         showToast(
@@ -7027,7 +9571,7 @@ export default function SummitApp() {
         ...item.lead,
         estimates: item.lead.estimates || [],
       };
-      const newLeads = [...leads, restored];
+      const newLeads = sanitizeLeads([...leads, restored]);
       persistTrash(newTrash);
       setLeads(newLeads);
       try {
@@ -7107,10 +9651,16 @@ export default function SummitApp() {
         measurements: [...(lead.measurements || []), item.measurement],
       };
     } else if (item.kind === 'estimate') {
+      // Cloud row was removed on trash — clear supabaseId so persist re-inserts once
+      const restoredEst: Estimate = {
+        ...item.estimate,
+        supabaseId: undefined,
+      };
       nextLead = {
         ...lead,
-        estimates: [...(lead.estimates || []), item.estimate],
+        estimates: [...(lead.estimates || []), restoredEst],
       };
+      dirtyEstimateKeysRef.current.add(`${leadId}:${restoredEst.id}`);
     } else if (item.kind === 'note') {
       nextLead = {
         ...lead,
@@ -7132,12 +9682,17 @@ export default function SummitApp() {
       }
     }
     const newLeads = leads.map((l) => (l.id === leadId ? nextLead : l));
-    setLeads(newLeads);
     persistTrash(newTrash);
-    try {
-      localStorage.setItem('summitLeads', JSON.stringify(newLeads));
-    } catch {
-      /* ignore */
+    // Estimates (and other lead fields) need persistLeads so cloud sync runs
+    if (item.kind === 'estimate') {
+      persistLeads(newLeads);
+    } else {
+      setLeads(newLeads);
+      try {
+        localStorage.setItem('summitLeads', JSON.stringify(newLeads));
+      } catch {
+        /* ignore */
+      }
     }
     showToast('Restored');
   };
@@ -7211,6 +9766,19 @@ export default function SummitApp() {
             );
             void supabase.storage.from('lead-docs').remove([objectPath]);
           }
+        } else if (doomed.kind === 'estimate' && doomed.estimate) {
+          if (doomed.estimate.supabaseId) {
+            void supabase
+              .from('estimates')
+              .delete()
+              .eq('id', doomed.estimate.supabaseId);
+          }
+          const path = doomed.estimate.pdfUrl
+            ? storagePathFromLeadDocUrl(doomed.estimate.pdfUrl)
+            : null;
+          if (path) {
+            void supabase.storage.from('lead-docs').remove([path]);
+          }
         }
       } catch {
         /* ignore */
@@ -7270,6 +9838,19 @@ export default function SummitApp() {
                 );
                 await supabase.storage.from('lead-docs').remove([objectPath]);
               }
+            } else if (item.kind === 'estimate' && item.estimate) {
+              if (item.estimate.supabaseId) {
+                await supabase
+                  .from('estimates')
+                  .delete()
+                  .eq('id', item.estimate.supabaseId);
+              }
+              const path = item.estimate.pdfUrl
+                ? storagePathFromLeadDocUrl(item.estimate.pdfUrl)
+                : null;
+              if (path) {
+                await supabase.storage.from('lead-docs').remove([path]);
+              }
             }
           } catch (err) {
             console.error('Empty trash purge error:', err);
@@ -7298,13 +9879,20 @@ export default function SummitApp() {
   const addLeadNote = () => {
     if (!leadNoteDraft.trim() || !currentLeadId) return;
     const newNote: LeadNote = {
-      id: String(Date.now()),
-        createdAt: new Date().toISOString(),
-        text: leadNoteDraft.trim(),
+      id: newClientId('note'),
+      createdAt: new Date().toISOString(),
+      text: leadNoteDraft.trim(),
       date:
-        new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
+        new Date().toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        }) +
         ' ' +
-        new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        new Date().toLocaleTimeString([], {
+          hour: 'numeric',
+          minute: '2-digit',
+        }),
     };
     const updatedLeads = leads.map((lead) =>
       lead.id === currentLeadId
@@ -7535,6 +10123,8 @@ export default function SummitApp() {
     setPhotoReportTitle('Photo Report');
     setPhotoReportSelected(photos.map((p) => p.id));
     setPhotoReportCaptions({});
+    // Default on when company branding exists; still toggleable per report
+    setPhotoReportIncludeBranding(companySettingsConfigured());
     setPhotoReportOpen(true);
   };
 
@@ -7568,13 +10158,26 @@ export default function SummitApp() {
       const addr = [lead.clientAddress, lead.clientCity, lead.clientState, lead.clientZip]
         .filter(Boolean)
         .join(', ');
-      const brand =
-        (typeof userCompany === 'string' && userCompany.trim()) ||
-        'Roslie Consulting Firm LLC';
-      const brandSub = `${userName.trim() || 'Joe Roslie'} · ${
-        userTitle.trim() || 'Project Manager'
-      }`;
-      const brandPhone = displayPhoneUS(userPhone) || userPhone || '';
+      const showBrand = photoReportIncludeBranding;
+      const brand = showBrand
+        ? companyBrandName() ||
+          (typeof userCompany === 'string' && userCompany.trim()) ||
+          'Summit'
+        : '';
+      const brandSub = showBrand
+        ? companySettingsConfigured()
+          ? (companySettings.license || '').trim()
+            ? `ROC# ${(companySettings.license || '').trim()}`
+            : (companySettings.address || '').trim()
+          : ''
+        : '';
+      const brandPhone = showBrand
+        ? companySettingsConfigured()
+          ? displayPhoneUS(companySettings.phone) ||
+            (companySettings.phone || '').trim() ||
+            ''
+          : displayPhoneUS(userPhone) || userPhone || ''
+        : '';
       const title = (photoReportTitle || 'Photo Report').trim();
       const dateStr = new Date().toLocaleDateString('en-US', {
         month: 'short',
@@ -7617,26 +10220,37 @@ export default function SummitApp() {
           img.src = src;
         });
 
-      // Cover page — print-friendly twin of estimate / mitigation
+      // Cover page — branding optional (bland when toggle off)
       const left = 18;
       const right = pageW - 18;
       let hy = 16;
-      doc.setDrawColor(rule.r, rule.g, rule.b);
-      doc.setLineWidth(0.3);
-      doc.roundedRect(left, hy, 22, 14, 1, 1, 'S');
-      doc.setTextColor(muted.r, muted.g, muted.b);
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7);
-      doc.text('LOGO', left + 11, hy + 8.2, { align: 'center' });
-      doc.setTextColor(ink.r, ink.g, ink.b);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(14);
-      doc.text(brand, left + 26, hy + 5.5);
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9);
-      doc.setTextColor(muted.r, muted.g, muted.b);
-      doc.text(brandSub, left + 26, hy + 10.5);
-      if (brandPhone) doc.text(brandPhone, left + 26, hy + 14.5);
+      if (showBrand) {
+        const logoW = drawDocLogo(doc, left, hy);
+        const textX = left + logoW + 4;
+        doc.setTextColor(ink.r, ink.g, ink.b);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(14);
+        doc.text(brand, textX, hy + 5.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        doc.setTextColor(muted.r, muted.g, muted.b);
+        if (brandSub) doc.text(brandSub, textX, hy + 10.5);
+        if (brandPhone) {
+          doc.text(brandPhone, textX, brandSub ? hy + 14.5 : hy + 10.5);
+        }
+        if (showCompanyPmOnDoc('prowest') && companyBrandName()) {
+          const pmName = estimatePmName();
+          const pmPhone = estimatePmPhone();
+          const pmY = brandSub && brandPhone ? hy + 18.5 : brandPhone || brandSub ? hy + 14.5 : hy + 10.5;
+          const pmBits = [
+            pmName ? `PM ${pmName}` : '',
+            pmPhone || '',
+          ].filter(Boolean);
+          if (pmBits.length) {
+            doc.text(pmBits.join(' · '), textX, pmY);
+          }
+        }
+      }
 
       doc.setTextColor(ink.r, ink.g, ink.b);
       doc.setFont('helvetica', 'bold');
@@ -7653,7 +10267,7 @@ export default function SummitApp() {
         { align: 'right' }
       );
 
-      hy = 36;
+      hy = 38;
       doc.setDrawColor(rule.r, rule.g, rule.b);
       doc.setLineWidth(0.4);
       doc.line(left, hy, right, hy);
@@ -7682,7 +10296,9 @@ export default function SummitApp() {
       }
       doc.setFontSize(8);
       doc.setTextColor(160, 160, 165);
-      doc.text(brand, pageW / 2, pageH - 14, { align: 'center' });
+      if (showBrand && brand) {
+        doc.text(brand, pageW / 2, pageH - 14, { align: 'center' });
+      }
       doc.text('Photo documentation · for customer / carrier review', pageW / 2, pageH - 9, {
         align: 'center',
       });
@@ -7727,7 +10343,7 @@ export default function SummitApp() {
         // footer
         doc.setFontSize(8);
         doc.setTextColor(160, 160, 165);
-        doc.text(brand, left, pageH - 8);
+        if (showBrand && brand) doc.text(brand, left, pageH - 8);
         doc.text(
           `${Math.floor(i / 2) + 2} / ${Math.ceil(chosen.length / 2) + 1}`,
           pageW / 2,
@@ -7903,6 +10519,7 @@ export default function SummitApp() {
     setDocsUploading(true);
     try {
       const newDocs: LeadDocument[] = [];
+      const importedMeasurements: RoofMeasurement[] = [];
       const stamp =
         new Date().toLocaleDateString('en-US', {
           month: 'short',
@@ -7942,6 +10559,137 @@ export default function SummitApp() {
           mimeType: file.type || 'application/pdf',
           createdAt: stamp,
         });
+
+        // Parse EagleView / Roofr PDF → structured measurement
+        const isPdf =
+          file.type === 'application/pdf' ||
+          /\.pdf$/i.test(file.name);
+        if (isPdf) {
+          try {
+            const form = new FormData();
+            form.append('file', file, file.name);
+            const parseRes = await fetch('/api/measurements/parse', {
+              method: 'POST',
+              body: form,
+            });
+            const parsed = (await parseRes.json()) as {
+              ok?: boolean;
+              provider?: string;
+              message?: string;
+              note?: string;
+              measurements?: {
+                footprintSqFt?: number | null;
+                surfaceSqFt?: number | null;
+                squares?: number | null;
+                measuredSquares?: number | null;
+                pitch?: string;
+                secondaryPitch?: string | null;
+                secondaryFraction?: number | null;
+                areasPerPitch?: {
+                  pitch: string;
+                  areaSqFt: number;
+                  pctOfRoof: number;
+                }[];
+                hasLowSlope?: boolean;
+                lowSlopeFraction?: number | null;
+                ridgeLF?: number;
+                hipLF?: number;
+                valleyLF?: number;
+                rakeLF?: number;
+                eaveLF?: number;
+                dripEdgeLF?: number;
+                perimeterLF?: number;
+                waste?: number;
+                edgesVerified?: boolean;
+                measureSource?: RoofMeasurement['measureSource'];
+              };
+            };
+            if (parseRes.ok && parsed.ok && parsed.measurements) {
+              const pm = parsed.measurements;
+              const squares = Number(pm.squares) || 0;
+              const pitch = pm.pitch || '6/12';
+              const isFlat = pitch === 'Flat';
+              const wasteFrac =
+                pm.waste != null && Number.isFinite(Number(pm.waste))
+                  ? Number(pm.waste)
+                  : 0.15;
+              const measuredArea =
+                Number(pm.footprintSqFt) ||
+                (pm.measuredSquares != null
+                  ? Number(pm.measuredSquares) * 100
+                  : Math.round(
+                      (squares * 100) / (1 + wasteFrac)
+                    ));
+              // Prefer area-rank secondary; if low-slope exists on another
+              // pitch, surface it so apply can hint underlayment.
+              let secondaryPitch = pm.secondaryPitch || undefined;
+              let secondaryFraction =
+                pm.secondaryFraction != null
+                  ? Number(pm.secondaryFraction)
+                  : undefined;
+              if (pm.hasLowSlope && Array.isArray(pm.areasPerPitch)) {
+                const lowRows = pm.areasPerPitch
+                  .filter((r) => {
+                    const rise = Number(String(r.pitch).split('/')[0]);
+                    return Number.isFinite(rise) && rise > 0 && rise <= 3;
+                  })
+                  .sort((a, b) => b.pctOfRoof - a.pctOfRoof);
+                const topLow = lowRows[0];
+                const secRise = secondaryPitch
+                  ? Number(String(secondaryPitch).split('/')[0])
+                  : NaN;
+                if (
+                  topLow &&
+                  !(Number.isFinite(secRise) && secRise > 0 && secRise <= 3)
+                ) {
+                  secondaryPitch = topLow.pitch;
+                  secondaryFraction =
+                    pm.lowSlopeFraction != null
+                      ? Number(pm.lowSlopeFraction)
+                      : topLow.pctOfRoof;
+                }
+              }
+              const measurement = normalizeMeasurement({
+                id: `ev-${id}`,
+                createdAt: stamp,
+                label: `${
+                  parsed.provider === 'roofr' ? 'Roofr' : 'EagleView'
+                } · ${file.name.replace(/\.pdf$/i, '')}`,
+                points: [],
+                roofType: isFlat
+                  ? 'flat-modified-bitumen'
+                  : 'pitched-shingles',
+                pitch,
+                pitchAuto: false,
+                secondaryPitch,
+                secondaryFraction,
+                waste: wasteFrac,
+                wasteAuto: false,
+                footprintSqFt: measuredArea,
+                surfaceSqFt: measuredArea,
+                squares: isFlat ? 0 : squares,
+                flatSquares: isFlat ? squares : 0,
+                perimeterLF: Number(pm.perimeterLF) || 0,
+                edgeLengthsLF: [],
+                ridgeLF: Number(pm.ridgeLF) || 0,
+                hipLF: Number(pm.hipLF) || 0,
+                eaveLF: Number(pm.eaveLF) || 0,
+                rakeLF: Number(pm.rakeLF) || 0,
+                valleyLF: Number(pm.valleyLF) || 0,
+                dripEdgeLF: Number(pm.dripEdgeLF) || 0,
+                measureSource: pm.measureSource || 'eagleview',
+                edgesVerified: true,
+              });
+              if (measurement) {
+                importedMeasurements.push(measurement);
+              }
+            } else if (parseRes.status === 422) {
+              console.warn('measurement parse incomplete', parsed.message);
+            }
+          } catch (parseErr) {
+            console.error('parse upload', parseErr);
+          }
+        }
       }
       if (newDocs.length === 0) {
         showToast('No files uploaded');
@@ -7951,20 +10699,39 @@ export default function SummitApp() {
         lead.id === currentLeadId
           ? {
               ...lead,
-              documents: [...(lead.documents || []), ...newDocs],
+              // Measurement reports live under Measurements — not Documents
               measurementReports: [
                 ...(lead.measurementReports || []),
                 ...newDocs,
+              ],
+              measurements: [
+                ...(lead.measurements || []),
+                ...importedMeasurements,
               ],
             }
           : lead
       );
       persistLeads(updated);
-showToast(
-        newDocs.length === 1
-          ? 'Measurement saved'
-          : `${newDocs.length} measurements saved`
-      );
+
+      const last = importedMeasurements[importedMeasurements.length - 1];
+      if (last) {
+        setSelectedMeasurementId(last.id);
+        applyMeasurementToEstimator(last, currentLead || undefined);
+        const pitchNote = last.secondaryPitch
+          ? `${last.pitch}+${last.secondaryPitch}`
+          : last.pitch;
+        showToast(
+          `EagleView · ${last.squares} sq (incl. ${Math.round(
+            (Number(last.waste) || 0.15) * 100
+          )}% waste) · ${pitchNote} — applied (ridge/fascia not auto-filled)`
+        );
+      } else {
+        showToast(
+          newDocs.length === 1
+            ? 'Measurement PDF saved (could not auto-read numbers — enter manually)'
+            : `${newDocs.length} files saved`
+        );
+      }
     } catch (e) {
       console.error(e);
       showToast('Upload failed');
@@ -8802,13 +11569,17 @@ showToast(
     return items;
   };
 
+  /** Estimates use company settings when configured; else personal profile company. */
   const brandCompany =
-    userCompany.trim() || DEFAULT_USER_PROFILE.company;
+    companyBrandName() ||
+    userCompany.trim() ||
+    DEFAULT_USER_PROFILE.company;
 
   const generatePDF = async (opts?: {
     download?: boolean;
     save?: boolean;
     leadId?: number;
+    estimateId?: number;
     /** Fresh leads array when called right after persist (avoids stale overwrite) */
     leadsSnapshot?: Lead[];
   }) => {
@@ -8829,33 +11600,54 @@ showToast(
     const ink = { r: 28, g: 28, b: 30 };
     const muted = { r: 100, g: 100, b: 105 };
     const rule = { r: 190, g: 190, b: 195 };
-    const pmPhone = displayPhoneUS(userPhone) || userPhone;
+    const pmName = estimatePmName();
+    const pmPhone = estimatePmPhone();
     const money = (n: number) =>
       `$${Math.round(n).toLocaleString()}`;
+    const useCompanyHeader = Boolean(companyBrandName());
+    const estimateBrand = useCompanyHeader
+      ? companyBrandName() || brandCompany
+      : brandCompany;
+    const estimateContact = useCompanyHeader
+      ? companyContactLine()
+      : [pmPhone, userEmail].filter(Boolean).join(' · ');
 
-    // --- Header: logo placeholder + brand ---
+    // --- Header: logo (upload or Summit) + Contractor (company) ---
     let y = 16;
-    doc.setDrawColor(rule.r, rule.g, rule.b);
-    doc.setLineWidth(0.3);
-    doc.roundedRect(left, y, 22, 14, 1, 1, 'S');
-    doc.setTextColor(muted.r, muted.g, muted.b);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7);
-    doc.text('LOGO', left + 11, y + 8.2, { align: 'center' });
+    const logoW = drawDocLogo(doc, left, y);
+    const textX = left + logoW + 4;
 
+    // Estimates always label the company as Contractor (never Service provider)
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.text('CONTRACTOR', textX, y + 3);
     doc.setTextColor(ink.r, ink.g, ink.b);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(14);
-    doc.text(brandCompany, left + 26, y + 5.5);
+    doc.text(estimateBrand, textX, y + 8.5);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
     doc.setTextColor(muted.r, muted.g, muted.b);
-    doc.text(
-      `${userName || 'Rep'} · ${userTitle || 'Project Manager'}`,
-      left + 26,
-      y + 10.5
-    );
-    if (pmPhone) doc.text(pmPhone, left + 26, y + 14.5);
+    if (useCompanyHeader) {
+      const bizAddr = (companySettings.address || '').trim();
+      if (bizAddr) {
+        doc.text(bizAddr, textX, y + 13);
+      }
+      if (estimateContact) {
+        doc.text(
+          estimateContact,
+          textX,
+          bizAddr ? y + 17 : y + 13
+        );
+      }
+    } else {
+      const pmLine = [pmName, userTitle.trim() || 'Project Manager']
+        .filter(Boolean)
+        .join(' · ');
+      if (pmLine) doc.text(pmLine, textX, y + 13);
+      if (pmPhone) doc.text(pmPhone, textX, y + 17);
+    }
 
     doc.setTextColor(ink.r, ink.g, ink.b);
     doc.setFont('helvetica', 'bold');
@@ -8867,40 +11659,40 @@ showToast(
     doc.text('Roofing proposal', right, y + 11.5, { align: 'right' });
     doc.text(`Prepared ${estimateDate}`, right, y + 16, { align: 'right' });
 
-    y = 36;
+    y = 38;
     doc.setDrawColor(rule.r, rule.g, rule.b);
     doc.setLineWidth(0.4);
     doc.line(left, y, right, y);
     y += 8;
 
-    // --- Client / job meta ---
+    // --- Client / Contractor / PM meta ---
     const metaLeft = left;
     const metaRight = pageW / 2 + 4;
     doc.setTextColor(muted.r, muted.g, muted.b);
     doc.setFontSize(8);
     doc.setFont('helvetica', 'bold');
     doc.text('PREPARED FOR', metaLeft, y);
-    doc.text('PROJECT MANAGER', metaRight, y);
+    doc.text('CONTRACTOR', metaRight, y);
     y += 5;
     doc.setTextColor(ink.r, ink.g, ink.b);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
     doc.text(client.fullName, metaLeft, y);
-    doc.text(`${userName || 'Rep'} · ${userTitle || 'Project Manager'}`, metaRight, y);
+    doc.text(estimateBrand || '—', metaRight, y);
     y += 5;
     doc.setTextColor(muted.r, muted.g, muted.b);
     doc.setFontSize(9);
     doc.text(client.phone || '—', metaLeft, y);
-    doc.text(pmPhone || '—', metaRight, y);
+    if (estimateContact) doc.text(estimateContact, metaRight, y);
     y += 5;
     doc.text(client.email || '—', metaLeft, y);
-    doc.text(userEmail || '—', metaRight, y);
     y += 8;
     doc.setFontSize(8);
     doc.setFont('helvetica', 'bold');
     doc.text('LOCATION', metaLeft, y);
-    doc.text('JOB', metaRight, y);
+    doc.text('PROJECT MANAGER', metaRight, y);
     y += 5;
+    const locY = y;
     doc.setTextColor(ink.r, ink.g, ink.b);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
@@ -8908,9 +11700,26 @@ showToast(
       client.fullAddress || '—',
       pageW / 2 - 28
     );
-    doc.text(addressLines, metaLeft, y);
-    doc.text(client.jobNumber || '—', metaRight, y);
-    y += Math.max(12, addressLines.length * 5 + 6);
+    doc.text(addressLines, metaLeft, locY);
+    doc.text(
+      [pmName || '—', userTitle.trim() || 'Project Manager']
+        .filter(Boolean)
+        .join(' · '),
+      metaRight,
+      locY
+    );
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.setFontSize(9);
+    doc.text(pmPhone || '—', metaRight, locY + 5);
+    doc.text(userEmail || '—', metaRight, locY + 10);
+    const afterAddrY = locY + Math.max(12, addressLines.length * 5);
+    doc.setFontSize(9);
+    doc.text(
+      client.jobNumber ? `Job # ${client.jobNumber}` : '—',
+      metaLeft,
+      afterAddrY
+    );
+    y = Math.max(afterAddrY + 6, locY + 16);
 
     // --- Scope table ---
     doc.setFillColor(245, 245, 246);
@@ -9012,12 +11821,12 @@ showToast(
     y += disclaimer.length * 4 + 6;
     doc.setFontSize(9);
     doc.setTextColor(ink.r, ink.g, ink.b);
-    doc.text(`Thank you for choosing ${brandCompany}.`, left, y);
+    doc.text(`Thank you for choosing ${estimateBrand}.`, left, y);
     y += 5;
     doc.setFontSize(8);
     doc.setTextColor(muted.r, muted.g, muted.b);
     doc.text(
-      `Questions? ${userName || 'Rep'} · ${pmPhone || ''} · ${userEmail || ''}`,
+      `Questions? ${pmName || '—'} · ${pmPhone || ''} · ${userEmail || ''}`,
       left,
       y
     );
@@ -9031,7 +11840,7 @@ showToast(
     const safeName =
       [client.firstName, client.lastName].filter(Boolean).join('_') || 'Estimate';
     const safeBrand =
-      brandCompany.replace(/[^\w]+/g, '_').replace(/^_|_$/g, '') || 'Estimate';
+      estimateBrand.replace(/[^\w]+/g, '_').replace(/^_|_$/g, '') || 'Estimate';
     const fileName = `${safeBrand}_Estimate_${safeName}.pdf`;
     const blob = doc.output('blob');
 
@@ -9085,27 +11894,69 @@ showToast(
         .from('lead-docs')
         .getPublicUrl(storagePath);
       const durableUrl = pub.publicUrl;
-      const stamp = new Date().toISOString();
-      const docEntry: LeadDocument = {
-        id,
-        name: fileName,
-        url: durableUrl,
-        size: blob.size,
-        mimeType: 'application/pdf',
-        createdAt: stamp,
+      const targetEstimateId =
+        opts?.estimateId ?? editingEstimateId ?? null;
+
+      // Replace previous PDF for this estimate (avoid orphans in storage)
+      const prevEst =
+        targetEstimateId != null
+          ? (lead.estimates || []).find((e) => e.id === targetEstimateId)
+          : undefined;
+      if (prevEst?.pdfUrl && prevEst.pdfUrl !== durableUrl) {
+        const oldPath = storagePathFromLeadDocUrl(prevEst.pdfUrl);
+        if (oldPath) {
+          void supabase.storage.from('lead-docs').remove([oldPath]);
+        }
+      }
+
+      const pdfPatch = {
+        pdfDocumentId: id,
+        pdfUrl: durableUrl,
+        pdfName: fileName,
       };
-      const updated = sourceLeads.map((l) =>
-        l.id === leadIdAtSave
-          ? { ...l, documents: [...(l.documents || []), docEntry] }
-          : l
-      );
+      const updated = sourceLeads.map((l) => {
+        if (l.id !== leadIdAtSave) return l;
+        let estimates = l.estimates || [];
+        if (targetEstimateId != null) {
+          let patched = false;
+          estimates = estimates.map((e) => {
+            if (patched) return e;
+            if (
+              prevEst?.supabaseId &&
+              e.supabaseId === prevEst.supabaseId
+            ) {
+              patched = true;
+              return { ...e, ...pdfPatch };
+            }
+            if (e.id === targetEstimateId) {
+              patched = true;
+              return { ...e, ...pdfPatch };
+            }
+            return e;
+          });
+        }
+        // Never dual-write estimate PDFs into Documents
+        const documents = (l.documents || []).filter(
+          (d) => !isEstimatePdfDocument(d) && d.id !== id && d.url !== durableUrl
+        );
+        return { ...l, estimates, documents };
+      });
+      if (targetEstimateId != null) {
+        dirtyEstimateKeysRef.current.add(
+          `${leadIdAtSave}:${targetEstimateId}`
+        );
+      }
       persistLeads(updated);
-      showToast('Estimate + PDF saved to lead Documents');
+      showToast(
+        prevEst || editingEstimateId != null
+          ? 'Estimate updated'
+          : 'Estimate saved'
+      );
       setShowProfessionalEstimate(false);
       setHasUnsavedChanges(false);
       setIsEditingLead(true);
       setActiveTab('leads');
-      setProfileTab('documents');
+      setProfileTab('estimates');
       setCurrentLeadId(leadIdAtSave);
     } catch (err) {
       console.error('Estimate save PDF error', err);
@@ -9137,8 +11988,43 @@ showToast(
           </div>
 
           <div className="text-center mb-10">
-            <div className="font-bold text-4xl tracking-tight">{brandCompany}</div>
-            <div className="text-sm text-zinc-400 mt-1">Prepared {estimateDate}</div>
+            {appLogoDataUrl() ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={appLogoDataUrl()}
+                alt=""
+                className="mx-auto mb-3 h-14 w-auto max-w-[10rem] object-contain"
+              />
+            ) : (
+              <div className="mx-auto mb-3 w-12 h-12 rounded-xl bg-zinc-900 flex items-center justify-center">
+                <span className="text-white text-xl font-bold tracking-tight">
+                  S
+                </span>
+              </div>
+            )}
+            <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1.5">
+              Contractor
+            </div>
+            <div className="font-bold text-4xl tracking-tight">
+              {companyBrandName() || brandCompany}
+            </div>
+            {companyBrandName() ||
+            (companySettings.address || '').trim() ||
+            companyContactLine() ? (
+              <div className="text-sm text-zinc-500 mt-2 space-y-0.5">
+                {(companySettings.address || '').trim() ? (
+                  <div className="text-zinc-400">
+                    {companySettings.address}
+                  </div>
+                ) : null}
+                {companyContactLine() ? (
+                  <div className="text-zinc-400">{companyContactLine()}</div>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="text-sm text-zinc-400 mt-2">
+              Prepared {estimateDate}
+            </div>
           </div>
 
           <div className="border border-zinc-200 rounded-3xl p-10">
@@ -9155,26 +12041,54 @@ showToast(
 
             <div className="mb-8 rounded-2xl border border-zinc-200 bg-zinc-50/80 px-5 py-4">
               <div className="font-semibold text-sm text-zinc-900 mb-2">
+                Contractor
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-1.5 text-sm">
+                <div className="font-medium text-zinc-900">
+                  {companyBrandName() || brandCompany}
+                </div>
+                {companyContactLine() ? (
+                  <div>
+                    <span className="text-zinc-500">Contact:</span>{' '}
+                    {companyContactLine()}
+                  </div>
+                ) : null}
+                {(companySettings.address || '').trim() ? (
+                  <div className="sm:col-span-2 text-zinc-600">
+                    {companySettings.address}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="mb-8 rounded-2xl border border-zinc-200 bg-zinc-50/80 px-5 py-4">
+              <div className="font-semibold text-sm text-zinc-900 mb-2">
                 Your Project Manager
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-1.5 text-sm">
                 <div>
-                  <span className="font-medium text-zinc-900">{userName || 'Rep'}</span>
-                  <span className="text-zinc-500"> · {userTitle || 'Project Manager'}</span>
+                  <span className="font-medium text-zinc-900">
+                    {estimatePmName() || '—'}
+                  </span>
+                  {userTitle.trim() ? (
+                    <span className="text-zinc-500"> · {userTitle}</span>
+                  ) : null}
                 </div>
                 <div>
                   <span className="text-zinc-500">Phone:</span>{' '}
-                  {displayPhoneUS(userPhone) || userPhone}
+                  {estimatePmPhone() || '—'}
                 </div>
-                <div className="sm:col-span-2">
-                  <span className="text-zinc-500">Email:</span>{' '}
-                  <a
-                    href={`mailto:${userEmail}`}
-                    className="text-sky-800 hover:underline"
-                  >
-                    {userEmail}
-                  </a>
-                </div>
+                {userEmail.trim() ? (
+                  <div className="sm:col-span-2">
+                    <span className="text-zinc-500">Email:</span>{' '}
+                    <a
+                      href={`mailto:${userEmail}`}
+                      className="text-sky-800 hover:underline"
+                    >
+                      {userEmail}
+                    </a>
+                  </div>
+                ) : null}
               </div>
             </div>
 
@@ -9221,15 +12135,17 @@ showToast(
               (decking, fascia, structure, etc.). This estimate is valid for 30 days.
             </div>
             <div className="mt-3 text-xs text-zinc-500">
-              Questions? Contact {userName || 'Rep'} ({userTitle || 'Project Manager'}) ·{' '}
-              {displayPhoneUS(userPhone) || userPhone} · {userEmail}
+              Questions? Contact {estimatePmName() || '—'}
+              {userTitle.trim() ? ` (${userTitle})` : ''} ·{' '}
+              {estimatePmPhone() || '—'}
+              {userEmail.trim() ? ` · ${userEmail}` : ''}
             </div>
 
             <button
               onClick={() => void saveCurrentEstimate({ savePdf: true })}
               className="btn-primary mt-10 w-full py-4 rounded-3xl font-semibold text-lg"
             >
-              Save This Estimate to Lead
+              Save estimate
             </button>
           </div>
         </div>
@@ -9265,6 +12181,8 @@ showToast(
     if (systemDocWorkspace) {
       setSystemDocWorkspace(null);
       setTakeoffAssignOpen(false);
+      setEmergencyDraft(null);
+      setEmergencyPreview(false);
       if (
         systemDocWorkspace === 'mitigation' ||
         systemDocWorkspace === 'mitigation_personal' ||
@@ -9295,6 +12213,7 @@ showToast(
       | 'estimates'
       | 'invoices'
       | 'calendar'
+      | 'tasks'
       | 'performance'
       | 'tools'
       | 'documents'
@@ -9307,6 +12226,7 @@ showToast(
     { tab: 'estimates', label: 'Estimates', icon: 'estimates' },
     { tab: 'invoices', label: 'Invoices', icon: 'invoices' },
     { tab: 'calendar', label: 'Calendar', icon: 'calendar' },
+    { tab: 'tasks', label: 'Tasks', icon: 'tasks' },
     { tab: 'performance', label: 'Performance', icon: 'performance' },
     { tab: 'tools', label: 'Tools', icon: 'tools' },
     { tab: 'documents', label: 'Documents', icon: 'documents' },
@@ -9368,6 +12288,13 @@ showToast(
           <svg {...common}>
             <rect x="3" y="5" width="18" height="16" rx="2" />
             <path d="M3 10h18M8 3v4M16 3v4" />
+          </svg>
+        );
+      case 'tasks':
+        return (
+          <svg {...common}>
+            <path d="M9 11l2.5 2.5L16 9" />
+            <rect x="3" y="4" width="18" height="16" rx="2" />
           </svg>
         );
       case 'performance':
@@ -9569,20 +12496,23 @@ showToast(
             <button
               type="button"
               onClick={toggleSidebarCollapsed}
-              className="w-9 h-9 rounded-xl bg-zinc-900 ring-1 ring-zinc-700/40 flex items-center justify-center hover:bg-zinc-800 transition-colors"
+              className="w-9 h-9 rounded-xl flex items-center justify-center hover:opacity-90 transition-opacity overflow-hidden"
               title="Expand sidebar"
               aria-label="Expand sidebar"
             >
-              <span className="text-white text-lg font-bold tracking-tight">S</span>
+              {renderAppMark({
+                size: 'md',
+                className: 'w-9 h-9',
+                imgClassName:
+                  'w-9 h-9 rounded-xl object-contain border border-zinc-200 bg-white',
+              })}
             </button>
           ) : (
             <>
-              <div className="w-8 h-8 rounded-xl bg-zinc-900 ring-1 ring-zinc-700/40 flex items-center justify-center shrink-0">
-                <span className="text-white text-lg font-bold tracking-tight">S</span>
-              </div>
+              {renderAppMark({ size: 'md' })}
               <div className="min-w-0 flex-1">
                 <div className="font-semibold text-[15px] tracking-tight text-zinc-900 truncate">
-                  Summit
+                  {appDisplayName()}
                 </div>
                 <div className="text-[10px] uppercase tracking-wider text-zinc-400 font-medium">
                   Roofing OS
@@ -9634,10 +12564,10 @@ showToast(
           <aside className="absolute inset-y-0 left-0 w-[17rem] max-w-[85vw] bg-zinc-50 shadow-md border-r border-zinc-200 flex flex-col animate-[page-fade-in_0.18s_ease-out]">
             <div className="h-14 flex items-center justify-between gap-2 px-4 border-b border-zinc-200/70">
               <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-8 h-8 rounded-xl bg-zinc-900 flex items-center justify-center shrink-0">
-                  <span className="text-white text-lg font-bold">S</span>
-                </div>
-                <span className="font-semibold text-zinc-900 truncate">Summit</span>
+                {renderAppMark({ size: 'md' })}
+                <span className="font-semibold text-zinc-900 truncate">
+                  {appDisplayName()}
+                </span>
               </div>
               <button
                 type="button"
@@ -9704,11 +12634,13 @@ showToast(
         )}
 
         <div className="lg:hidden flex items-center gap-2 shrink-0 min-w-0">
-          <div className="w-8 h-8 rounded-xl bg-zinc-900 flex items-center justify-center">
-            <span className="text-white text-sm font-bold">S</span>
-          </div>
+          {renderAppMark({
+            size: 'sm',
+            imgClassName:
+              'w-8 h-8 rounded-xl object-contain border border-zinc-200 bg-white',
+          })}
           <span className="font-semibold text-sm text-zinc-900 truncate hidden xs:inline sm:inline">
-            Summit
+            {appDisplayName()}
           </span>
         </div>
 
@@ -9732,11 +12664,11 @@ showToast(
                 </div>
               ) : (
                 <div className="max-h-80 overflow-y-auto py-1">
-                  {headerSearchResults.map((lead) => {
+                  {headerSearchResults.map((lead, leadIdx) => {
                     const stage = normalizePipelineStage(lead.category);
                     return (
                       <button
-                        key={lead.id}
+                        key={`search-${lead.supabaseId || lead.id}-${leadIdx}`}
                         type="button"
                         onClick={() => {
                           openLeadProfile(lead.id);
@@ -9847,11 +12779,17 @@ showToast(
     return (
       <div className="min-h-screen bg-zinc-100 flex items-center justify-center p-6">
         <div className="w-full max-w-md text-center">
-          <div className="mx-auto w-20 h-20 bg-zinc-900 rounded-3xl flex items-center justify-center mb-8">
-            <span className="text-white text-6xl font-bold tracking-tighter">S</span>
+          <div className="mx-auto mb-8 flex justify-center">
+            {renderAppMark({
+              size: 'xl',
+              imgClassName:
+                'w-20 h-20 rounded-3xl object-contain border border-zinc-200 bg-white',
+            })}
           </div>
 
-          <div className="font-bold text-5xl tracking-tighter text-zinc-900 mb-1">Summit</div>
+          <div className="font-bold text-5xl tracking-tighter text-zinc-900 mb-1">
+            {appDisplayName()}
+          </div>
           <p className="text-zinc-500 mb-12">Roofing OS</p>
 
           <div className="space-y-6">
@@ -9918,11 +12856,11 @@ showToast(
               <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
                 Mitigation invoice
               </h1>
-              <p className="text-sm text-zinc-500 mt-1">
-                {mitigationWorkspace === 'internal'
-                  ? 'Internal financials & buffer'
-                  : 'Customer quote · mitigation'}
-              </p>
+              {mitigationWorkspace === 'internal' ? (
+                <p className="text-sm text-zinc-500 mt-1">
+                  Internal financials & buffer
+                </p>
+              ) : null}
             </div>
 
             {mitigationDraft && !showMitigationPreview && (
@@ -10253,14 +13191,18 @@ showToast(
 
                 <div className="text-center mb-8">
                   <div className="font-bold text-3xl tracking-tight">
-                    {mitigationDraft.entity === 'prowest'
-                      ? 'ProWest Roofing'
-                      : mitigationPersonalBrand()}
+                    {mitigationBillingBrand(mitigationDraft.entity)}
                   </div>
                   <div className="text-sm text-zinc-400 mt-1">
                     {mitigationInvoiceTitle(mitigationDraft.entity)} ·{' '}
                     {mitigationDraft.date}
                   </div>
+                  {mitigationDraft.entity === 'prowest' &&
+                    !companySettingsConfigured() && (
+                      <div className="text-xs text-amber-700 mt-2">
+                        Company details empty — add them in Settings
+                      </div>
+                    )}
                 </div>
 
                 <div className="border border-zinc-200 rounded-3xl p-6 sm:p-10 space-y-6">
@@ -10301,6 +13243,25 @@ showToast(
                       </div>
                     </div>
                   </div>
+
+                  {showCompanyPmOnDoc(mitigationDraft.entity) ? (
+                    <div className="rounded-2xl border border-zinc-200 bg-zinc-50/80 px-5 py-4">
+                      <div className="font-semibold text-sm text-zinc-900 mb-2">
+                        Your Project Manager
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-1.5 text-sm">
+                        <div>
+                          <span className="font-medium text-zinc-900">
+                            {estimatePmName() || '—'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-zinc-500">Phone:</span>{' '}
+                          {estimatePmPhone() || '—'}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
 
                   <div>
                     <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-3">
@@ -10368,16 +13329,31 @@ showToast(
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    generateMitigationPdf({ download: false, save: true });
-                    setShowMitigationPreview(false);
-                  }}
-                  className="btn-primary mt-10 w-full py-4 rounded-3xl font-semibold text-lg"
-                >
-                  Save This Invoice to Lead
-                </button>
+                <div className="mt-10 space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      generateMitigationPdf({ download: false, save: true });
+                      setShowMitigationPreview(false);
+                    }}
+                    className="btn-primary w-full py-4 rounded-3xl font-semibold text-lg"
+                  >
+                    Save invoice PDF to lead
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Keep mitigation draft; seed agreement from invoice lines/total
+                      openEmergencyAgreement(currentLeadId);
+                      showToast(
+                        'Agreement prefilled from invoice — save invoice PDF and agreement as separate files'
+                      );
+                    }}
+                    className="w-full py-4 rounded-3xl font-semibold text-lg border-2 border-sky-500 text-sky-800 bg-sky-50 hover:bg-sky-100"
+                  >
+                    Continue to agreement →
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="space-y-6">
@@ -10432,6 +13408,40 @@ showToast(
                       </div>
                     </button>
                   </div>
+                  {mitigationDraft.entity === 'prowest' ? (
+                    <div className="mt-4 rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/80 px-4 py-3">
+                      <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-1">
+                        Company (from Settings)
+                      </div>
+                      {companySettingsConfigured() ? (
+                        <div className="text-sm text-zinc-800 space-y-0.5">
+                          <div className="font-medium">
+                            {companyBrandName() || '—'}
+                          </div>
+                          {(companySettings.address || '').trim() ? (
+                            <div className="text-zinc-500">
+                              {companySettings.address}
+                            </div>
+                          ) : null}
+                          <div className="text-zinc-500">
+                            {companyContactLine() || '—'}
+                          </div>
+                          {showCompanyPmOnDoc('prowest') ? (
+                            <div className="text-zinc-600 pt-1">
+                              PM:{' '}
+                              {[estimatePmName(), estimatePmPhone()]
+                                .filter(Boolean)
+                                .join(' · ') || '—'}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div className="text-sm text-zinc-500">
+                          Add company details in Settings → Company
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
 
                 {/* PRICING */}
@@ -11098,7 +14108,7 @@ showToast(
                     </div>
                   ) : (
                     <ul className="space-y-1.5">
-                      {leadMatches.map((lead) => {
+                      {leadMatches.map((lead, leadIdx) => {
                         const name =
                           [lead.clientFirstName, lead.clientLastName]
                             .filter(Boolean)
@@ -11107,7 +14117,7 @@ showToast(
                           'Untitled lead';
                         const estCount = lead.estimates?.length || 0;
                         return (
-                          <li key={lead.id}>
+                          <li key={`match-${lead.id}-${leadIdx}`}>
                             <button
                               type="button"
                               onClick={() => {
@@ -11160,12 +14170,15 @@ showToast(
                     </p>
                   ) : (
                     <ul className="space-y-1.5">
-                      {estimateItems.map(({ lead, estimate, leadName }) => (
-                        <li key={`${lead.id}-${estimate.id}`}>
+                      {estimateItems.map(
+                        ({ lead, estimate, leadName, estimateIndex }) => (
+                        <li
+                          key={`${lead.id}-${estimate.supabaseId || estimate.id}-${estimateIndex}`}
+                        >
                           <button
                             type="button"
                             onClick={() =>
-                              loadEstimate(estimate, { leadId: lead.id })
+                              openLeadEstimate(lead.id, estimate, lead)
                             }
                             className="w-full text-left rounded-2xl border border-zinc-200 px-4 py-3 hover:border-sky-300 hover:bg-sky-50/30 transition-colors"
                           >
@@ -11190,7 +14203,8 @@ showToast(
                             </div>
                           </button>
                         </li>
-                      ))}
+                      )
+                      )}
                     </ul>
                   )}
                 </section>
@@ -11378,11 +14392,54 @@ showToast(
               }`,
             ],
             ['Perimeter', `${measurement.perimeterLF} LF`],
-            ['Ridge', `${measurement.ridgeLF} LF`],
-            ['Hip', `${measurement.hipLF} LF`],
-            ['Valley', `${measurement.valleyLF ?? 0} LF`],
-            ['Eave', `${measurement.eaveLF} LF`],
-            ['Rake', `${measurement.rakeLF} LF`],
+            [
+              'Ridge',
+              (measurement.ridgeLF || 0) > 0
+                ? `${measurement.ridgeLF} LF${
+                    measurement.edgesVerified ? '' : ' (unverified)'
+                  }`
+                : '— (enter after field check)',
+            ],
+            [
+              'Hip',
+              (measurement.hipLF || 0) > 0
+                ? `${measurement.hipLF} LF`
+                : '—',
+            ],
+            [
+              'Valley',
+              (measurement.valleyLF ?? 0) > 0
+                ? `${measurement.valleyLF} LF`
+                : '—',
+            ],
+            [
+              'Eave',
+              (measurement.eaveLF || 0) > 0
+                ? `${measurement.eaveLF} LF`
+                : '—',
+            ],
+            [
+              'Rake',
+              (measurement.rakeLF || 0) > 0
+                ? `${measurement.rakeLF} LF`
+                : '—',
+            ],
+            ...(measurement.dripEdgeLF
+              ? ([[
+                  'Drip edge',
+                  `${measurement.dripEdgeLF} LF`,
+                ]] as [string, string][])
+              : []),
+            ...(measurement.measureSource
+              ? ([[
+                  'Source',
+                  measurement.measureSource === 'eagleview'
+                    ? 'EagleView PDF'
+                    : measurement.measureSource === 'instant_roofer'
+                      ? 'Instant Roofer AI'
+                      : measurement.measureSource,
+                ]] as [string, string][])
+              : []),
           ];
           return (
             <div className="fixed inset-0 z-[70] bg-black/40 flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -11737,9 +14794,9 @@ showToast(
                         return hay.includes(q);
                       })
                       .slice(0, 50)
-                      .map((l) => (
+                      .map((l, leadIdx) => (
                         <button
-                          key={l.id}
+                          key={`takeoff-pick-${l.supabaseId || l.id}-${leadIdx}`}
                           type="button"
                           onClick={() => assignTakeoffToLead(l.id)}
                           className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-sky-50 text-sm"
@@ -11775,6 +14832,873 @@ showToast(
             )}
           </div>
         )}
+
+      {systemDocWorkspace === 'emergency' && emergencyDraft && (
+        <div className={documentWorkspaceClass}>
+          <div className="page-shell !py-8 sm:!py-10">
+            {/* Header — twin of mitigation invoice workspace */}
+            <div className="mb-6">
+              <button
+                type="button"
+                className="text-sm text-zinc-500 hover:text-zinc-800 mb-4"
+                onClick={() => exitLeadDocumentWorkspace()}
+              >
+                ← Back to lead
+              </button>
+              <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
+                Mitigation Service Agreement
+              </h1>
+              {mitigationDraft &&
+                Array.isArray(mitigationDraft.lines) &&
+                mitigationDraft.lines.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSystemDocWorkspace('mitigation');
+                      setShowMitigationPreview(true);
+                      setEmergencyPreview(false);
+                    }}
+                    className="mt-3 text-sm font-semibold text-sky-700 hover:underline"
+                  >
+                    ← Back to invoice preview
+                  </button>
+                )}
+            </div>
+
+            {!emergencyPreview ? (
+              <div className="space-y-6">
+                {/* BILLING ENTITY — same control as mitigation invoice */}
+                <div className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm">
+                  <div className="text-xs font-semibold text-zinc-500 mb-3 tracking-wider uppercase">
+                    Billing Entity
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEmergencyDraft({
+                          ...emergencyDraft,
+                          entity: 'roslie',
+                        })
+                      }
+                      className={`text-left rounded-2xl border-2 p-4 transition-all ${
+                        emergencyDraft.entity === 'roslie'
+                          ? 'border-sky-500 bg-sky-50 shadow-sm'
+                          : 'border-zinc-200 hover:border-zinc-300 bg-white'
+                      }`}
+                    >
+                      <div className="font-semibold text-zinc-900 text-base">
+                        Personal
+                      </div>
+                      <div className="text-sm text-zinc-500 mt-1">
+                        Billed through personal LLC
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEmergencyDraft({
+                          ...emergencyDraft,
+                          entity: 'prowest',
+                        })
+                      }
+                      className={`text-left rounded-2xl border-2 p-4 transition-all ${
+                        emergencyDraft.entity === 'prowest'
+                          ? 'border-sky-500 bg-sky-50 shadow-sm'
+                          : 'border-zinc-200 hover:border-zinc-300 bg-white'
+                      }`}
+                    >
+                      <div className="font-semibold text-zinc-900 text-base">
+                        Company
+                      </div>
+                      <div className="text-sm text-zinc-500 mt-1">
+                        Billed through companies LLC
+                      </div>
+                    </button>
+                  </div>
+                  {emergencyDraft.entity === 'prowest' ? (
+                    <div className="mt-4 rounded-2xl border border-dashed border-zinc-200 bg-zinc-50/80 px-4 py-3">
+                      <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-1">
+                        Company (from Settings)
+                      </div>
+                      {companySettingsConfigured() ? (
+                        <div className="text-sm text-zinc-800 space-y-0.5">
+                          <div className="font-medium">
+                            {companyBrandName() || '—'}
+                          </div>
+                          {(companySettings.address || '').trim() ? (
+                            <div className="text-zinc-500">
+                              {companySettings.address}
+                            </div>
+                          ) : null}
+                          <div className="text-zinc-500">
+                            {companyContactLine() || '—'}
+                          </div>
+                          {showCompanyPmOnDoc('prowest') ? (
+                            <div className="text-zinc-600 pt-1">
+                              PM:{' '}
+                              {[estimatePmName(), estimatePmPhone()]
+                                .filter(Boolean)
+                                .join(' · ') || '—'}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div className="text-sm text-zinc-500">
+                          Add company details in Settings → Company
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
+                  <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
+                    Client (from lead)
+                  </div>
+                  {(
+                    [
+                      ['clientName', 'Client name'],
+                      ['propertyAddress', 'Property address'],
+                      ['phone', 'Phone'],
+                      ['email', 'Email'],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <div key={key}>
+                      <label className="text-sm text-zinc-500 mb-1.5 block">
+                        {label}
+                      </label>
+                      <input
+                        value={emergencyDraft[key]}
+                        onChange={(e) =>
+                          setEmergencyDraft({
+                            ...emergencyDraft,
+                            [key]: e.target.value,
+                          })
+                        }
+                        className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base text-zinc-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                <div className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
+                  <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
+                    Scope of work
+                  </div>
+                  <textarea
+                    value={emergencyDraft.scope}
+                    onChange={(e) =>
+                      setEmergencyDraft({
+                        ...emergencyDraft,
+                        scope: e.target.value,
+                      })
+                    }
+                    rows={5}
+                    placeholder="Tarping, patching, sealing…"
+                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base text-zinc-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                  />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-sm text-zinc-500 mb-1.5 block">
+                        Est. start
+                      </label>
+                      <input
+                        value={emergencyDraft.serviceStart}
+                        onChange={(e) =>
+                          setEmergencyDraft({
+                            ...emergencyDraft,
+                            serviceStart: e.target.value,
+                          })
+                        }
+                        className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base text-zinc-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm text-zinc-500 mb-1.5 block">
+                        Est. complete
+                      </label>
+                      <input
+                        value={emergencyDraft.serviceComplete}
+                        onChange={(e) =>
+                          setEmergencyDraft({
+                            ...emergencyDraft,
+                            serviceComplete: e.target.value,
+                          })
+                        }
+                        className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base text-zinc-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
+                  <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
+                    Payment
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {(
+                      [
+                        ['insurance', 'Insurance claim'],
+                        ['cash', 'Cash / proceeds'],
+                      ] as const
+                    ).map(([mode, label]) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() =>
+                          setEmergencyDraft({
+                            ...emergencyDraft,
+                            paymentMode: mode,
+                          })
+                        }
+                        className={`px-4 py-2 rounded-full text-sm font-semibold border transition-colors ${
+                          emergencyDraft.paymentMode === mode
+                            ? 'border-sky-500 bg-sky-50 text-zinc-900'
+                            : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div>
+                    <label className="text-sm text-zinc-500 mb-1.5 block">
+                      Amount ($)
+                    </label>
+                    <input
+                      value={emergencyDraft.paymentAmount}
+                      onChange={(e) =>
+                        setEmergencyDraft({
+                          ...emergencyDraft,
+                          paymentAmount: e.target.value,
+                        })
+                      }
+                      className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base text-zinc-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Full agreement body — readable before sign (mirrors PDF) */}
+                <div className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm space-y-5">
+                  <div>
+                    <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-2">
+                      Agreement terms — read before signing
+                    </div>
+                    <p className="text-sm text-zinc-600 leading-relaxed">
+                      This Mitigation Service Agreement (&quot;Agreement&quot;)
+                      is entered into as of the date electronically signed below
+                      between{' '}
+                      <span className="font-medium text-zinc-900">
+                        {emergencyDraft.entity === 'prowest'
+                          ? companyBrandName() ||
+                            mitigationBillingBrand('prowest')
+                          : mitigationPersonalBrand()}
+                      </span>{' '}
+                      (&quot;{mitigationPartyRole(emergencyDraft.entity)}&quot;)
+                      and the Client named below.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+                    <div className="rounded-2xl border border-zinc-200 bg-zinc-50/80 px-4 py-3">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 mb-1">
+                        Client
+                      </div>
+                      <div className="font-medium text-zinc-900">
+                        {emergencyDraft.clientName || '—'}
+                      </div>
+                      <div className="text-zinc-600 mt-1">
+                        {emergencyDraft.phone || '—'}
+                        {emergencyDraft.email
+                          ? ` · ${emergencyDraft.email}`
+                          : ''}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-zinc-200 bg-zinc-50/80 px-4 py-3">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 mb-1">
+                        Billed by /{' '}
+                        {mitigationPartyRole(emergencyDraft.entity)}
+                      </div>
+                      <div className="font-medium text-zinc-900">
+                        {emergencyDraft.entity === 'prowest'
+                          ? companyBrandName() ||
+                            mitigationBillingBrand('prowest')
+                          : mitigationPersonalBrand() || '—'}
+                      </div>
+                      <div className="text-zinc-600 mt-1">
+                        {mitigationBrandPhone(emergencyDraft.entity) || '—'}
+                      </div>
+                    </div>
+                    <div className="sm:col-span-2 rounded-2xl border border-zinc-200 bg-zinc-50/80 px-4 py-3">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 mb-1">
+                        Property
+                      </div>
+                      <div className="text-zinc-900">
+                        {emergencyDraft.propertyAddress || '—'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4 text-sm">
+                    <div>
+                      <div className="font-semibold text-zinc-900 mb-1.5">
+                        1. Scope of Work
+                      </div>
+                      <p className="text-zinc-600 leading-relaxed mb-2">
+                        {mitigationPartyRole(emergencyDraft.entity)} agrees to
+                        perform mitigation / emergency roofing services as
+                        deemed necessary to prevent further property damage.
+                        Services may include tarping, patching, sealing, or
+                        temporary structural reinforcement.
+                      </p>
+                      <div className="whitespace-pre-wrap rounded-2xl border border-zinc-200 bg-zinc-50/80 px-4 py-3 text-zinc-900">
+                        {emergencyDraft.scope.trim() || '—'}
+                      </div>
+                      <div className="mt-2 text-xs text-zinc-500">
+                        Est. start: {emergencyDraft.serviceStart || '—'} · Est.
+                        complete: {emergencyDraft.serviceComplete || '—'}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="font-semibold text-zinc-900 mb-1.5">
+                        2. Payment Terms
+                      </div>
+                      <ul className="space-y-1.5 text-zinc-800">
+                        <li>
+                          {emergencyDraft.paymentMode === 'cash' ? '☑' : '☐'}{' '}
+                          Cash / insurance proceeds upon completion
+                          {emergencyDraft.paymentAmount
+                            ? `: $${emergencyDraft.paymentAmount}`
+                            : ': $________'}
+                        </li>
+                        <li>
+                          {emergencyDraft.paymentMode === 'insurance'
+                            ? '☑'
+                            : '☐'}{' '}
+                          Payment upon insurance claim approval / disbursement
+                          (direct pay authorized if applicable).
+                        </li>
+                      </ul>
+                      <p className="text-zinc-600 leading-relaxed mt-2">
+                        Client remains financially responsible if the insurance
+                        provider denies or reduces the claim. Payment is due Net
+                        15 of completed work.
+                      </p>
+                      {emergencyDraft.paymentAmount ? (
+                        <div className="mt-2 text-base font-semibold tabular-nums text-emerald-700">
+                          Amount: $
+                          {Number(emergencyDraft.paymentAmount).toLocaleString(
+                            undefined,
+                            {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            }
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div>
+                      <div className="font-semibold text-zinc-900 mb-1.5">
+                        3. Limitation of Liability
+                      </div>
+                      <p className="text-zinc-600 leading-relaxed">
+                        Mitigation / emergency repairs are temporary and
+                        intended to prevent further damage until permanent
+                        repairs can be made.{' '}
+                        {mitigationPartyRole(emergencyDraft.entity)} is not
+                        liable for pre-existing damage or consequential /
+                        incidental damages from weather, pre-existing
+                        conditions, or limitations of temporary repairs. Client
+                        agrees to hold harmless and indemnify{' '}
+                        {mitigationPartyRole(emergencyDraft.entity)} from claims
+                        arising from performance of these services.
+                      </p>
+                    </div>
+
+                    <div>
+                      <div className="font-semibold text-zinc-900 mb-1.5">
+                        4. Access and Authorization
+                      </div>
+                      <p className="text-zinc-600 leading-relaxed">
+                        Client grants{' '}
+                        {mitigationPartyRole(emergencyDraft.entity)} access to
+                        the property and authorizes actions needed to perform
+                        mitigation work.
+                      </p>
+                    </div>
+
+                    <div>
+                      <div className="font-semibold text-zinc-900 mb-1.5">
+                        5. Entire Agreement · Electronic signature
+                      </div>
+                      <p className="text-zinc-600 leading-relaxed">
+                        This Agreement constitutes the full understanding
+                        between the parties and supersedes prior agreements. By
+                        signing below, Client agrees that an electronic
+                        signature (including a drawn signature captured on a
+                        device) is the legal equivalent of a handwritten
+                        signature.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
+                      Electronic signature
+                    </div>
+                    {emergencyDraft.clientSignatureDataUrl ? (
+                      <span className="text-xs font-medium text-emerald-700">
+                        Signed{' '}
+                        {formatSignedAtDisplay(emergencyDraft.clientSignedAt)}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div>
+                    <label className="text-sm text-zinc-500 mb-1.5 block">
+                      Signer&apos;s full legal name
+                    </label>
+                    <input
+                      value={emergencyDraft.signerName}
+                      onChange={(e) =>
+                        setEmergencyDraft({
+                          ...emergencyDraft,
+                          signerName: e.target.value,
+                        })
+                      }
+                      placeholder="Name as it should appear on the agreement"
+                      className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base text-zinc-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
+                    />
+                  </div>
+                  {emergencyDraft.clientSignatureDataUrl ? (
+                    <div className="space-y-3">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={emergencyDraft.clientSignatureDataUrl}
+                        alt="Client signature"
+                        className="w-full max-h-28 object-contain border border-zinc-200 rounded-2xl bg-white"
+                      />
+                      <p className="text-xs text-zinc-500">
+                        Electronically signed by{' '}
+                        <span className="font-medium text-zinc-800">
+                          {emergencyDraft.signerName ||
+                            emergencyDraft.clientName ||
+                            '—'}
+                        </span>{' '}
+                        on{' '}
+                        {formatSignedAtDisplay(emergencyDraft.clientSignedAt) ||
+                          '—'}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEmergencyDraft({
+                            ...emergencyDraft,
+                            clientSignatureDataUrl: null,
+                            clientSignedAt: null,
+                          });
+                          window.setTimeout(
+                            () => clearEmergencySignaturePad(),
+                            50
+                          );
+                        }}
+                        className="text-sm text-zinc-500 hover:text-zinc-800"
+                      >
+                        Clear & resign
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <p className="text-xs text-zinc-500">
+                        Draw your signature below.
+                      </p>
+                      <canvas
+                        ref={(el) => {
+                          emergencySigPadRef.current = el;
+                          if (el && !el.dataset.ready) {
+                            el.dataset.ready = '1';
+                            el.width = 600;
+                            el.height = 160;
+                            const ctx = el.getContext('2d');
+                            if (ctx) {
+                              ctx.fillStyle = '#ffffff';
+                              ctx.fillRect(0, 0, el.width, el.height);
+                              ctx.strokeStyle = '#18181b';
+                              ctx.lineWidth = 2;
+                              ctx.lineCap = 'round';
+                              ctx.lineJoin = 'round';
+                            }
+                          }
+                        }}
+                        className="w-full h-40 border border-zinc-200 rounded-2xl bg-white touch-none cursor-crosshair"
+                        onPointerDown={(e) => {
+                          const canvas = emergencySigPadRef.current;
+                          if (!canvas) return;
+                          emergencySigDrawing.current = true;
+                          canvas.setPointerCapture(e.pointerId);
+                          const ctx = canvas.getContext('2d');
+                          if (!ctx) return;
+                          const rect = canvas.getBoundingClientRect();
+                          const x =
+                            ((e.clientX - rect.left) / rect.width) *
+                            canvas.width;
+                          const y =
+                            ((e.clientY - rect.top) / rect.height) *
+                            canvas.height;
+                          ctx.beginPath();
+                          ctx.moveTo(x, y);
+                        }}
+                        onPointerMove={(e) => {
+                          if (!emergencySigDrawing.current) return;
+                          const canvas = emergencySigPadRef.current;
+                          if (!canvas) return;
+                          const ctx = canvas.getContext('2d');
+                          if (!ctx) return;
+                          const rect = canvas.getBoundingClientRect();
+                          const x =
+                            ((e.clientX - rect.left) / rect.width) *
+                            canvas.width;
+                          const y =
+                            ((e.clientY - rect.top) / rect.height) *
+                            canvas.height;
+                          ctx.lineTo(x, y);
+                          ctx.stroke();
+                        }}
+                        onPointerUp={() => {
+                          emergencySigDrawing.current = false;
+                        }}
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => clearEmergencySignaturePad()}
+                          className="px-4 py-2 rounded-full text-sm font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                        >
+                          Clear pad
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => commitEmergencySignature()}
+                          className="btn-primary px-5 py-2 rounded-full text-sm font-semibold"
+                        >
+                          Sign electronically
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Sticky footer — twin of mitigation invoice */}
+                <div className="sticky bottom-0 bg-white/95 backdrop-blur border-t border-zinc-200 py-4 z-40 -mx-[var(--page-pad-x)] px-[var(--page-pad-x)]">
+                  <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-xs text-zinc-500">AGREEMENT</div>
+                      <div className="text-lg sm:text-xl font-semibold text-zinc-900 truncate">
+                        {emergencyDraft.clientName || 'Mitigation Service Agreement'}
+                      </div>
+                      {emergencyDraft.paymentAmount ? (
+                        <div className="text-sm text-emerald-700 tabular-nums mt-0.5">
+                          $
+                          {Number(emergencyDraft.paymentAmount).toLocaleString(
+                            undefined,
+                            {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            }
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setEmergencyPreview(true)}
+                      className="btn-primary px-8 py-4 rounded-3xl font-semibold w-full sm:w-auto sm:shrink-0"
+                    >
+                      See Agreement
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-white p-5 sm:p-8 text-zinc-900 pb-16 rounded-3xl border border-zinc-200/80 shadow-sm">
+                <div className="flex justify-between items-center mb-8 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setEmergencyPreview(false)}
+                    className="px-6 py-2 border border-zinc-300 rounded-2xl text-sm hover:bg-zinc-100"
+                  >
+                    ← Back to edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void generateEmergencyAgreementPdf({ download: true })
+                    }
+                    className="btn-primary px-6 sm:px-8 py-3 rounded-3xl font-semibold"
+                  >
+                    Download PDF
+                  </button>
+                </div>
+
+                <div className="text-center mb-8">
+                  <div className="font-bold text-3xl tracking-tight">
+                    {mitigationBillingBrand(emergencyDraft.entity)}
+                  </div>
+                  <div className="text-sm text-zinc-400 mt-1">
+                    Mitigation Service Agreement · {emergencyDraft.date}
+                  </div>
+                  {emergencyDraft.entity === 'prowest' &&
+                  companySettingsConfigured() ? (
+                    <div className="text-xs text-zinc-400 mt-1 space-y-0.5">
+                      {(companySettings.address || '').trim() ? (
+                        <div>{companySettings.address}</div>
+                      ) : null}
+                      {companyContactLine() ? (
+                        <div>{companyContactLine()}</div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {emergencyDraft.entity === 'prowest' &&
+                    !companySettingsConfigured() && (
+                      <div className="text-xs text-amber-700 mt-2">
+                        Company details empty — add them in Settings
+                      </div>
+                    )}
+                </div>
+
+                <div className="border border-zinc-200 rounded-3xl p-6 sm:p-10 space-y-6 text-sm">
+                  <p className="text-zinc-600 leading-relaxed">
+                    This Mitigation Service Agreement (&quot;Agreement&quot;) is
+                    entered into as of the date electronically signed below
+                    between{' '}
+                    {emergencyDraft.entity === 'prowest'
+                      ? companyBrandName() ||
+                        mitigationBillingBrand('prowest')
+                      : mitigationPersonalBrand()}{' '}
+                    (&quot;{mitigationPartyRole(emergencyDraft.entity)}&quot;)
+                    and the Client named below.
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-1">
+                        Client
+                      </div>
+                      <div className="font-medium text-zinc-900">
+                        {emergencyDraft.clientName || '—'}
+                      </div>
+                      <div className="text-zinc-600 mt-1">
+                        {emergencyDraft.phone || '—'}
+                        {emergencyDraft.email
+                          ? ` · ${emergencyDraft.email}`
+                          : ''}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-1">
+                        Billed by /{' '}
+                        {mitigationPartyRole(emergencyDraft.entity)}
+                      </div>
+                      <div className="font-medium text-zinc-900">
+                        {emergencyDraft.entity === 'prowest'
+                          ? companyBrandName() ||
+                            mitigationBillingBrand('prowest')
+                          : mitigationPersonalBrand() || '—'}
+                      </div>
+                      <div className="text-zinc-600 mt-1">
+                        {mitigationBrandPhone(emergencyDraft.entity) || '—'}
+                      </div>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-1">
+                        Property
+                      </div>
+                      <div className="text-zinc-900">
+                        {emergencyDraft.propertyAddress || '—'}
+                      </div>
+                    </div>
+                    {showCompanyPmOnDoc(emergencyDraft.entity) ? (
+                      <div className="sm:col-span-2 rounded-2xl border border-zinc-200 bg-zinc-50/80 px-4 py-3">
+                        <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-1">
+                          Project Manager
+                        </div>
+                        <div className="font-medium text-zinc-900">
+                          {estimatePmName() || '—'}
+                        </div>
+                        <div className="text-zinc-600 mt-0.5">
+                          {estimatePmPhone() || '—'}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div>
+                    <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-2">
+                      1. Scope of Work
+                    </div>
+                    <p className="text-zinc-600 mb-2 leading-relaxed">
+                      {mitigationPartyRole(emergencyDraft.entity)} agrees to
+                      perform mitigation / emergency roofing services as deemed
+                      necessary to prevent further property damage. Services may
+                      include tarping, patching, sealing, or temporary
+                      structural reinforcement.
+                    </p>
+                    <div className="whitespace-pre-wrap rounded-2xl border border-zinc-200 bg-zinc-50/80 px-4 py-3">
+                      {emergencyDraft.scope || '—'}
+                    </div>
+                    <div className="mt-2 text-zinc-500 text-xs">
+                      Est. start: {emergencyDraft.serviceStart || '—'} · Est.
+                      complete: {emergencyDraft.serviceComplete || '—'}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-2">
+                      2. Payment Terms
+                    </div>
+                    <ul className="space-y-1 text-zinc-800">
+                      <li>
+                        {emergencyDraft.paymentMode === 'cash' ? '☑' : '☐'} Cash
+                        / insurance proceeds upon completion
+                        {emergencyDraft.paymentAmount
+                          ? `: $${emergencyDraft.paymentAmount}`
+                          : ': $________'}
+                      </li>
+                      <li>
+                        {emergencyDraft.paymentMode === 'insurance'
+                          ? '☑'
+                          : '☐'}{' '}
+                        Payment upon insurance claim approval / disbursement
+                        (direct pay authorized if applicable).
+                      </li>
+                    </ul>
+                    <p className="text-sm text-zinc-600 mt-2 leading-relaxed">
+                      Client remains financially responsible if the insurance
+                      provider denies or reduces the claim. Payment is due Net
+                      15 of completed work.
+                    </p>
+                    {emergencyDraft.paymentAmount ? (
+                      <div className="mt-2 text-base font-semibold tabular-nums text-emerald-700">
+                        Amount: $
+                        {Number(emergencyDraft.paymentAmount).toLocaleString(
+                          undefined,
+                          {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          }
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div>
+                    <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-2">
+                      3. Limitation of Liability
+                    </div>
+                    <p className="text-zinc-600 leading-relaxed">
+                      Mitigation / emergency repairs are temporary and intended
+                      to prevent further damage until permanent repairs can be
+                      made. {mitigationPartyRole(emergencyDraft.entity)} is not
+                      liable for pre-existing damage or consequential /
+                      incidental damages from weather, pre-existing conditions,
+                      or limitations of temporary repairs. Client agrees to hold
+                      harmless and indemnify{' '}
+                      {mitigationPartyRole(emergencyDraft.entity)} from claims
+                      arising from performance of these services.
+                    </p>
+                  </div>
+
+                  <div>
+                    <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-2">
+                      4. Access and Authorization
+                    </div>
+                    <p className="text-zinc-600 leading-relaxed">
+                      Client grants{' '}
+                      {mitigationPartyRole(emergencyDraft.entity)} access to the
+                      property and authorizes actions needed to perform
+                      mitigation work.
+                    </p>
+                  </div>
+
+                  <div>
+                    <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-2">
+                      5. Entire Agreement · Electronic signature
+                    </div>
+                    <p className="text-zinc-600 leading-relaxed">
+                      This Agreement constitutes the full understanding between
+                      the parties and supersedes prior agreements. By signing
+                      below, Client agrees that an electronic signature
+                      (including a drawn signature captured on a device) is the
+                      legal equivalent of a handwritten signature.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-4 border-t border-zinc-200">
+                    <div>
+                      <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-2">
+                        Client — electronic signature
+                      </div>
+                      {emergencyDraft.clientSignatureDataUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={emergencyDraft.clientSignatureDataUrl}
+                          alt="Signature"
+                          className="h-16 object-contain"
+                        />
+                      ) : (
+                        <div className="h-16 border-b border-zinc-300" />
+                      )}
+                      <div className="text-xs text-zinc-800 mt-2 font-medium">
+                        {emergencyDraft.signerName ||
+                          emergencyDraft.clientName ||
+                          '—'}
+                      </div>
+                      <div className="text-xs text-zinc-400 mt-1">
+                        {emergencyDraft.clientSignatureDataUrl
+                          ? `Electronically signed ${
+                              formatSignedAtDisplay(
+                                emergencyDraft.clientSignedAt
+                              ) || '—'
+                            }`
+                          : `Date: ${emergencyDraft.date || '—'}`}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-2">
+                        {mitigationPartyRoleLabel(emergencyDraft.entity)}
+                      </div>
+                      <div className="h-16 border-b border-zinc-300 flex items-end text-sm text-zinc-500 pb-1">
+                        {mitigationBillingBrand(emergencyDraft.entity) || '—'}
+                      </div>
+                      <div className="text-xs text-zinc-400 mt-2">
+                        Date: {emergencyDraft.date || '—'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-10 space-y-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void generateEmergencyAgreementPdf({
+                        download: false,
+                        save: true,
+                      })
+                    }
+                    className="btn-primary w-full py-4 rounded-3xl font-semibold text-lg"
+                  >
+                    Save agreement PDF to lead
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
         {isEditingLead && currentLeadId ? null : (
         <>
@@ -11928,6 +15852,19 @@ showToast(
                     Schedule and follow-ups
                   </p>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => handleTabChange('tasks')}
+                  className="group text-left bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 transition-all duration-200"
+                >
+                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900 transition-colors">
+                    Tasks
+                  </div>
+                  <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
+                    To-dos with due dates · Google Tasks
+                  </p>
+                </button>
 
                 <button
                   type="button"
@@ -12125,7 +16062,7 @@ showToast(
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {items.map(({ lead, estimate, leadName }) => {
+                  {items.map(({ lead, estimate, leadName, estimateIndex }) => {
                     const addr = [
                       lead.clientAddress,
                       lead.clientCity,
@@ -12137,7 +16074,7 @@ showToast(
                       estimate.negotiatedPrice || estimate.total || 0;
                     return (
                       <div
-                        key={`${lead.id}-${estimate.id}`}
+                        key={`${lead.id}-${estimate.supabaseId || estimate.id}-${estimateIndex}`}
                         className="bg-white border border-zinc-200 rounded-3xl p-5 hover:border-sky-300 hover:shadow-sm transition-all"
                       >
                         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -12145,7 +16082,7 @@ showToast(
                             type="button"
                             className="text-left min-w-0 flex-1"
                             onClick={() =>
-                              loadEstimate(estimate, { leadId: lead.id })
+                              openLeadEstimate(lead.id, estimate, lead)
                             }
                           >
                             <div className="font-semibold text-zinc-900 truncate">
@@ -12166,10 +16103,20 @@ showToast(
                             <div className="text-xl font-semibold tabular-nums text-emerald-700">
                               ${total.toLocaleString()}
                             </div>
+                            {estimate.pdfUrl ? (
+                              <a
+                                href={estimate.pdfUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-zinc-200 text-sky-700 hover:bg-sky-50"
+                              >
+                                PDF
+                              </a>
+                            ) : null}
                             <button
                               type="button"
                               onClick={() =>
-                                loadEstimate(estimate, { leadId: lead.id })
+                                openLeadEstimate(lead.id, estimate, lead)
                               }
                               className="btn-primary px-3 py-1.5 text-xs font-semibold rounded-lg"
                             >
@@ -12177,7 +16124,9 @@ showToast(
                             </button>
                             <button
                               type="button"
-                              onClick={() => openLeadProfile(lead.id, lead)}
+                              onClick={() =>
+                                openLead(lead.id, lead, 'estimates')
+                              }
                               className="px-3 py-1.5 text-xs font-medium rounded-lg border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
                             >
                               Lead
@@ -12194,7 +16143,7 @@ showToast(
         })()}
 
         {activeTab === 'documents' && (
-          <div className="pb-8 w-full">
+          <div className="page-shell page-fade">
             <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
               Documents
             </h1>
@@ -12210,6 +16159,12 @@ showToast(
                   onClick={() => {
                     if (doc.id === 'mitigation') {
                       startNewInvoice();
+                      return;
+                    }
+                    if (doc.id === 'emergency') {
+                      openEmergencyAgreement(
+                        isEditingLead ? currentLeadId : null
+                      );
                       return;
                     }
                     if (doc.id === 'takeoff') {
@@ -12251,11 +16206,6 @@ showToast(
             byDate.set(key, list);
           }
 
-          const weekStart = startOfWeekSunday(calendarCursor);
-          const weekDays = Array.from({ length: 7 }, (_, i) =>
-            addDays(weekStart, i)
-          );
-
           // Month grid: full weeks covering the month
           const monthStart = new Date(
             calendarCursor.getFullYear(),
@@ -12274,6 +16224,42 @@ showToast(
           const dayJobs = byDate.get(selectedIso) || [];
           const unscheduled = openJobs.filter((l) => !leadScheduleIso(l));
 
+          const weekStart = startOfWeekSunday(calendarCursor);
+          const weekDays = Array.from({ length: 7 }, (_, i) =>
+            addDays(weekStart, i)
+          );
+
+          const gcalEventDayIso = (event: {
+            start?: { dateTime?: string; date?: string };
+          }): string | null => {
+            const raw = event.start?.date || event.start?.dateTime;
+            if (!raw) return null;
+            if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+            const d = new Date(raw);
+            if (Number.isNaN(d.getTime())) return null;
+            return toLocalIsoDate(d);
+          };
+
+          const googleByDate = new Map<string, typeof googleCalendarEvents>();
+          for (const event of googleCalendarEvents) {
+            const key = gcalEventDayIso(event);
+            if (!key) continue;
+            const list = googleByDate.get(key) || [];
+            list.push(event);
+            googleByDate.set(key, list);
+          }
+
+          const dayGoogle = googleByDate.get(selectedIso) || [];
+
+          const tasksByDate = new Map<string, SummitTask[]>();
+          for (const task of tasks) {
+            if (!task.dueDate || task.completed) continue;
+            const list = tasksByDate.get(task.dueDate) || [];
+            list.push(task);
+            tasksByDate.set(task.dueDate, list);
+          }
+          const dayTasks = tasksByDate.get(selectedIso) || [];
+
           const scheduleLeadOnDay = (leadId: number, iso: string) => {
             const updated = leads.map((l) =>
               l.id === leadId ? { ...l, followUpDate: iso } : l
@@ -12281,6 +16267,13 @@ showToast(
             persistLeads(updated);
             setCalendarSelectedDay(iso);
             showToast(`Scheduled for ${iso}`);
+            if (gcalConnected) {
+              void syncLeadsToGoogleCalendar({
+                leadIds: [leadId],
+                silent: true,
+                leadsOverride: updated,
+              });
+            }
           };
 
           const scheduleName = firstNameFrom(userName, 'Joe');
@@ -12290,27 +16283,47 @@ showToast(
           });
 
           return (
-            <div className="pb-8 w-full max-w-6xl mx-auto space-y-6">
+            <div className="page-shell page-fade space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
                   <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
-                    Summit Calendar
+                    {appDisplayName()} Calendar
                   </h1>
                   <p className="text-zinc-500 mt-1">
                     {scheduleName}
                     {gcalEmail ? ` · ${gcalEmail}` : ''}
                     {gcalConnected
                       ? ` · ${synced.length}/${openJobs.length} jobs linked`
-                      : ''}
+                      : ' · Connect Google for two-way sync'}
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const now = new Date();
+                      setCalendarCursor(now);
+                      setCalendarSelectedDay(toLocalIsoDate(now));
+                    }}
+                    className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50"
+                  >
+                    Today
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleTabChange('tasks')}
+                    className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50"
+                  >
+                    Tasks
+                  </button>
                   {gcalConnected ? (
                     <>
                       <button
                         type="button"
                         disabled={googleEventsLoading}
-                        onClick={() => void loadGoogleEvents()}
+                        onClick={() =>
+                          void loadGoogleEvents({ cursor: calendarCursor })
+                        }
                         className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold disabled:opacity-50"
                       >
                         {googleEventsLoading
@@ -12323,7 +16336,7 @@ showToast(
                         onClick={() => void syncLeadsToGoogleCalendar()}
                         className="px-5 py-2.5 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
                       >
-                        {gcalBusy ? 'Syncing…' : 'Sync jobs'}
+                        {gcalBusy ? 'Syncing…' : 'Sync jobs → Google'}
                       </button>
                     </>
                   ) : (
@@ -12339,9 +16352,8 @@ showToast(
                 </div>
               </div>
 
-              {/* Mini month (left) + week strip & agenda (right) */}
+              {/* Classic: mini month + week strip + Google agenda */}
               <div className="flex flex-col lg:flex-row gap-6 lg:gap-8">
-                {/* Left: mini month */}
                 <div className="w-full lg:w-64 shrink-0 bg-white border border-zinc-200 rounded-2xl p-4 h-fit">
                   <div className="flex items-center justify-between mb-3">
                     <button
@@ -12358,7 +16370,7 @@ showToast(
                     >
                       ←
                     </button>
-                    <div className="text-center text-emerald-600 font-semibold text-sm">
+                    <div className="text-center text-zinc-900 font-semibold text-sm">
                       {monthLabel}
                     </div>
                     <button
@@ -12389,9 +16401,10 @@ showToast(
                       const isToday = iso === todayIso;
                       const isSelected = iso === selectedIso;
                       const hasJob = (byDate.get(iso) || []).length > 0;
+                      const hasTask = (tasksByDate.get(iso) || []).length > 0;
                       return (
                         <button
-                          key={iso}
+                          key={`mini-${iso}`}
                           type="button"
                           onClick={() => {
                             setCalendarSelectedDay(iso);
@@ -12408,8 +16421,14 @@ showToast(
                           }`}
                         >
                           {day.getDate()}
-                          {hasJob && !isSelected ? (
-                            <span className="block w-1 h-1 mx-auto mt-0.5 rounded-full bg-slate-500" />
+                          {(hasJob || hasTask) && !isSelected ? (
+                            <span
+                              className={`block w-1 h-1 mx-auto mt-0.5 rounded-full ${
+                                hasTask && !hasJob
+                                  ? 'bg-amber-500'
+                                  : 'bg-slate-500'
+                              }`}
+                            />
                           ) : null}
                         </button>
                       );
@@ -12428,7 +16447,6 @@ showToast(
                   </button>
                 </div>
 
-                {/* Right: week header + Google agenda */}
                 <div className="flex-1 min-w-0">
                   <div className="grid grid-cols-7 gap-2 text-center text-sm mb-4">
                     {weekDays.map((day) => {
@@ -12461,10 +16479,10 @@ showToast(
                     })}
                   </div>
 
-                  <div className="space-y-3 max-h-[min(640px,60vh)] overflow-y-auto">
+                  <div className="space-y-3 max-h-[min(420px,45vh)] overflow-y-auto">
                     {!gcalConnected ? (
-                      <div className="text-center py-20 text-zinc-400 text-sm rounded-2xl border border-dashed border-zinc-200 bg-white">
-                        <p>Refresh Google Calendar to see your events</p>
+                      <div className="text-center py-14 text-zinc-400 text-sm rounded-2xl border border-dashed border-zinc-200 bg-white">
+                        <p>Connect Google to see your agenda</p>
                         <button
                           type="button"
                           disabled={gcalBusy}
@@ -12476,11 +16494,11 @@ showToast(
                       </div>
                     ) : googleEventsLoading &&
                       googleCalendarEvents.length === 0 ? (
-                      <div className="text-center py-20 text-zinc-400 text-sm">
+                      <div className="text-center py-14 text-zinc-400 text-sm">
                         Loading events…
                       </div>
                     ) : googleCalendarEvents.length === 0 ? (
-                      <div className="text-center py-20 text-zinc-400 text-sm rounded-2xl border border-dashed border-zinc-200 bg-white">
+                      <div className="text-center py-14 text-zinc-400 text-sm rounded-2xl border border-dashed border-zinc-200 bg-white">
                         Refresh Google Calendar to see your events
                       </div>
                     ) : (
@@ -12500,7 +16518,7 @@ showToast(
                               });
                         return (
                           <div
-                            key={event.id}
+                            key={`agenda-${event.id}`}
                             className="flex items-center gap-6 bg-transparent border border-slate-500 hover:border-slate-400 rounded-2xl p-4 transition"
                           >
                             <div className="w-24 shrink-0 font-mono text-slate-500 text-sm">
@@ -12531,7 +16549,166 @@ showToast(
                 </div>
               </div>
 
-              {/* Selected day detail */}
+              {/* Full month grid */}
+              <div className="rounded-3xl border border-zinc-200 bg-white overflow-hidden">
+                <div className="flex items-center justify-between px-4 sm:px-5 py-4 border-b border-zinc-100">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCalendarCursor((prev) => {
+                        const n = new Date(prev);
+                        n.setMonth(n.getMonth() - 1);
+                        return n;
+                      })
+                    }
+                    className="w-9 h-9 rounded-xl text-zinc-600 hover:bg-zinc-100 text-sm font-semibold"
+                    aria-label="Previous month"
+                  >
+                    ←
+                  </button>
+                  <div className="text-center text-zinc-900 font-semibold text-lg tracking-tight">
+                    {monthLabel}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCalendarCursor((prev) => {
+                        const n = new Date(prev);
+                        n.setMonth(n.getMonth() + 1);
+                        return n;
+                      })
+                    }
+                    className="w-9 h-9 rounded-xl text-zinc-600 hover:bg-zinc-100 text-sm font-semibold"
+                    aria-label="Next month"
+                  >
+                    →
+                  </button>
+                </div>
+                <div className="grid grid-cols-7 border-b border-zinc-100 text-center text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
+                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(
+                    (d) => (
+                      <div key={d} className="py-2">
+                        {d}
+                      </div>
+                    )
+                  )}
+                </div>
+                <div className="grid grid-cols-7 auto-rows-fr">
+                  {monthDays.map((day) => {
+                    const iso = toLocalIsoDate(day);
+                    const inMonth =
+                      day.getMonth() === calendarCursor.getMonth();
+                    const isToday = iso === todayIso;
+                    const isSelected = iso === selectedIso;
+                    const jobs = byDate.get(iso) || [];
+                    const gEvents = googleByDate.get(iso) || [];
+                    const dayTaskList = tasksByDate.get(iso) || [];
+                    const chips = [
+                      ...jobs.slice(0, 1).map((lead) => ({
+                        key: `j-${lead.id}`,
+                        label:
+                          [lead.clientFirstName, lead.clientLastName]
+                            .filter(Boolean)
+                            .join(' ') ||
+                          lead.category ||
+                          'Job',
+                        kind: 'job' as const,
+                      })),
+                      ...dayTaskList.slice(0, 1).map((task) => ({
+                        key: `t-${task.id}`,
+                        label: task.title,
+                        kind: 'task' as const,
+                      })),
+                      ...gEvents
+                        .filter((ev) => {
+                          // Avoid double-listing Summit-synced Google events
+                          const summitIds = new Set(
+                            jobs
+                              .map((j) => j.calendarEventId)
+                              .filter(Boolean) as string[]
+                          );
+                          return !summitIds.has(ev.id);
+                        })
+                        .slice(
+                          0,
+                          Math.max(
+                            0,
+                            3 -
+                              Math.min(1, jobs.length) -
+                              Math.min(1, dayTaskList.length)
+                          )
+                        )
+                        .map((ev) => ({
+                          key: `g-${ev.id}`,
+                          label: ev.summary || 'Google event',
+                          kind: 'google' as const,
+                        })),
+                    ];
+                    const more =
+                      jobs.length +
+                      dayTaskList.length +
+                      gEvents.filter((ev) => {
+                        const summitIds = new Set(
+                          jobs
+                            .map((j) => j.calendarEventId)
+                            .filter(Boolean) as string[]
+                        );
+                        return !summitIds.has(ev.id);
+                      }).length -
+                      chips.length;
+                    return (
+                      <button
+                        key={iso}
+                        type="button"
+                        onClick={() => {
+                          setCalendarSelectedDay(iso);
+                          if (!inMonth) setCalendarCursor(day);
+                        }}
+                        className={`min-h-[5.5rem] sm:min-h-[6.75rem] p-1.5 sm:p-2 text-left border-b border-r border-zinc-100 transition-colors align-top ${
+                          isSelected
+                            ? 'bg-sky-50 ring-2 ring-inset ring-sky-400'
+                            : isToday
+                              ? 'bg-zinc-50'
+                              : 'bg-white hover:bg-zinc-50/80'
+                        } ${inMonth ? '' : 'opacity-45'}`}
+                      >
+                        <div
+                          className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs tabular-nums font-semibold ${
+                            isToday
+                              ? 'bg-zinc-900 text-white'
+                              : 'text-zinc-800'
+                          }`}
+                        >
+                          {day.getDate()}
+                        </div>
+                        <div className="mt-1 space-y-0.5">
+                          {chips.map((chip) => (
+                            <div
+                              key={chip.key}
+                              className={`truncate rounded-md px-1.5 py-0.5 text-[10px] sm:text-[11px] font-medium ${
+                                chip.kind === 'job'
+                                  ? 'bg-slate-800 text-white'
+                                  : chip.kind === 'task'
+                                    ? 'bg-amber-100 text-amber-950'
+                                    : 'bg-emerald-100 text-emerald-900'
+                              }`}
+                            >
+                              {chip.label}
+                            </div>
+                          ))}
+                          {more > 0 ? (
+                            <div className="text-[10px] text-zinc-400 px-0.5">
+                              +{more} more
+                            </div>
+                          ) : null}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Selected day detail — Summit jobs + Google events */}
               <div className="rounded-3xl border border-zinc-200 bg-white p-5 sm:p-6 space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                   <div>
@@ -12548,23 +16725,88 @@ showToast(
                           )}
                     </h2>
                     <p className="text-sm text-zinc-500 mt-0.5">
-                      {dayJobs.length === 0
-                        ? 'No jobs scheduled — assign one below'
-                        : `${dayJobs.length} job${dayJobs.length === 1 ? '' : 's'} this day`}
+                      {dayJobs.length + dayGoogle.length + dayTasks.length === 0
+                        ? 'Nothing scheduled — assign a job below, add a task, or book in Google'
+                        : [
+                            dayJobs.length
+                              ? `${dayJobs.length} job${dayJobs.length === 1 ? '' : 's'}`
+                              : '',
+                            dayTasks.length
+                              ? `${dayTasks.length} task${dayTasks.length === 1 ? '' : 's'}`
+                              : '',
+                            dayGoogle.length
+                              ? `${dayGoogle.length} Google`
+                              : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
                     </p>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => handleTabChange('tasks')}
+                    className="px-4 py-2 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50 shrink-0 self-start"
+                  >
+                    Open Tasks
+                  </button>
                 </div>
+
+                {dayTasks.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                      Tasks
+                    </div>
+                    {dayTasks.map((task) => (
+                      <div
+                        key={`day-task-${task.id}`}
+                        className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-2xl border border-amber-200 bg-amber-50/50 px-4 py-3"
+                      >
+                        <button
+                          type="button"
+                          className="text-left min-w-0 flex items-start gap-3"
+                          onClick={() =>
+                            void updateTaskLocal(task.id, {
+                              completed: true,
+                            })
+                          }
+                        >
+                          <span className="mt-0.5 w-4 h-4 rounded border border-amber-400 shrink-0 bg-white" />
+                          <div className="min-w-0">
+                            <div className="font-semibold text-zinc-900 truncate">
+                              {task.title}
+                            </div>
+                            {task.notes ? (
+                              <div className="text-xs text-zinc-500 mt-0.5 truncate">
+                                {task.notes}
+                              </div>
+                            ) : null}
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleTabChange('tasks')}
+                          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-amber-300 text-amber-950 hover:bg-amber-100 shrink-0"
+                        >
+                          Open Tasks
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {dayJobs.length > 0 && (
                   <div className="space-y-2">
-                    {dayJobs.map((lead) => {
+                    <div className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                      Jobs
+                    </div>
+                    {dayJobs.map((lead, leadIdx) => {
                       const name =
                         [lead.clientFirstName, lead.clientLastName]
                           .filter(Boolean)
                           .join(' ') || 'Untitled job';
                       return (
                         <div
-                          key={lead.id}
+                          key={`day-${lead.id}-${leadIdx}`}
                           className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-2xl border border-zinc-200 px-4 py-3"
                         >
                           <button
@@ -12608,20 +16850,66 @@ showToast(
                   </div>
                 )}
 
+                {dayGoogle.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                      Google Calendar
+                    </div>
+                    {dayGoogle.map((event) => {
+                      const startRaw =
+                        event.start?.dateTime || event.start?.date;
+                      const isAllDay = Boolean(
+                        event.start?.date && !event.start?.dateTime
+                      );
+                      const timeLabel = !startRaw
+                        ? '—'
+                        : isAllDay
+                          ? 'All day'
+                          : new Date(startRaw).toLocaleTimeString([], {
+                              hour: 'numeric',
+                              minute: '2-digit',
+                            });
+                      return (
+                        <div
+                          key={event.id}
+                          className="flex items-center gap-4 rounded-2xl border border-emerald-200 bg-emerald-50/40 px-4 py-3"
+                        >
+                          <div className="w-20 shrink-0 font-mono text-emerald-800/80 text-sm">
+                            {timeLabel}
+                          </div>
+                          <div className="flex-1 min-w-0 font-semibold text-zinc-900 truncate">
+                            {event.summary || '(No title)'}
+                          </div>
+                          {event.htmlLink ? (
+                            <a
+                              href={event.htmlLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs font-semibold text-emerald-800 border border-emerald-300 px-3 py-1 rounded-full shrink-0 hover:bg-emerald-100"
+                            >
+                              Open
+                            </a>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
                 {unscheduled.length > 0 && (
                   <div className="pt-2 border-t border-zinc-100">
                     <div className="text-xs font-medium uppercase tracking-wide text-zinc-400 mb-2">
                       Schedule on this day
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      {unscheduled.slice(0, 8).map((lead) => {
+                      {unscheduled.slice(0, 8).map((lead, leadIdx) => {
                         const name =
                           [lead.clientFirstName, lead.clientLastName]
                             .filter(Boolean)
                             .join(' ') || 'Untitled';
                         return (
                           <button
-                            key={lead.id}
+                            key={`unsch-${lead.id}-${leadIdx}`}
                             type="button"
                             onClick={() =>
                               scheduleLeadOnDay(lead.id, selectedIso)
@@ -12636,12 +16924,394 @@ showToast(
                   </div>
                 )}
 
-                {unscheduled.length === 0 && dayJobs.length === 0 && (
+                {!gcalConnected && (
                   <p className="text-sm text-zinc-500">
-                    All open jobs have dates, or create a new lead from Home.
+                    Connect Google to mirror bookings both ways. Needs{' '}
+                    <code className="text-xs bg-zinc-100 px-1 rounded">
+                      NEXT_PUBLIC_GOOGLE_CLIENT_ID
+                    </code>{' '}
+                    in{' '}
+                    <code className="text-xs bg-zinc-100 px-1 rounded">
+                      .env.local
+                    </code>
+                    .
                   </p>
                 )}
+
+                {gcalConnected &&
+                  unscheduled.length === 0 &&
+                  dayJobs.length === 0 &&
+                  dayGoogle.length === 0 &&
+                  dayTasks.length === 0 && (
+                    <p className="text-sm text-zinc-500">
+                      Empty day — schedule a job above, add a task, or refresh
+                      Google events.
+                    </p>
+                  )}
               </div>
+            </div>
+          );
+        })()}
+
+        {activeTab === 'tasks' && (() => {
+          const listId = activeTaskList?.id || DEFAULT_TASK_LIST_ID;
+          const listTasks = tasks.filter((t) => t.listId === listId);
+          const openTasks = listTasks.filter((t) => !t.completed);
+          const doneTasks = listTasks.filter((t) => t.completed);
+          return (
+            <div className="page-shell page-fade space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div>
+                  <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
+                    Tasks
+                  </h1>
+                  <p className="text-zinc-500 mt-1">
+                    {activeTaskList?.title || 'My Tasks'} · {openTasks.length}{' '}
+                    open
+                    {doneTasks.length ? ` · ${doneTasks.length} done` : ''}
+                    {gcalConnected
+                      ? gtasksNeedsReconnect
+                        ? ' · Reconnect Google for Tasks sync'
+                        : ' · Synced with Google Tasks'
+                      : ' · Saved on this device'}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {gcalConnected && gtasksNeedsReconnect ? (
+                    <button
+                      type="button"
+                      disabled={gcalBusy}
+                      onClick={() =>
+                        void connectGoogleCalendar({ forceConsent: true })
+                      }
+                      className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold disabled:opacity-50"
+                    >
+                      Reconnect for Tasks
+                    </button>
+                  ) : gcalConnected ? (
+                    <button
+                      type="button"
+                      disabled={tasksBusy}
+                      onClick={() => void syncTasksWithGoogle()}
+                      className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold disabled:opacity-50"
+                    >
+                      {tasksBusy ? 'Syncing…' : 'Refresh from Google'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={gcalBusy}
+                      onClick={() => void connectGoogleCalendar({ forceConsent: true })}
+                      className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold disabled:opacity-50"
+                    >
+                      Connect Google Tasks
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleTabChange('calendar')}
+                    className="px-5 py-2.5 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50"
+                  >
+                    View calendar
+                  </button>
+                </div>
+              </div>
+
+              {gtasksNeedsReconnect && gcalConnected ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-950">
+                  Google is connected for Calendar, but Tasks needs a fresh
+                  consent. Tap <strong>Reconnect for Tasks</strong> to grant{' '}
+                  <code className="text-xs bg-amber-100 px-1 rounded">
+                    tasks
+                  </code>{' '}
+                  scope (enable Google Tasks API in Cloud Console too).
+                </div>
+              ) : null}
+
+              <div className="rounded-3xl border border-zinc-200 bg-white p-5 sm:p-6 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="text-sm font-semibold text-zinc-900">
+                    Lists
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <input
+                      type="text"
+                      value={taskListDraftTitle}
+                      onChange={(e) => setTaskListDraftTitle(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void createTaskList();
+                      }}
+                      placeholder="New list name"
+                      className="rounded-2xl border border-zinc-200 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-300 min-w-[10rem]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void createTaskList()}
+                      className="px-4 py-2 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50"
+                    >
+                      Create list
+                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {taskLists.map((list) => {
+                    const count = tasks.filter(
+                      (t) => t.listId === list.id && !t.completed
+                    ).length;
+                    const active = list.id === listId;
+                    return (
+                      <div key={list.id} className="flex items-center gap-1">
+                        {renamingTaskListId === list.id ? (
+                          <form
+                            className="flex items-center gap-1"
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              void renameTaskList(list.id, renameTaskListTitle);
+                            }}
+                          >
+                            <input
+                              autoFocus
+                              type="text"
+                              value={renameTaskListTitle}
+                              onChange={(e) =>
+                                setRenameTaskListTitle(e.target.value)
+                              }
+                              className="rounded-xl border border-zinc-200 px-2 py-1.5 text-sm w-36"
+                            />
+                            <button
+                              type="submit"
+                              className="text-xs font-semibold text-sky-800 px-2 py-1"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRenamingTaskListId(null);
+                                setRenameTaskListTitle('');
+                              }}
+                              className="text-xs text-zinc-500 px-2 py-1"
+                            >
+                              Cancel
+                            </button>
+                          </form>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => persistActiveTaskListId(list.id)}
+                              className={`px-3 py-1.5 rounded-full text-sm font-semibold border transition-colors ${
+                                active
+                                  ? 'border-sky-500 bg-sky-50 text-zinc-900'
+                                  : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'
+                              }`}
+                            >
+                              {list.title}
+                              {count > 0 ? (
+                                <span className="ml-1.5 text-xs font-medium text-zinc-500">
+                                  {count}
+                                </span>
+                              ) : null}
+                            </button>
+                            <button
+                              type="button"
+                              title="Rename list"
+                              onClick={() => {
+                                setRenamingTaskListId(list.id);
+                                setRenameTaskListTitle(list.title);
+                              }}
+                              className="text-xs text-zinc-400 hover:text-zinc-700 px-1"
+                            >
+                              Rename
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-zinc-200 bg-white p-5 sm:p-6 space-y-4">
+                <div className="text-sm font-semibold text-zinc-900">
+                  Add task
+                  {activeTaskList ? (
+                    <span className="font-normal text-zinc-500">
+                      {' '}
+                      · {activeTaskList.title}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
+                  <input
+                    type="text"
+                    value={newTaskTitle}
+                    onChange={(e) => setNewTaskTitle(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void addTask();
+                    }}
+                    placeholder="What needs doing?"
+                    className="w-full rounded-2xl border border-zinc-200 px-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                  />
+                  <input
+                    type="date"
+                    value={newTaskDue}
+                    onChange={(e) => setNewTaskDue(e.target.value)}
+                    className="rounded-2xl border border-zinc-200 px-4 py-3 text-sm text-zinc-800 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                  />
+                </div>
+                <textarea
+                  value={newTaskNotes}
+                  onChange={(e) => setNewTaskNotes(e.target.value)}
+                  placeholder="Notes (optional)"
+                  rows={2}
+                  className="w-full rounded-2xl border border-zinc-200 px-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-300 resize-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => void addTask()}
+                  className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold"
+                >
+                  Add task
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                <div className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                  Open
+                </div>
+                {openTasks.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-zinc-200 bg-white px-4 py-10 text-center text-sm text-zinc-400">
+                    No open tasks in this list — add one above
+                  </div>
+                ) : (
+                  openTasks.map((task) => (
+                    <div
+                      key={task.id}
+                      className="rounded-2xl border border-zinc-200 bg-white px-4 py-3 flex flex-col sm:flex-row sm:items-start gap-3"
+                    >
+                      <button
+                        type="button"
+                        aria-label={`Complete ${task.title}`}
+                        onClick={() =>
+                          void updateTaskLocal(task.id, { completed: true })
+                        }
+                        className="mt-0.5 w-5 h-5 rounded border border-zinc-300 hover:border-emerald-500 hover:bg-emerald-50 shrink-0"
+                      />
+                      <div className="flex-1 min-w-0 space-y-2">
+                        <input
+                          type="text"
+                          value={task.title}
+                          onChange={(e) =>
+                            void updateTaskLocal(
+                              task.id,
+                              { title: e.target.value },
+                              { syncGoogle: false }
+                            )
+                          }
+                          onBlur={() => void flushTaskToGoogle(task.id)}
+                          className="w-full font-semibold text-zinc-900 bg-transparent border-0 p-0 focus:outline-none focus:ring-0"
+                        />
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            type="date"
+                            value={task.dueDate || ''}
+                            onChange={(e) =>
+                              void updateTaskLocal(task.id, {
+                                dueDate: e.target.value || undefined,
+                              })
+                            }
+                            className="rounded-lg border border-zinc-200 px-2 py-1 text-xs text-zinc-700"
+                          />
+                          {task.googleTaskId ? (
+                            <span className="text-[10px] font-medium uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                              Google
+                            </span>
+                          ) : null}
+                          {task.dueDate ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCalendarSelectedDay(task.dueDate!);
+                                setCalendarCursor(
+                                  new Date(task.dueDate! + 'T12:00:00')
+                                );
+                                handleTabChange('calendar');
+                              }}
+                              className="text-xs text-sky-700 hover:underline"
+                            >
+                              Show on calendar
+                            </button>
+                          ) : null}
+                        </div>
+                        <textarea
+                          value={task.notes || ''}
+                          onChange={(e) =>
+                            void updateTaskLocal(
+                              task.id,
+                              { notes: e.target.value || undefined },
+                              { syncGoogle: false }
+                            )
+                          }
+                          onBlur={() => void flushTaskToGoogle(task.id)}
+                          placeholder="Notes"
+                          rows={2}
+                          className="w-full rounded-xl border border-zinc-100 bg-zinc-50/80 px-3 py-2 text-xs text-zinc-700 resize-none"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void deleteTask(task.id)}
+                        className="text-xs font-medium text-zinc-500 hover:text-red-600 shrink-0"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {doneTasks.length > 0 ? (
+                <div className="space-y-3">
+                  <div className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                    Completed
+                  </div>
+                  {doneTasks.slice(0, 20).map((task) => (
+                    <div
+                      key={task.id}
+                      className="rounded-2xl border border-zinc-100 bg-zinc-50/80 px-4 py-3 flex items-center gap-3"
+                    >
+                      <button
+                        type="button"
+                        aria-label={`Reopen ${task.title}`}
+                        onClick={() =>
+                          void updateTaskLocal(task.id, { completed: false })
+                        }
+                        className="w-5 h-5 rounded border border-emerald-500 bg-emerald-500 text-white text-[10px] flex items-center justify-center shrink-0"
+                      >
+                        ✓
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-zinc-500 line-through truncate">
+                          {task.title}
+                        </div>
+                        {task.dueDate ? (
+                          <div className="text-[11px] text-zinc-400 mt-0.5">
+                            Due {task.dueDate}
+                          </div>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void deleteTask(task.id)}
+                        className="text-xs text-zinc-400 hover:text-red-600"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
           );
         })()}
@@ -12670,7 +17340,7 @@ showToast(
           const maxStage = Math.max(1, ...stageCounts.map((s) => s.count));
 
           return (
-            <div className="pb-8 w-full">
+            <div className="page-shell page-fade">
               <div className="mb-8">
                 <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
                   Performance
@@ -12771,7 +17441,7 @@ showToast(
         })()}
 
         {activeTab === 'tools' && (
-          <div className="pb-8 w-full">
+          <div className="page-shell page-fade">
             <div className="mb-8">
               <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
                 Tools
@@ -12781,6 +17451,18 @@ showToast(
               </p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <button
+                type="button"
+                onClick={() => handleTabChange('tasks')}
+                className="text-left bg-white border border-zinc-200 rounded-3xl p-6 sm:p-7 hover:border-sky-300 hover:shadow-sm transition"
+              >
+                <div className="text-xl font-semibold text-zinc-900 mb-1">
+                  Tasks
+                </div>
+                <p className="text-sm text-zinc-500">
+                  Manage to-dos · due dates show on Calendar
+                </p>
+              </button>
               <div className="bg-white border border-zinc-200 rounded-3xl p-6 sm:p-7">
                 <div className="text-xl font-semibold text-zinc-900 mb-1">
                   Weather Tracking
@@ -12798,7 +17480,7 @@ showToast(
         )}
 
         {activeTab === 'settings' && (
-          <div className="pb-8 w-full page-fade">
+          <div className="page-shell page-fade">
             <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
               Profile settings
             </h1>
@@ -12806,7 +17488,7 @@ showToast(
               Your contact appears on estimates and PDFs as the project manager.
             </p>
 
-            <div className="max-w-xl space-y-6">
+            <div className="space-y-6">
               <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6 space-y-4">
                 <div>
                   <h2 className="text-lg font-semibold text-zinc-900">
@@ -12861,11 +17543,11 @@ showToast(
               <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6 space-y-4">
                 <div>
                   <h2 className="text-lg font-semibold text-zinc-900">
-                    Google Calendar
+                    Google Calendar & Tasks
                   </h2>
                   <p className="text-sm text-zinc-500 mt-1">
-                    Connect your calendar and sync open jobs as all-day follow-ups
-                    (stage, address, and contact on the event).
+                    Connect once for Calendar (job follow-ups) and Tasks
+                    (bi-directional with Google Tasks).
                   </p>
                 </div>
 
@@ -12881,7 +17563,8 @@ showToast(
                       <code className="text-xs bg-zinc-200/80 px-1 rounded">
                         .env.local
                       </code>
-                      , enable the Google Calendar API, and add{' '}
+                      , enable the Google Calendar API and Google Tasks API, and
+                      add{' '}
                       <code className="text-xs bg-zinc-200/80 px-1 rounded">
                         http://localhost:3000
                       </code>{' '}
@@ -12900,11 +17583,34 @@ showToast(
                       </div>
                       {gcalLastSync && (
                         <div className="text-xs text-emerald-700/80 mt-1">
-                          Last sync{' '}
+                          Last calendar sync{' '}
                           {new Date(gcalLastSync).toLocaleString()}
                         </div>
                       )}
                     </div>
+                    {gtasksNeedsReconnect ? (
+                      <div className="rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-950">
+                        Calendar works, but Tasks needs re-consent for the{' '}
+                        <code className="text-xs bg-amber-100 px-1 rounded">
+                          tasks
+                        </code>{' '}
+                        scope.
+                        <div className="mt-2">
+                          <button
+                            type="button"
+                            disabled={gcalBusy}
+                            onClick={() =>
+                              void connectGoogleCalendar({
+                                forceConsent: true,
+                              })
+                            }
+                            className="btn-primary px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-50"
+                          >
+                            Reconnect for Tasks
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
@@ -12913,6 +17619,14 @@ showToast(
                         className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold disabled:opacity-50"
                       >
                         {gcalBusy ? 'Syncing…' : 'Sync jobs to calendar'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={tasksBusy || gtasksNeedsReconnect}
+                        onClick={() => void syncTasksWithGoogle()}
+                        className="px-5 py-2.5 rounded-2xl text-sm font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+                      >
+                        {tasksBusy ? 'Syncing…' : 'Sync tasks'}
                       </button>
                       <button
                         type="button"
@@ -12929,10 +17643,17 @@ showToast(
                       >
                         View calendar
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => handleTabChange('tasks')}
+                        className="px-5 py-2.5 rounded-2xl text-sm font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                      >
+                        Open Tasks
+                      </button>
                     </div>
                     <p className="text-xs text-zinc-400">
-                      Closed jobs are skipped. Re-sync updates existing events when
-                      a job already has a calendar link.
+                      Closed jobs are skipped. Tasks sync with your Google Tasks
+                      default list.
                     </p>
                   </div>
                 ) : (
@@ -12940,7 +17661,9 @@ showToast(
                     <button
                       type="button"
                       disabled={gcalBusy}
-                      onClick={connectGoogleCalendar}
+                      onClick={() =>
+                        void connectGoogleCalendar({ forceConsent: true })
+                      }
                       className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold inline-flex items-center gap-2"
                     >
                       <svg
@@ -12953,11 +17676,11 @@ showToast(
                           d="M19.5 3h-2V1.5h-1.5V3h-7.5V1.5H6.75V3h-2A1.5 1.5 0 0 0 3.25 4.5v15A1.5 1.5 0 0 0 4.75 21h14.75a1.5 1.5 0 0 0 1.5-1.5v-15A1.5 1.5 0 0 0 19.5 3Zm0 16.5H4.75v-11h14.75v11Z"
                         />
                       </svg>
-                      Connect Google Calendar
+                      Connect Google
                     </button>
                     <p className="text-xs text-zinc-400">
-                      You’ll authorize Summit to create and update events on your
-                      primary calendar only.
+                      You’ll authorize {appDisplayName()} for Calendar events and
+                      Google Tasks.
                     </p>
                   </div>
                 )}
@@ -13027,15 +17750,7 @@ showToast(
               </section>
 
               <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6 space-y-4">
-                <div>
-                  <h2 className="text-lg font-semibold text-zinc-900">
-                    Profile
-                  </h2>
-                  <p className="text-sm text-zinc-500 mt-1">
-                    Name drives the Home greeting — e.g. “
-                    {timeOfDayGreeting()}, {firstNameFrom(userName, 'Joe')}”.
-                  </p>
-                </div>
+                <h2 className="text-lg font-semibold text-zinc-900">Profile</h2>
                 <div>
                   <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 mb-1.5">
                     Full name
@@ -13044,7 +17759,7 @@ showToast(
                     value={userName}
                     onChange={(e) => setUserName(e.target.value)}
                     className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base focus:outline-none focus:border-zinc-400 bg-white"
-                    placeholder="Joe Roslie"
+                    placeholder=""
                   />
                 </div>
                 <div>
@@ -13055,22 +17770,19 @@ showToast(
                     value={userTitle}
                     onChange={(e) => setUserTitle(e.target.value)}
                     className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base focus:outline-none focus:border-zinc-400 bg-white"
-                    placeholder="Project Manager"
+                    placeholder=""
                   />
                 </div>
                 <div>
                   <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 mb-1.5">
-                    Company
+                    Personal company / LLC
                   </div>
                   <input
                     value={userCompany}
                     onChange={(e) => setUserCompany(e.target.value)}
                     className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base focus:outline-none focus:border-zinc-400 bg-white"
-                    placeholder="Summit Roofing"
+                    placeholder=""
                   />
-                  <p className="text-xs text-zinc-400 mt-1.5">
-                    Shown on estimates, mitigation invoices, photo reports, and PDFs as your company brand.
-                  </p>
                 </div>
                 <div>
                   <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 mb-1.5">
@@ -13080,7 +17792,7 @@ showToast(
                     value={userPhone}
                     onChange={setUserPhone}
                     className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base focus:outline-none focus:border-zinc-400 bg-white"
-                    placeholder="(253) 381-2035"
+                    placeholder=""
                   />
                 </div>
                 <div>
@@ -13091,13 +17803,163 @@ showToast(
                     value={userEmail}
                     onChange={(e) => setUserEmail(e.target.value)}
                     className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base focus:outline-none focus:border-zinc-400 bg-white"
-                    placeholder="joe.roslie@prowest.com"
+                    placeholder=""
                     inputMode="email"
                   />
                 </div>
-                <p className="text-xs text-zinc-400 pt-1">
-                  Used on professional estimates and PDF downloads.
-                </p>
+              </section>
+
+              <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6 space-y-4">
+                <h2 className="text-lg font-semibold text-zinc-900">Company</h2>
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 mb-1.5">
+                    Logo
+                  </div>
+                  <div className="flex items-center gap-4">
+                    {renderAppMark({ size: 'lg' })}
+                    <div className="flex flex-wrap gap-2">
+                      <label className="btn-primary px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer">
+                        {appLogoDataUrl() ? 'Replace logo' : 'Upload logo'}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) void handleCompanyLogoFile(f);
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
+                      {appLogoDataUrl() ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCompanySettings({
+                              ...companySettings,
+                              logoDataUrl: '',
+                            })
+                          }
+                          className="px-4 py-2 rounded-xl text-sm font-semibold border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                        >
+                          Use Summit logo
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 mb-1.5">
+                    Company
+                  </div>
+                  <input
+                    value={companySettings.company}
+                    onChange={(e) =>
+                      setCompanySettings({
+                        ...companySettings,
+                        company: e.target.value,
+                      })
+                    }
+                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base focus:outline-none focus:border-zinc-400 bg-white"
+                    placeholder=""
+                  />
+                </div>
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 mb-1.5">
+                    Project Manager
+                  </div>
+                  <input
+                    value={companySettings.projectManager}
+                    onChange={(e) =>
+                      setCompanySettings({
+                        ...companySettings,
+                        projectManager: e.target.value,
+                      })
+                    }
+                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base focus:outline-none focus:border-zinc-400 bg-white"
+                    placeholder=""
+                  />
+                </div>
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 mb-1.5">
+                    Project manager phone
+                  </div>
+                  <PhoneInput
+                    value={companySettings.projectManagerPhone}
+                    onChange={(v) =>
+                      setCompanySettings({
+                        ...companySettings,
+                        projectManagerPhone: v,
+                      })
+                    }
+                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base focus:outline-none focus:border-zinc-400 bg-white"
+                    placeholder=""
+                  />
+                </div>
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 mb-1.5">
+                    Business address
+                  </div>
+                  <input
+                    value={companySettings.address}
+                    onChange={(e) =>
+                      setCompanySettings({
+                        ...companySettings,
+                        address: e.target.value,
+                      })
+                    }
+                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base focus:outline-none focus:border-zinc-400 bg-white"
+                    placeholder=""
+                  />
+                </div>
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 mb-1.5">
+                    Office phone
+                  </div>
+                  <PhoneInput
+                    value={companySettings.phone}
+                    onChange={(v) =>
+                      setCompanySettings({
+                        ...companySettings,
+                        phone: v,
+                      })
+                    }
+                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base focus:outline-none focus:border-zinc-400 bg-white"
+                    placeholder=""
+                  />
+                </div>
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 mb-1.5">
+                    Business fax
+                  </div>
+                  <PhoneInput
+                    value={companySettings.fax}
+                    onChange={(v) =>
+                      setCompanySettings({
+                        ...companySettings,
+                        fax: v,
+                      })
+                    }
+                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base focus:outline-none focus:border-zinc-400 bg-white"
+                    placeholder=""
+                  />
+                </div>
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 mb-1.5">
+                    ROC#
+                  </div>
+                  <input
+                    value={companySettings.license}
+                    onChange={(e) =>
+                      setCompanySettings({
+                        ...companySettings,
+                        license: e.target.value,
+                      })
+                    }
+                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base focus:outline-none focus:border-zinc-400 bg-white"
+                    placeholder=""
+                  />
+                </div>
               </section>
 
               <div className="flex flex-col sm:flex-row sm:items-center gap-3">
@@ -13108,9 +17970,6 @@ showToast(
                 >
                   Save Settings
                 </button>
-                <p className="text-xs text-zinc-400">
-                  Saves profile and appearance on this device.
-                </p>
               </div>
             </div>
           </div>
@@ -13511,9 +18370,9 @@ showToast(
 
                             {/* Cards scroll inside column — board uses full viewport height */}
                             <div className="space-y-2 min-h-[100px] flex-1 overflow-y-auto overscroll-contain">
-                              {stageLeads.map((lead) => (
+                              {stageLeads.map((lead, leadIdx) => (
                                 <div
-                                  key={lead.id}
+                                  key={`board-${lead.id}-${leadIdx}`}
                                   draggable
                                   onDragStart={(e) => {
                                     setDragLeadId(lead.id);
@@ -14166,7 +19025,7 @@ showToast(
                   <div className="text-xs text-zinc-500 mb-1">WASTE FACTOR</div>
                   <select value={waste} onChange={(e) => setWaste(e.target.value)} className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900">
                     <option value="">0% (None)</option>
-                    <option value="0.05">5%</option><option value="0.06">6%</option><option value="0.07">7%</option><option value="0.08">8%</option><option value="0.09">9%</option><option value="0.10">10%</option><option value="0.11">11%</option><option value="0.12">12%</option><option value="0.13">13%</option><option value="0.14">14%</option><option value="0.15">15%</option>
+                    <option value="0.05">5%</option><option value="0.06">6%</option><option value="0.07">7%</option><option value="0.08">8%</option><option value="0.09">9%</option><option value="0.10">10%</option><option value="0.11">11%</option><option value="0.12">12%</option><option value="0.13">13%</option><option value="0.14">14%</option><option value="0.15">15%</option><option value="0.16">16%</option><option value="0.18">18%</option><option value="0.20">20%</option><option value="0.22">22%</option><option value="0.25">25%</option>
                   </select>
                 </div>
                 <div className="bg-white rounded-3xl p-5 border border-zinc-200">
@@ -15274,7 +20133,9 @@ showToast(
               const profileNotes = profileLead?.notes || [];
               const profileEstimates = profileLead?.estimates || [];
               const profilePhotos = profileLead?.photos || [];
-              const profileDocuments = profileLead?.documents || [];
+              const profileDocuments = (profileLead?.documents || []).filter(
+                (d) => !isEstimatePdfDocument(d)
+              );
               const profileMeasurements = profileLead?.measurements || [];
               // Combined session report: draft sections + current outline
               const currentSectionPreview =
@@ -16043,55 +20904,141 @@ showToast(
 
                           {/* Map or start */}
                           {!showTracer && !geocoding && (
-                            <div className="rounded-3xl bg-zinc-100 border border-zinc-100 px-6 py-12 text-center space-y-4">
-                              <p className="text-sm text-zinc-500">
-                                {hasProfileAddress
-                                  ? 'Trace the roof on satellite to measure'
-                                  : 'Add a property address on the lead, then open the map'}
-                              </p>
-                              
-                          <div className="flex flex-wrap items-center justify-center gap-2">
-                            <input
-                              ref={measurementFileRef}
-                              type="file"
-                              accept="application/pdf,.pdf,image/*"
-                              className="hidden"
-                              onChange={(e) => {
-                                void uploadMeasurementReport(e.target.files);
-                                e.target.value = '';
-                              }}
-                            />
-                            <button
-                                type="button"
-                                onClick={() => {
-                                  if (!hasProfileAddress) {
-                                    setProfileTab('overview');
-                                    showToast('Add a property address under Overview first');
-                                    return;
+                            <div className="rounded-3xl bg-zinc-100 border border-zinc-100 px-6 py-12 text-center space-y-5">
+                              <div className="space-y-1">
+                                <p className="text-sm font-medium text-zinc-800">
+                                  Get the roof numbers
+                                </p>
+                                <p className="text-sm text-zinc-500 max-w-md mx-auto">
+                                  {hasProfileAddress
+                                    ? 'Upload an EagleView when you have one. Otherwise auto-measure or trace the roof on the map.'
+                                    : 'Add a property address on Overview first, then measure.'}
+                                </p>
+                              </div>
+
+                              <div className="flex flex-wrap items-center justify-center gap-2">
+                                <input
+                                  ref={measurementFileRef}
+                                  type="file"
+                                  accept="application/pdf,.pdf,image/*"
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    void uploadMeasurementReport(e.target.files);
+                                    e.target.value = '';
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    measurementFileRef.current?.click()
                                   }
-                                  void startNewMeasurementOnLead();
-                                }}
-                                className="btn-primary px-8 py-3 rounded-full text-sm font-semibold"
-                              >
-                                {hasProfileAddress ? 'Open map' : 'Add address first'}
-                              </button>
-                            <button
-                              type="button"
-                              disabled={solarMeasuring || !hasProfileAddress}
-                              onClick={() => void runSolarAutoMeasure()}
-                              className="px-8 py-3 rounded-full text-sm font-semibold border border-zinc-200 bg-white text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
-                              title="Google Solar auto-measure (needs API key)"
-                            >
-                              {solarMeasuring ? 'Measuring…' : 'Auto-measure'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => measurementFileRef.current?.click()}
-                              className="btn-primary px-8 py-3 rounded-full text-sm font-semibold"
-                            >
-                              + Upload
-                            </button>
-                          </div>
+                                  className="btn-primary px-7 py-3 rounded-full text-sm font-semibold"
+                                  title="Upload EagleView / Roofr PDF — fills squares, pitch, ridge, hip, eave, rake"
+                                >
+                                  Upload EagleView
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={solarMeasuring || !hasProfileAddress}
+                                  onClick={() => void runSolarAutoMeasure()}
+                                  className="px-7 py-3 rounded-full text-sm font-semibold border border-zinc-200 bg-white text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
+                                  title="Instant Roofer AI (~$1–3) when your key is enabled"
+                                >
+                                  {solarMeasuring ? 'Measuring…' : 'Auto-measure'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!hasProfileAddress) {
+                                      setProfileTab('overview');
+                                      showToast(
+                                        'Add a property address under Overview first'
+                                      );
+                                      return;
+                                    }
+                                    void startNewMeasurementOnLead();
+                                  }}
+                                  className="px-7 py-3 rounded-full text-sm font-semibold border border-zinc-200 bg-white text-zinc-800 hover:bg-zinc-50"
+                                >
+                                  {hasProfileAddress
+                                    ? 'Trace on map'
+                                    : 'Add address first'}
+                                </button>
+                              </div>
+
+                              <div className="relative inline-flex justify-center">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setMeasureMoreOpen((o) => !o)
+                                  }
+                                  className="text-sm font-medium text-zinc-500 hover:text-zinc-800 px-3 py-1.5"
+                                >
+                                  More options
+                                </button>
+                                {measureMoreOpen && (
+                                  <div className="absolute top-full mt-1 z-20 min-w-[220px] rounded-2xl border border-zinc-200 bg-white shadow-lg p-1.5 text-left">
+                                    <button
+                                      type="button"
+                                      disabled={
+                                        humanOrdering || !hasProfileAddress
+                                      }
+                                      onClick={() => {
+                                        setMeasureMoreOpen(false);
+                                        void orderHumanCertifiedMeasure();
+                                      }}
+                                      className="w-full text-left px-3 py-2.5 rounded-xl text-sm text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
+                                      title="Instant Roofer Human Certified (~$10, ~1 hour) — includes ridge/hip/eave/rake"
+                                    >
+                                      {humanOrdering
+                                        ? 'Ordering…'
+                                        : 'Order human report (~$10)'}
+                                    </button>
+                                    <p className="px-3 pb-2 text-[11px] text-zinc-400 leading-snug">
+                                      Optional when you need certified edges and
+                                      don’t have an EagleView.
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          {humanOrders.length > 0 && (
+                            <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-2">
+                              <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                                Instant Roofer human orders
+                              </div>
+                              {humanOrders.slice(0, 5).map((o) => (
+                                <div
+                                  key={o.id}
+                                  className="flex items-center gap-2 rounded-xl border border-zinc-100 px-3 py-2.5"
+                                >
+                                  <div className="flex-1 min-w-0">
+                                    <div className="text-sm font-medium text-zinc-900 truncate">
+                                      {o.address || 'Human Certified'}
+                                    </div>
+                                    <div className="text-xs text-zinc-400">
+                                      {o.status}
+                                      {o.failureReason ? ` · ${o.failureReason}` : ''}
+                                    </div>
+                                  </div>
+                                  {o.reportUrl ? (
+                                    <a
+                                      href={o.reportUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="text-sm font-semibold text-sky-700 hover:underline shrink-0"
+                                    >
+                                      Open
+                                    </a>
+                                  ) : (
+                                    <span className="text-xs text-zinc-400 shrink-0">
+                                      ~1 hr
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
                             </div>
                           )}
 
@@ -16287,6 +21234,12 @@ showToast(
                                   </button>
                                 </div>
                               </div>
+
+                              {autoMeasureHint && (
+                                <p className="text-xs text-center text-zinc-600 bg-zinc-100 rounded-xl px-3 py-2">
+                                  {autoMeasureHint}
+                                </p>
+                              )}
 
                               <RoofTracer
                                 key={`trace-${mapSessionKey}-${currentLeadId ?? 'n'}-${mapCenter ? `${mapCenter.lat.toFixed(5)},${mapCenter.lng.toFixed(5)}` : 'x'}`}
@@ -16484,7 +21437,9 @@ showToast(
                                         Ridge
                                       </div>
                                       <div className="text-base font-semibold tabular-nums text-zinc-800 mt-0.5">
-                                        {sessionReport.ridgeLF} lf
+                                        {(sessionReport.ridgeLF || 0) > 0
+                                          ? `${sessionReport.ridgeLF} lf`
+                                          : '—'}
                                       </div>
                                     </div>
                                     <div>
@@ -16492,7 +21447,9 @@ showToast(
                                         Eave
                                       </div>
                                       <div className="text-base font-semibold tabular-nums text-zinc-800 mt-0.5">
-                                        {sessionReport.eaveLF} lf
+                                        {(sessionReport.eaveLF || 0) > 0
+                                          ? `${sessionReport.eaveLF} lf`
+                                          : '—'}
                                       </div>
                                     </div>
                                   </div>
@@ -16532,9 +21489,9 @@ showToast(
                               <p className="text-[11px] font-medium uppercase tracking-wider text-zinc-400 px-1 mb-2">
                                 Saved
                               </p>
-                              {[...profileMeasurements].reverse().map((m) => (
+                              {[...profileMeasurements].reverse().map((m, mIdx) => (
                                 <div
-                                  key={m.id}
+                                  key={`meas-${m.id}-${mIdx}`}
                                   className="flex items-center gap-3 px-3 py-3 rounded-2xl hover:bg-zinc-100 transition-colors"
                                 >
                                   <button
@@ -17077,7 +22034,7 @@ showToast(
                                   profileNotes.length - 1 - reverseIndex;
                                 return (
                                 <div
-                                  key={`${note.date}-${noteIndex}`}
+                                  key={note.id || `${note.date}-${noteIndex}`}
                                   className="relative pl-6 border-l-2 border-zinc-200"
                                 >
                                   <div className="absolute -left-[7px] top-1.5 w-3 h-3 rounded-full bg-zinc-400 border-2 border-white shadow" />
@@ -17130,7 +22087,7 @@ showToast(
                             <div className="space-y-3">
                               {profileEstimates.map((est, index) => (
                                 <div
-                                  key={est.id ?? index}
+                                  key={`est-${est.id ?? 'n'}-${index}`}
                                   className="w-full border border-zinc-200 rounded-2xl p-5 hover:border-sky-300 hover:bg-zinc-100 transition-colors"
                                 >
                                   <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
@@ -17147,7 +22104,7 @@ showToast(
                                         {est.selectedShingle || 'No shingle'}
                                       </div>
                                     </button>
-                                    <div className="flex items-center gap-3 shrink-0">
+                                    <div className="flex items-center gap-2 shrink-0">
                                       <div className="text-xl font-semibold text-emerald-700">
                                         $
                                         {(
@@ -17156,9 +22113,21 @@ showToast(
                                           0
                                         ).toLocaleString()}
                                       </div>
+                                      {est.pdfUrl ? (
+                                        <a
+                                          href={est.pdfUrl}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="text-xs font-semibold text-sky-700 hover:underline px-2 py-1"
+                                        >
+                                          PDF
+                                        </a>
+                                      ) : null}
                                       <button
                                         type="button"
-                                        onClick={() => removeLeadEstimate(est.id)}
+                                        onClick={() =>
+                                          removeLeadEstimate(est.id, index)
+                                        }
                                         className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
                                       >
                                         Delete
@@ -17427,6 +22396,16 @@ showToast(
                 type="button"
                 className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
                 onClick={() => {
+                  setDocAddMenuOpen(false);
+                  openEmergencyAgreement(currentLeadId);
+                }}
+              >
+                Mitigation Service Agreement
+              </button>
+              <button
+                type="button"
+                className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
+                onClick={() => {
                   openSystemDoc('takeoff');
                 }}
               >
@@ -17619,13 +22598,32 @@ showToast(
                   Close
                 </button>
               </div>
-              <div className="px-5 py-3 border-b border-zinc-50">
+              <div className="px-5 py-3 border-b border-zinc-50 space-y-3">
                 <input
                   value={photoReportTitle}
                   onChange={(e) => setPhotoReportTitle(e.target.value)}
                   className="w-full border border-zinc-200 rounded-2xl px-4 py-2.5 text-sm text-zinc-900"
                   placeholder="Report title"
                 />
+                <label className="flex items-start gap-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={photoReportIncludeBranding}
+                    onChange={(e) =>
+                      setPhotoReportIncludeBranding(e.target.checked)
+                    }
+                    className="mt-1 rounded border-zinc-300"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium text-zinc-900">
+                      Include logo & company
+                    </span>
+                    <span className="block text-xs text-zinc-500 mt-0.5">
+                      Turn off for a bland report (e.g. personal LLC mitigation
+                      + service agreement).
+                    </span>
+                  </span>
+                </label>
               </div>
               <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
                 {photos.map((p) => {

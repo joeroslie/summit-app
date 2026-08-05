@@ -8,16 +8,24 @@ import {
   type LeadCalendarPayload,
   type SyncLeadResult,
 } from '@/lib/google-calendar';
+import { GOOGLE_TASKS_SCOPE } from '@/lib/google-tasks';
 
-export const GCAL_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+/** Calendar + Tasks — reconnect required after Tasks scope was added. */
+export const GCAL_SCOPE = [
+  'https://www.googleapis.com/auth/calendar.events',
+  GOOGLE_TASKS_SCOPE,
+].join(' ');
 const TOKEN_KEY = 'summit_gcal_browser_token';
 const TOKEN_EXP_KEY = 'summit_gcal_browser_token_exp';
 const EMAIL_KEY = 'summit_gcal_browser_email';
+const SCOPES_KEY = 'summit_gcal_browser_scopes';
 
 export type BrowserGcalSession = {
   accessToken: string;
   expiresAt: number;
   email?: string;
+  /** Space-joined scopes granted for this token (best-effort). */
+  scopes?: string;
 };
 
 declare global {
@@ -72,6 +80,7 @@ export function readBrowserGcalSession(): BrowserGcalSession | null {
       accessToken,
       expiresAt,
       email: sessionStorage.getItem(EMAIL_KEY) || undefined,
+      scopes: sessionStorage.getItem(SCOPES_KEY) || undefined,
     };
   } catch {
     return null;
@@ -83,6 +92,8 @@ export function writeBrowserGcalSession(session: BrowserGcalSession) {
   sessionStorage.setItem(TOKEN_EXP_KEY, String(session.expiresAt));
   if (session.email) sessionStorage.setItem(EMAIL_KEY, session.email);
   else sessionStorage.removeItem(EMAIL_KEY);
+  if (session.scopes) sessionStorage.setItem(SCOPES_KEY, session.scopes);
+  else sessionStorage.removeItem(SCOPES_KEY);
 }
 
 export function clearBrowserGcalSession() {
@@ -90,9 +101,20 @@ export function clearBrowserGcalSession() {
     sessionStorage.removeItem(TOKEN_KEY);
     sessionStorage.removeItem(TOKEN_EXP_KEY);
     sessionStorage.removeItem(EMAIL_KEY);
+    sessionStorage.removeItem(SCOPES_KEY);
   } catch {
     /* ignore */
   }
+}
+
+/** True when stored session was granted with Tasks scope (or unknown / legacy). */
+export function browserSessionHasTasksScope(
+  session?: BrowserGcalSession | null
+): boolean {
+  const s = session ?? readBrowserGcalSession();
+  if (!s) return false;
+  if (!s.scopes) return false; // legacy token — must reconnect for Tasks
+  return s.scopes.includes(GOOGLE_TASKS_SCOPE);
 }
 
 let gsiLoadPromise: Promise<void> | null = null;
@@ -146,8 +168,11 @@ async function fetchTokenEmail(accessToken: string): Promise<string | undefined>
 
 /**
  * Opens Google account picker / consent and stores an access token in sessionStorage.
+ * Pass forceConsent when adding new scopes (e.g. Tasks) so Google re-prompts.
  */
-export function connectGoogleCalendarBrowser(): Promise<BrowserGcalSession> {
+export function connectGoogleCalendarBrowser(opts?: {
+  forceConsent?: boolean;
+}): Promise<BrowserGcalSession> {
   const clientId = getPublicGoogleClientId();
   if (!clientId) {
     return Promise.reject(
@@ -187,6 +212,7 @@ export function connectGoogleCalendarBrowser(): Promise<BrowserGcalSession> {
                 accessToken: resp.access_token,
                 expiresAt: Date.now() + expiresIn * 1000,
                 email,
+                scopes: GCAL_SCOPE,
               };
               writeBrowserGcalSession(session);
               resolve(session);
@@ -197,8 +223,10 @@ export function connectGoogleCalendarBrowser(): Promise<BrowserGcalSession> {
           },
         });
 
-        // Empty prompt reuses prior grant when possible; first time shows consent
-        client.requestAccessToken({});
+        // Empty prompt reuses prior grant when possible; consent for new scopes
+        client.requestAccessToken(
+          opts?.forceConsent ? { prompt: 'consent' } : {}
+        );
       })
   );
 }

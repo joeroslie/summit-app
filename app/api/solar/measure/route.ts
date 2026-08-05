@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { outlineFromSolarBoxes, type LatLngBox } from '@/lib/roof-outline';
 
 /**
- * Google Solar API — Building Insights (EagleView/Roofr-style auto measure).
+ * Google Solar API — Building Insights (best free squares + pitch).
  *
  * Setup:
  * 1. Google Cloud Console → enable "Solar API"
@@ -10,8 +11,9 @@ import { NextRequest, NextResponse } from 'next/server';
  *      GOOGLE_SOLAR_API_KEY=your-key
  *    (falls back to GOOGLE_MAPS_API_KEY if set)
  *
- * Free tier: Google Cloud often includes ~$200/mo credit (~hundreds–1000s of
- * building lookups). Not a Roofr human-certified report — field-verify.
+ * Free tier: Google Cloud often includes ~$200/mo credit.
+ * Does NOT return ridge/hip/rake/eave lengths — those stay blank until
+ * field entry or a paid certified report.
  *
  * GET /api/solar/measure?lat=33.44&lng=-112.07
  */
@@ -21,6 +23,8 @@ export const runtime = 'nodejs';
 type SolarSegment = {
   pitchDegrees?: number;
   azimuthDegrees?: number;
+  center?: { latitude?: number; longitude?: number };
+  boundingBox?: LatLngBox;
   stats?: {
     areaMeters2?: number;
     groundAreaMeters2?: number;
@@ -30,7 +34,9 @@ type SolarSegment = {
 type BuildingInsights = {
   name?: string;
   center?: { latitude?: number; longitude?: number };
+  boundingBox?: LatLngBox;
   imageryDate?: { year?: number; month?: number; day?: number };
+  imageryQuality?: string;
   solarPotential?: {
     wholeRoofStats?: {
       areaMeters2?: number;
@@ -51,6 +57,18 @@ function pitchDegreesToTwelfths(deg: number): string {
 function meters2ToSquares(m2: number): number {
   const sqFt = m2 * 10.76391041671;
   return Math.round((sqFt / 100) * 10) / 10;
+}
+
+function meters2ToSqFt(m2: number): number {
+  return Math.round(m2 * 10.76391041671 * 10) / 10;
+}
+
+/** Waste hint from facet count — still editable. */
+function wasteFromSegments(n: number): number {
+  if (n <= 2) return 0.08;
+  if (n <= 4) return 0.1;
+  if (n <= 8) return 0.12;
+  return 0.15;
 }
 
 export async function GET(req: NextRequest) {
@@ -111,25 +129,48 @@ export async function GET(req: NextRequest) {
 
     const roof = raw.solarPotential;
     const wholeM2 = roof?.wholeRoofStats?.areaMeters2 ?? 0;
-    const segments = roof?.roofSegmentStats || [];
+    const segments = [...(roof?.roofSegmentStats || [])].sort(
+      (a, b) =>
+        (b.stats?.areaMeters2 || 0) - (a.stats?.areaMeters2 || 0)
+    );
+
     let dominantPitch = '6/12';
+    let secondaryPitch: string | undefined;
+    let secondaryFraction: number | undefined;
     if (segments.length > 0) {
-      const best = [...segments].sort(
-        (a, b) =>
-          (b.stats?.areaMeters2 || 0) - (a.stats?.areaMeters2 || 0)
-      )[0];
+      const best = segments[0];
       if (best?.pitchDegrees != null) {
         dominantPitch = pitchDegreesToTwelfths(best.pitchDegrees);
+      }
+      const totalArea = segments.reduce(
+        (s, seg) => s + (seg.stats?.areaMeters2 || 0),
+        0
+      );
+      if (segments.length > 1 && totalArea > 0) {
+        const second = segments[1];
+        const frac = (second.stats?.areaMeters2 || 0) / totalArea;
+        if (frac >= 0.12 && second.pitchDegrees != null) {
+          const sp = pitchDegreesToTwelfths(second.pitchDegrees);
+          if (sp !== dominantPitch) {
+            secondaryPitch = sp;
+            secondaryFraction = Math.round(frac * 100) / 100;
+          }
+        }
       }
     }
 
     const squares = wholeM2 > 0 ? meters2ToSquares(wholeM2) : 0;
     const footprintM2 =
-      roof?.wholeRoofStats?.groundAreaMeters2 ??
-      wholeM2;
-    const footprintSqFt =
-      Math.round(footprintM2 * 10.76391041671 * 10) / 10;
-    const surfaceSqFt = Math.round(wholeM2 * 10.76391041671 * 10) / 10;
+      roof?.wholeRoofStats?.groundAreaMeters2 ?? wholeM2;
+    const footprintSqFt = meters2ToSqFt(footprintM2);
+    const surfaceSqFt = meters2ToSqFt(wholeM2);
+
+    const outlinePoints = outlineFromSolarBoxes({
+      buildingBox: raw.boundingBox,
+      segmentBoxes: segments
+        .map((s) => s.boundingBox)
+        .filter(Boolean) as LatLngBox[],
+    });
 
     return NextResponse.json({
       ok: true,
@@ -139,18 +180,25 @@ export async function GET(req: NextRequest) {
         lng: raw.center?.longitude ?? lng,
       },
       imageryDate: raw.imageryDate || null,
+      imageryQuality: raw.imageryQuality || null,
       pitch: dominantPitch,
+      secondaryPitch: secondaryPitch || null,
+      secondaryFraction: secondaryFraction ?? null,
+      waste: wasteFromSegments(segments.length),
       squares,
       footprintSqFt,
       surfaceSqFt,
       segmentCount: segments.length,
+      outlinePoints,
+      edgesVerified: false,
       segments: segments.map((s) => ({
         pitch: pitchDegreesToTwelfths(s.pitchDegrees ?? 0),
         pitchDegrees: s.pitchDegrees ?? null,
         azimuthDegrees: s.azimuthDegrees ?? null,
         areaSquares: meters2ToSquares(s.stats?.areaMeters2 || 0),
       })),
-      note: 'Auto measure from Google Solar — field-verify before ordering material.',
+      note:
+        'Google Solar squares & pitch. Ridge/hip/rake not included — enter on estimate after field check, or upgrade to paid measure later.',
     });
   } catch (err) {
     console.error('solar measure', err);

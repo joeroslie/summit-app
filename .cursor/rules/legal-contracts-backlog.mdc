@@ -1,0 +1,19 @@
+---
+description: Backlog — cash contracts + insurance contracts (legal docs, not built yet)
+alwaysApply: true
+---
+
+# Legal contracts (planned — not built yet)
+
+**TODO:** Implement **cash contracts** and **insurance contracts**.
+
+## Requirements
+
+- These are **legal documents** — must be **100% accurate**.
+- Revamp ProWest contracts to twin the existing docs UI/PDF system (estimates, mitigation invoice, mitigation service agreement).
+- **All verbiage must stay the same** — do not invent, rewrite, or “improve” contract language.
+- Source of truth: existing ProWest cash / insurance contract text Joe provides or already has on file.
+
+## Agent reminder
+
+Do **not** implement until Joe asks, or you are continuing an active contracts task. Prefer matching the current company-branded document chrome (logo, contractor header, PM block, PDF twin of on-screen preview) while preserving legal text exactly.

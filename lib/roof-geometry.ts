@@ -94,6 +94,23 @@ export type RoofMeasurement = {
   overrides?: MetricOverrides;
   /** Multi-section report: pitched + flat (and more) planes */
   sections?: RoofSection[];
+  /**
+   * Where squares/pitch came from. Edge lengths are only safe for materials
+   * when edgesVerified is true (manual entry or paid certified report).
+   */
+  measureSource?:
+    | 'trace'
+    | 'manual'
+    | 'google_solar'
+    | 'osm_footprint'
+    | 'hybrid'
+    | 'instant_roofer'
+    | 'eagleview'
+    | 'roofr';
+  /** True only when ridge/hip/eave/rake/valley were measured or entered — not guessed. */
+  edgesVerified?: boolean;
+  /** EagleView drip edge (eaves + rakes) when available */
+  dripEdgeLF?: number;
 };
 
 export const PITCH_MULTIPLIERS: Record<string, number> = {
@@ -306,8 +323,12 @@ export type RoofMetricsResult = {
 };
 
 /**
- * Classify edges into eave/rake/ridge/hip/valley heuristics from 2D outline.
- * Good enough for field takeoff without 3D data.
+ * Linear feet from a 2D outline only.
+ *
+ * Perimeter is real. Ridge / hip / rake / valley cannot be known from a
+ * footprint alone — inventing them inflated ridge vent / drip edge. Leave
+ * those at 0 unless the user (or a certified report) supplies overrides.
+ * Flat roofs: treat the full outline as eave/parapet.
  */
 function classifyLinearFeet(
   points: LatLngPoint[],
@@ -324,14 +345,9 @@ function classifyLinearFeet(
     return { ridgeLF: 0, hipLF: 0, eaveLF: 0, rakeLF: 0, valleyLF: 0 };
   }
 
-  const sorted = [...edges].sort((a, b) => b - a);
-  const longest = sorted[0] || 0;
-  const second = sorted[1] || longest * 0.5;
   const perimeter = edges.reduce((s, n) => s + n, 0);
-  const n = edges.length;
 
   if (roofType === 'flat-modified-bitumen') {
-    // Flat: all edges are eaves/parapet; no ridge/hip
     return {
       ridgeLF: 0,
       hipLF: 0,
@@ -341,49 +357,13 @@ function classifyLinearFeet(
     };
   }
 
-  // Gable-like: two long eaves, two rakes; ridge ~ longest * 0.5–0.7
-  // Hip-like (many similar edges): ridge shorter, hips longer
-  const mean = perimeter / n;
-  const cv =
-    Math.sqrt(edges.reduce((s, e) => s + (e - mean) ** 2, 0) / n) / (mean || 1);
-
-  let eaveLF = 0;
-  let rakeLF = 0;
-  let ridgeLF = 0;
-  let hipLF = 0;
-  let valleyLF = 0;
-
-  if (n <= 4 && cv > 0.15) {
-    // Simple gable / rectangle
-    eaveLF = round1(longest + second);
-    rakeLF = round1(Math.max(0, perimeter - eaveLF));
-    ridgeLF = round1(longest * 0.65);
-    hipLF = 0;
-    valleyLF = 0;
-  } else if (n <= 6) {
-    // L-shape or mild hip
-    eaveLF = round1(perimeter * 0.55);
-    rakeLF = round1(perimeter * 0.25);
-    ridgeLF = round1(longest * 0.45);
-    hipLF = round1(second * 0.8);
-    valleyLF = round1(mean * 0.4);
-  } else {
-    // Complex / hip-heavy
-    eaveLF = round1(perimeter * 0.5);
-    rakeLF = round1(perimeter * 0.15);
-    ridgeLF = round1(longest * 0.35);
-    hipLF = round1(perimeter * 0.2);
-    valleyLF = round1(perimeter * 0.12);
-  }
-
-  if (roofType === 'mixed') {
-    // Mixed: reduce ridge/hip slightly (flat portion has none)
-    ridgeLF = round1(ridgeLF * 0.75);
-    hipLF = round1(hipLF * 0.75);
-    valleyLF = round1(valleyLF * 0.5);
-  }
-
-  return { ridgeLF, hipLF, eaveLF, rakeLF, valleyLF };
+  return {
+    ridgeLF: 0,
+    hipLF: 0,
+    eaveLF: 0,
+    rakeLF: 0,
+    valleyLF: 0,
+  };
 }
 
 export function computeRoofMetrics(
@@ -682,6 +662,21 @@ export function buildManualRoofMeasurement(opts: {
   const perimeterLF = round1(side * 4);
 
   const ov = opts.overrides || {};
+  // Only use explicit edge lengths — never invent ridge/hip/rake from area
+  const ridgeLF = round1(numOr(ov.ridgeLF, opts.ridgeLF ?? 0));
+  const hipLF = round1(numOr(ov.hipLF, opts.hipLF ?? 0));
+  const eaveLF = round1(
+    numOr(
+      ov.eaveLF,
+      opts.eaveLF ??
+        (roofType === 'flat-modified-bitumen' ? perimeterLF : 0)
+    )
+  );
+  const rakeLF = round1(numOr(ov.rakeLF, opts.rakeLF ?? 0));
+  const valleyLF = round1(numOr(ov.valleyLF, opts.valleyLF ?? 0));
+  const edgesVerified =
+    ridgeLF > 0 || hipLF > 0 || rakeLF > 0 || valleyLF > 0 ||
+    (roofType !== 'flat-modified-bitumen' && eaveLF > 0);
 
   return {
     id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -702,25 +697,13 @@ export function buildManualRoofMeasurement(opts: {
     flatSquares: round2(numOr(ov.flatSquares, flatSquares)),
     perimeterLF: round1(numOr(ov.perimeterLF, perimeterLF)),
     edgeLengthsLF: [],
-    ridgeLF: round1(
-      numOr(
-        ov.ridgeLF,
-        opts.ridgeLF ??
-          (roofType === 'flat-modified-bitumen'
-            ? 0
-            : round1(side * 0.55))
-      )
-    ),
-    hipLF: round1(
-      numOr(
-        ov.hipLF,
-        opts.hipLF ??
-          (roofType === 'flat-modified-bitumen' ? 0 : round1(side * 0.4))
-      )
-    ),
-    eaveLF: round1(numOr(ov.eaveLF, opts.eaveLF ?? round1(side * 2))),
-    rakeLF: round1(numOr(ov.rakeLF, opts.rakeLF ?? round1(side * 2))),
-    valleyLF: round1(numOr(ov.valleyLF, opts.valleyLF ?? 0)),
+    ridgeLF,
+    hipLF,
+    eaveLF,
+    rakeLF,
+    valleyLF,
+    measureSource: 'manual',
+    edgesVerified,
     overrides: opts.overrides,
   };
 }
@@ -981,6 +964,8 @@ export function aggregateSectionsToMeasurement(
     label?: string;
     center?: LatLngPoint;
     totalOverrides?: MetricOverrides;
+    measureSource?: RoofMeasurement['measureSource'];
+    edgesVerified?: boolean;
   }
 ): RoofMeasurement {
   const secs = sections.map((s) => applySectionOverrides(s, s.overrides));
@@ -1080,6 +1065,8 @@ export function aggregateSectionsToMeasurement(
     pitch,
     pitchAuto: secs.every((s) => s.pitchAuto),
     pitchedFraction: round2(pitchedFraction),
+    measureSource: opts?.measureSource || 'trace',
+    edgesVerified: opts?.edgesVerified === true,
     footprintSqFt,
     surfaceSqFt,
     squares: pitchedSquares,
@@ -1158,7 +1145,10 @@ export function normalizeMeasurement(
       label: raw.label,
       center: raw.center,
       totalOverrides: raw.overrides,
+      measureSource: raw.measureSource,
+      edgesVerified: raw.edgesVerified,
     });
+    const trustEdges = raw.edgesVerified === true;
     return {
       ...base,
       id: raw.id || base.id,
@@ -1169,11 +1159,14 @@ export function normalizeMeasurement(
       footprintSqFt: raw.footprintSqFt ?? base.footprintSqFt,
       surfaceSqFt: raw.surfaceSqFt ?? base.surfaceSqFt,
       perimeterLF: raw.perimeterLF ?? base.perimeterLF,
-      ridgeLF: raw.ridgeLF ?? base.ridgeLF,
-      hipLF: raw.hipLF ?? base.hipLF,
-      eaveLF: raw.eaveLF ?? base.eaveLF,
-      rakeLF: raw.rakeLF ?? base.rakeLF,
-      valleyLF: raw.valleyLF ?? base.valleyLF,
+      ridgeLF: trustEdges ? (raw.ridgeLF ?? base.ridgeLF) : base.ridgeLF,
+      hipLF: trustEdges ? (raw.hipLF ?? base.hipLF) : base.hipLF,
+      eaveLF: trustEdges ? (raw.eaveLF ?? base.eaveLF) : base.eaveLF,
+      rakeLF: trustEdges ? (raw.rakeLF ?? base.rakeLF) : base.rakeLF,
+      valleyLF: trustEdges ? (raw.valleyLF ?? base.valleyLF) : base.valleyLF,
+      measureSource: raw.measureSource ?? base.measureSource,
+      edgesVerified: trustEdges,
+      dripEdgeLF: raw.dripEdgeLF ?? base.dripEdgeLF,
     };
   }
 
@@ -1203,6 +1196,7 @@ export function normalizeMeasurement(
       pitchedFraction: raw.pitchedFraction,
       overrides: raw.overrides,
     });
+    const trustEdges = raw.edgesVerified === true;
     return {
       id: raw.id || `m-${Date.now()}`,
       createdAt: raw.createdAt || new Date().toLocaleString(),
@@ -1223,11 +1217,18 @@ export function normalizeMeasurement(
       flatSquares: raw.flatSquares ?? recomputed.flatSquares,
       perimeterLF: raw.perimeterLF ?? recomputed.perimeterLF,
       edgeLengthsLF: raw.edgeLengthsLF ?? recomputed.edgeLengthsLF,
-      ridgeLF: raw.ridgeLF ?? recomputed.ridgeLF,
-      hipLF: raw.hipLF ?? recomputed.hipLF,
-      eaveLF: raw.eaveLF ?? recomputed.eaveLF,
-      rakeLF: raw.rakeLF ?? recomputed.rakeLF,
-      valleyLF: raw.valleyLF ?? recomputed.valleyLF,
+      ridgeLF: trustEdges ? (raw.ridgeLF ?? recomputed.ridgeLF) : recomputed.ridgeLF,
+      hipLF: trustEdges ? (raw.hipLF ?? recomputed.hipLF) : recomputed.hipLF,
+      eaveLF: trustEdges
+        ? (raw.eaveLF ?? recomputed.eaveLF)
+        : recomputed.eaveLF,
+      rakeLF: trustEdges ? (raw.rakeLF ?? recomputed.rakeLF) : recomputed.rakeLF,
+      valleyLF: trustEdges
+        ? (raw.valleyLF ?? recomputed.valleyLF)
+        : recomputed.valleyLF,
+      measureSource: raw.measureSource || 'trace',
+      edgesVerified: trustEdges,
+      dripEdgeLF: raw.dripEdgeLF,
       overrides: raw.overrides,
     };
   }
@@ -1237,7 +1238,7 @@ export function normalizeMeasurement(
   const footprintSqFt = Number(raw.footprintSqFt) || 0;
   if (squares <= 0 && flatSquares <= 0 && footprintSqFt <= 0) return null;
 
-  return buildManualRoofMeasurement({
+  const manual = buildManualRoofMeasurement({
     squares,
     flatSquares,
     footprintSqFt,
@@ -1256,4 +1257,14 @@ export function normalizeMeasurement(
     center: raw.center,
     overrides: raw.overrides,
   });
+  return {
+    ...manual,
+    id: raw.id || manual.id,
+    createdAt: raw.createdAt || manual.createdAt,
+    dripEdgeLF: raw.dripEdgeLF ?? manual.dripEdgeLF,
+    measureSource: raw.measureSource || manual.measureSource || 'manual',
+    edgesVerified:
+      raw.edgesVerified === true ||
+      (raw.edgesVerified !== false && manual.edgesVerified === true),
+  };
 }
