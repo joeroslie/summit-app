@@ -2353,6 +2353,20 @@ function sanitizeLeads(leads: Lead[]): Lead[] {
   );
 }
 
+/** Parse localStorage summitLeads; null if missing/invalid. Never throws. */
+function parseStoredLeads(raw: string | null): Lead[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Array<
+      Partial<Lead> & { clientJobNumber?: string }
+    >;
+    if (!Array.isArray(parsed)) return null;
+    return sanitizeLeads(parsed.map(normalizeLead));
+  } catch {
+    return null;
+  }
+}
+
 function normalizeLeadNotes(raw: unknown): LeadNote[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((n, i) => {
@@ -6062,23 +6076,18 @@ export default function SummitApp() {
 
       const savedLeads = localStorage.getItem('summitLeads');
       const savedTrash = localStorage.getItem('summitTrash');
-      // Cloud is source of truth when Supabase is configured — skip stale local leads
-      if (!supabaseEnabled) {
-        if (savedLeads) {
-          try {
-            const parsed = JSON.parse(savedLeads) as Array<
-              Partial<Lead> & { clientJobNumber?: string }
-            >;
-            const nextLeads = sanitizeLeads(parsed.map(normalizeLead));
-            setLeads(nextLeads);
-            try {
-              localStorage.setItem('summitLeads', JSON.stringify(nextLeads));
-            } catch {
-              /* ignore */
-            }
-          } catch {
-            /* ignore */
-          }
+      // Always paint local cache first. Cloud may replace on success — never leave
+      // Pipeline empty while waiting, and never wipe local on a failed/empty fetch.
+      const localLeadsCache = parseStoredLeads(savedLeads);
+      if (localLeadsCache && localLeadsCache.length > 0) {
+        setLeads(localLeadsCache);
+        try {
+          localStorage.setItem(
+            'summitLeads',
+            JSON.stringify(localLeadsCache)
+          );
+        } catch {
+          /* ignore */
         }
       }
 
@@ -6294,29 +6303,28 @@ export default function SummitApp() {
                   'Run soft_delete_leads.sql in Supabase SQL Editor, then refresh'
                 );
               }
-              // Offline fallback: use local cache only if cloud fetch fails
-              if (savedLeads) {
-                try {
-                  const parsed = JSON.parse(savedLeads) as Array<
-                    Partial<Lead> & { clientJobNumber?: string }
-                  >;
-                  const nextLeads = sanitizeLeads(parsed.map(normalizeLead));
-                  setLeads(nextLeads);
-                  try {
-                    localStorage.setItem(
-                      'summitLeads',
-                      JSON.stringify(nextLeads)
-                    );
-                  } catch {
-                    /* ignore */
-                  }
-                } catch {
-                  /* ignore */
-                }
+              // Failed cloud fetch must NOT replace leads with []. Keep local cache.
+              const fallback =
+                localLeadsCache ?? parseStoredLeads(savedLeads);
+              if (fallback && fallback.length > 0) {
+                setLeads(fallback);
               }
               return;
             }
             if (!leadRows || leadRows.length === 0) {
+              // Empty cloud must not wipe a non-empty local cache (RLS/network
+              // quirks have returned [] without a hard error before).
+              const fallback =
+                localLeadsCache ?? parseStoredLeads(savedLeads);
+              if (fallback && fallback.length > 0) {
+                console.warn(
+                  'Supabase returned 0 leads — keeping',
+                  fallback.length,
+                  'local leads'
+                );
+                setLeads(fallback);
+                return;
+              }
               setLeads([]);
               try {
                 localStorage.setItem('summitLeads', JSON.stringify([]));
@@ -6467,6 +6475,12 @@ export default function SummitApp() {
             );
           } catch (err) {
             console.error('Supabase bootstrap error:', err);
+            // Thrown network/parse failures: never leave Pipeline empty if cache exists
+            const fallback =
+              localLeadsCache ?? parseStoredLeads(savedLeads);
+            if (fallback && fallback.length > 0) {
+              setLeads(fallback);
+            }
           }
         })();
       }
@@ -9302,6 +9316,7 @@ export default function SummitApp() {
         readBrowserGcalSession,
         readBrowserGcalEmail,
         hasBrowserGcalToken,
+        isBrowserGcalLinked,
         ensureBrowserGcalSession,
         loadGoogleIdentityScript,
         browserSessionHasTasksScope,
@@ -9310,13 +9325,17 @@ export default function SummitApp() {
       setGcalConfigured(isBrowserGcalConfigured());
       void loadGoogleIdentityScript().catch(() => undefined);
       let session = readBrowserGcalSession();
-      if (!session && hasBrowserGcalToken()) {
+      if (!session && isBrowserGcalLinked()) {
         // Survives browser restart: silent-refresh expired localStorage token
         session = await ensureBrowserGcalSession();
       }
-      // Connected = token present (fresh or expired). Profile + Calendar share this.
-      const tokenPresent = hasBrowserGcalToken() || Boolean(session?.accessToken);
-      if (tokenPresent) {
+      // Connected = linked on this device (token and/or prior email/scopes).
+      // Profile + Calendar must share this — do not drop to "Connect" on expiry.
+      const linked =
+        isBrowserGcalLinked() ||
+        hasBrowserGcalToken() ||
+        Boolean(session?.accessToken);
+      if (linked) {
         setGcalConnected(true);
         setGcalEmail(
           session?.email ?? readBrowserGcalEmail() ?? null
@@ -9341,6 +9360,13 @@ export default function SummitApp() {
               setGtasksErrorKind(probe.kind);
             }
           }
+        } else if (isBrowserGcalLinked() && !session) {
+          // Linked but silent refresh failed — still Connected; needs Reconnect
+          setGtasksNeedsReconnect(true);
+          setGtasksErrorKind('other');
+          setGtasksLastError(
+            'Google session expired — tap Reconnect to refresh access.'
+          );
         }
         return;
       }
@@ -9361,6 +9387,14 @@ export default function SummitApp() {
         name?: string | null;
       };
       setGcalConfigured((c) => c || Boolean(data.configured));
+      // Never let a negative server cookie overwrite a browser-linked session
+      const {
+        isBrowserGcalLinked,
+      } = await import('@/lib/gcal-browser');
+      if (isBrowserGcalLinked()) {
+        setGcalConnected(true);
+        return;
+      }
       setGcalConnected(Boolean(data.connected));
       setGcalEmail(data.email ?? null);
       setGcalName(data.name ?? null);
@@ -10417,7 +10451,16 @@ export default function SummitApp() {
         }
       }
       if (/expired|401/i.test(msg)) {
-        setGcalConnected(false);
+        // Keep Connected when token/email still on device — show Reconnect, don't flip Profile to Connect
+        const { isBrowserGcalLinked } = await import('@/lib/gcal-browser');
+        setGcalConnected(isBrowserGcalLinked());
+        if (isBrowserGcalLinked()) {
+          setGtasksNeedsReconnect(true);
+          setGtasksErrorKind('other');
+          setGtasksLastError(
+            'Google session expired — tap Reconnect to refresh access.'
+          );
+        }
       }
       if (!opts?.silent) showToast(msg);
     } finally {

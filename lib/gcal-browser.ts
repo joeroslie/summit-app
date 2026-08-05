@@ -166,6 +166,23 @@ export function hasBrowserGcalToken(): boolean {
   }
 }
 
+/**
+ * True when this device has linked Google Calendar (token and/or prior email/scopes).
+ * Use for Connected UI so Profile matches Calendar after token expiry / silent-refresh miss.
+ */
+export function isBrowserGcalLinked(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return Boolean(
+      storageGet(TOKEN_KEY) ||
+        storageGet(EMAIL_KEY) ||
+        storageGet(SCOPES_KEY)
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Email from last successful connect (survives expired access token). */
 export function readBrowserGcalEmail(): string | null {
   try {
