@@ -19,6 +19,12 @@ import {
 } from '@/lib/roof-geometry';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import {
+  loadCloudCompanySettings,
+  loadCloudUserProfile,
+  saveCloudCompanySettings,
+  saveCloudUserProfile,
+} from '@/lib/app-settings-sync';
+import {
   createDefaultTaskList,
   DEFAULT_TASK_LIST_ID,
   newSummitTaskId,
@@ -773,8 +779,13 @@ type CompanySettings = {
   email: string;
   /** ROC# */
   license: string;
-  /** Uploaded company logo (data URL). Empty → Summit mark. */
+  /**
+   * Company logo: data URL (local preview) or public Storage URL after sync.
+   * Empty → Summit mark.
+   */
   logoDataUrl: string;
+  /** Supabase Storage path in company-assets when logo is cloud-backed. */
+  logoPath?: string;
 };
 
 const emptyCompanySettings = (): CompanySettings => ({
@@ -787,6 +798,7 @@ const emptyCompanySettings = (): CompanySettings => ({
   email: '',
   license: '',
   logoDataUrl: '',
+  logoPath: '',
 });
 
 /** Normalize company settings from localStorage (supports legacy brandName/legalName). */
@@ -816,6 +828,32 @@ function normalizeCompanySettings(
     email: typeof raw.email === 'string' ? raw.email : '',
     license: typeof raw.license === 'string' ? raw.license : '',
     logoDataUrl: typeof raw.logoDataUrl === 'string' ? raw.logoDataUrl : '',
+    logoPath: typeof raw.logoPath === 'string' ? raw.logoPath : '',
+  };
+}
+
+/** Merge cloud company settings over local cache (cloud wins non-empty fields). */
+function mergeCompanySettings(
+  local: CompanySettings,
+  cloud: CompanySettings | null
+): CompanySettings {
+  if (!cloud) return local;
+  const pick = (c: string, l: string) => (c.trim() ? c : l);
+  return {
+    company: pick(cloud.company, local.company),
+    projectManager: pick(cloud.projectManager, local.projectManager),
+    projectManagerPhone: pick(
+      cloud.projectManagerPhone,
+      local.projectManagerPhone
+    ),
+    address: pick(cloud.address, local.address),
+    phone: pick(cloud.phone, local.phone),
+    fax: pick(cloud.fax, local.fax),
+    email: pick(cloud.email, local.email),
+    license: pick(cloud.license, local.license),
+    // Prefer cloud logo URL; keep local data URL until first successful Save upload.
+    logoDataUrl: pick(cloud.logoDataUrl, local.logoDataUrl),
+    logoPath: pick(cloud.logoPath || '', local.logoPath || ''),
   };
 }
 
@@ -3422,7 +3460,11 @@ export default function SummitApp() {
         };
         img.src = objectUrl;
       });
-      setCompanySettings({ ...companySettings, logoDataUrl: dataUrl });
+      setCompanySettings({
+        ...companySettings,
+        logoDataUrl: dataUrl,
+        logoPath: '',
+      });
       showToast('Logo updated — save Settings to keep');
     } catch {
       showToast('Could not read logo image');
@@ -3456,6 +3498,8 @@ export default function SummitApp() {
     }
     let cancelled = false;
     const img = new Image();
+    // Needed so canvas can export https Storage logos without tainting.
+    if (/^https?:\/\//i.test(src)) img.crossOrigin = 'anonymous';
     img.onload = () => {
       if (cancelled) return;
       try {
@@ -5439,6 +5483,13 @@ export default function SummitApp() {
       const savedEmail = localStorage.getItem('summitUserEmail');
       if (savedEmail) setEmail(savedEmail);
 
+      let localProfile = {
+        name: '',
+        title: '',
+        company: '',
+        phone: '',
+        email: '',
+      };
       try {
         const up = localStorage.getItem('summitUserProfile');
         if (up) {
@@ -5448,6 +5499,13 @@ export default function SummitApp() {
             company?: string;
             phone?: string;
             email?: string;
+          };
+          localProfile = {
+            name: p.name || '',
+            title: p.title || '',
+            company: p.company || '',
+            phone: p.phone || '',
+            email: p.email || '',
           };
           if (p.name) setUserName(p.name);
           if (p.title) setUserTitle(p.title);
@@ -5459,6 +5517,7 @@ export default function SummitApp() {
         /* ignore */
       }
 
+      let localCompany = emptyCompanySettings();
       try {
         const cs = localStorage.getItem('summitCompanySettings');
         if (cs) {
@@ -5466,10 +5525,64 @@ export default function SummitApp() {
             brandName?: string;
             legalName?: string;
           };
-          setCompanySettings(normalizeCompanySettings(c));
+          localCompany = normalizeCompanySettings(c);
+          setCompanySettings(localCompany);
         }
       } catch {
         /* ignore */
+      }
+
+      // Cloud merge (keeps local cache; does not wipe until round-trip works)
+      if (supabaseEnabled && supabase) {
+        void (async () => {
+          try {
+            const [cloudProfile, cloudCompany] = await Promise.all([
+              loadCloudUserProfile(supabase),
+              loadCloudCompanySettings(supabase),
+            ]);
+            if (cloudProfile) {
+              const name = (cloudProfile.name || '').trim() || localProfile.name;
+              const title =
+                (cloudProfile.title || '').trim() || localProfile.title;
+              const company =
+                (cloudProfile.company || '').trim() || localProfile.company;
+              const phone =
+                (cloudProfile.phone || '').trim() || localProfile.phone;
+              const email =
+                (cloudProfile.email || '').trim() || localProfile.email;
+              if (name) setUserName(name);
+              if (title) setUserTitle(title);
+              if (company) setUserCompany(company);
+              if (phone) setUserPhone(displayPhoneUS(phone));
+              if (email) setUserEmail(email);
+              try {
+                localStorage.setItem(
+                  'summitUserProfile',
+                  JSON.stringify({ name, title, company, phone, email })
+                );
+              } catch {
+                /* ignore */
+              }
+            }
+            if (cloudCompany) {
+              const merged = mergeCompanySettings(
+                localCompany,
+                normalizeCompanySettings(cloudCompany)
+              );
+              setCompanySettings(merged);
+              try {
+                localStorage.setItem(
+                  'summitCompanySettings',
+                  JSON.stringify(merged)
+                );
+              } catch {
+                /* ignore */
+              }
+            }
+          } catch (err) {
+            console.error('Settings cloud load failed:', err);
+          }
+        })();
       }
 
       const storedTheme = readStoredThemePref();
@@ -6377,18 +6490,16 @@ export default function SummitApp() {
   };
 
   /** Explicit save for Profile settings (profile + company + appearance). */
-  const saveUserSettings = () => {
+  const saveUserSettings = async () => {
+    const profile = {
+      name: userName,
+      title: userTitle,
+      company: userCompany,
+      phone: userPhone,
+      email: userEmail,
+    };
     try {
-      localStorage.setItem(
-        'summitUserProfile',
-        JSON.stringify({
-          name: userName,
-          title: userTitle,
-          company: userCompany,
-          phone: userPhone,
-          email: userEmail,
-        })
-      );
+      localStorage.setItem('summitUserProfile', JSON.stringify(profile));
       localStorage.setItem(
         'summitCompanySettings',
         JSON.stringify(companySettings)
@@ -6397,9 +6508,38 @@ export default function SummitApp() {
       const mode = resolveThemeMode(themePref);
       setThemeMode(mode);
       applyThemeMode(mode);
-      showToast('Settings saved');
     } catch {
       showToast('Could not save settings');
+      return;
+    }
+
+    if (!supabaseEnabled || !supabase) {
+      showToast('Settings saved (this device)');
+      return;
+    }
+
+    try {
+      await saveCloudUserProfile(supabase, profile);
+      const cloudCompany = await saveCloudCompanySettings(
+        supabase,
+        companySettings
+      );
+      const nextCompany = normalizeCompanySettings(cloudCompany);
+      setCompanySettings(nextCompany);
+      try {
+        localStorage.setItem(
+          'summitCompanySettings',
+          JSON.stringify(nextCompany)
+        );
+      } catch {
+        /* ignore */
+      }
+      showToast('Settings saved');
+    } catch (err) {
+      console.error('Settings cloud save failed:', err);
+      showToast(
+        'Saved on this device — cloud sync failed (run company_user_settings_sync.sql?)'
+      );
     }
   };
 
@@ -17838,6 +17978,7 @@ export default function SummitApp() {
                             setCompanySettings({
                               ...companySettings,
                               logoDataUrl: '',
+                              logoPath: '',
                             })
                           }
                           className="px-4 py-2 rounded-xl text-sm font-semibold border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
@@ -17965,7 +18106,7 @@ export default function SummitApp() {
               <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                 <button
                   type="button"
-                  onClick={saveUserSettings}
+                  onClick={() => void saveUserSettings()}
                   className="btn-primary px-6 py-3 rounded-2xl text-sm font-semibold"
                 >
                   Save Settings
