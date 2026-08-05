@@ -23,6 +23,10 @@ import {
   loadCloudUserProfile,
   saveCloudCompanySettings,
   saveCloudUserProfile,
+  loadCloudCalendarEvents,
+  saveCloudCalendarEvents,
+  loadCloudTasksBundle,
+  saveCloudTasksBundle,
 } from '@/lib/app-settings-sync';
 import {
   createDefaultTaskList,
@@ -32,6 +36,48 @@ import {
   type SummitTask,
   type SummitTaskList,
 } from '@/lib/google-tasks';
+import {
+  SUMMIT_CALENDAR_EVENTS_KEY,
+  newSummitCalendarEventId,
+  normalizeStoredCalendarEvents,
+  mergeGoogleCalendarEventsIntoLocal,
+  eventOccursOnDay,
+  formatEventTimeLabel,
+  defaultEndTime,
+  leadDisplayFromParts,
+  minutesFromMidnight,
+  minutesToHhmm,
+  snapMinutes,
+  formatHourLabel,
+  WEEK_VIEW_HOUR_PX,
+  WEEK_VIEW_HOURS,
+  WEEK_VIEW_SCROLL_HOUR,
+  WEEK_VIEW_MIN_EVENT_PX,
+  GOOGLE_EVENT_COLORS,
+  GOOGLE_CALENDAR_DEFAULT_COLOR,
+  eventChipColorStyle,
+  eventBlockColorStyle,
+  normalizeGoogleEventColorId,
+  layoutOverlappingTimedEvents,
+  timedEventMinutesOnDay,
+  type GoogleEventColorId,
+  type SummitCalendarEvent,
+  type CalendarListColor,
+} from '@/lib/summit-calendar';
+
+const SUMMIT_CALENDAR_VIEW_KEY = 'summitCalendarView';
+type CalendarViewMode = 'month' | 'week' | 'day';
+
+function readStoredCalendarView(): CalendarViewMode {
+  if (typeof window === 'undefined') return 'month';
+  try {
+    const v = localStorage.getItem(SUMMIT_CALENDAR_VIEW_KEY);
+    if (v === 'week' || v === 'month' || v === 'day') return v;
+  } catch {
+    /* ignore */
+  }
+  return 'month';
+}
 
 const PITCH_OPTIONS = [
   'Flat',
@@ -254,20 +300,6 @@ function addDays(d: Date, n: number): Date {
   const x = new Date(d);
   x.setDate(x.getDate() + n);
   return x;
-}
-
-/** Parse lead date fields into YYYY-MM-DD when possible */
-function leadScheduleIso(lead: {
-  followUpDate?: string;
-  date?: string;
-  calendarSyncedAt?: string;
-}): string | null {
-  const raw = lead.followUpDate || lead.date || '';
-  if (!raw) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw.trim())) return raw.trim();
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return null;
-  return toLocalIsoDate(d);
 }
 
 function readStoredTab(): AppTab {
@@ -769,6 +801,8 @@ type CompanySettings = {
   projectManager: string;
   /** Project manager phone on estimates. */
   projectManagerPhone: string;
+  /** Project manager email on estimates / company docs (optional). */
+  projectManagerEmail: string;
   /** Business address */
   address: string;
   /** Office phone */
@@ -792,6 +826,7 @@ const emptyCompanySettings = (): CompanySettings => ({
   company: '',
   projectManager: '',
   projectManagerPhone: '',
+  projectManagerEmail: '',
   address: '',
   phone: '',
   fax: '',
@@ -822,6 +857,10 @@ function normalizeCompanySettings(
     projectManager,
     projectManagerPhone:
       typeof raw.projectManagerPhone === 'string' ? raw.projectManagerPhone : '',
+    projectManagerEmail:
+      typeof raw.projectManagerEmail === 'string'
+        ? raw.projectManagerEmail
+        : '',
     address: typeof raw.address === 'string' ? raw.address : '',
     phone: typeof raw.phone === 'string' ? raw.phone : '',
     fax: typeof raw.fax === 'string' ? raw.fax : '',
@@ -845,6 +884,10 @@ function mergeCompanySettings(
     projectManagerPhone: pick(
       cloud.projectManagerPhone,
       local.projectManagerPhone
+    ),
+    projectManagerEmail: pick(
+      cloud.projectManagerEmail,
+      local.projectManagerEmail
     ),
     address: pick(cloud.address, local.address),
     phone: pick(cloud.phone, local.phone),
@@ -1971,8 +2014,15 @@ type Lead = {
   /** Site inspection take-off sheet */
   takeoff?: TakeoffSheet | null;
   measurements?: RoofMeasurement[];
-  /** Optional scheduled follow-up (YYYY-MM-DD) — used for Google Calendar sync */
+  /**
+   * Legacy follow-up date — kept on stored leads for history, not shown or
+   * used as a calendar source (Joe schedules follow-ups manually).
+   */
   followUpDate?: string;
+  /** Insurance adjuster appointment date (YYYY-MM-DD) — calendar + Google sync */
+  adjustmentDate?: string;
+  /** Optional adjustment time (HH:MM) */
+  adjustmentTime?: string;
   /** Google Calendar event id after sync */
   calendarEventId?: string;
   calendarHtmlLink?: string;
@@ -2068,6 +2118,8 @@ function normalizeLead(raw: Partial<Lead> & { clientJobNumber?: string }): Lead 
           .filter(Boolean) as RoofMeasurement[])
       : [],
     followUpDate: raw.followUpDate ?? '',
+    adjustmentDate: raw.adjustmentDate ?? '',
+    adjustmentTime: raw.adjustmentTime ?? '',
     calendarEventId: raw.calendarEventId,
     calendarHtmlLink: raw.calendarHtmlLink,
     calendarSyncedAt: raw.calendarSyncedAt,
@@ -2394,6 +2446,8 @@ function mapAppLeadToDb(lead: Lead) {
     trash: lead.trash || [],
     takeoff: lead.takeoff || null,
     followUpDate: lead.followUpDate || '',
+    adjustmentDate: lead.adjustmentDate || '',
+    adjustmentTime: lead.adjustmentTime || '',
     calendarEventId: lead.calendarEventId || '',
     calendarHtmlLink: lead.calendarHtmlLink || '',
     calendarSyncedAt: lead.calendarSyncedAt || '',
@@ -2670,6 +2724,8 @@ function mapDbLeadToApp(row: Record<string, unknown>): Lead {
     // Prefer estimates from estimates table (bootstrap attaches them); details is fallback
     estimates: Array.isArray(d.estimates) ? (d.estimates as Estimate[]) : [],
     followUpDate: String(d.followUpDate ?? ''),
+    adjustmentDate: String(d.adjustmentDate ?? ''),
+    adjustmentTime: String(d.adjustmentTime ?? ''),
     calendarEventId: d.calendarEventId
       ? String(d.calendarEventId)
       : undefined,
@@ -3017,18 +3073,23 @@ export default function SummitApp() {
   const [themePref, setThemePref] = useState<ThemePreference>('auto');
   const [themeMode, setThemeMode] = useState<ThemeMode>('day');
   /** Google Calendar connection (from /api/google/calendar/status) */
-  const [gcalConfigured, setGcalConfigured] = useState(false);
+  const [, setGcalConfigured] = useState(false);
   const [gcalConnected, setGcalConnected] = useState(false);
   const [gcalEmail, setGcalEmail] = useState<string | null>(null);
   const [gcalName, setGcalName] = useState<string | null>(null);
   const [gcalBusy, setGcalBusy] = useState(false);
   const [gcalLastSync, setGcalLastSync] = useState<string | null>(null);
-  const [followUpDate, setFollowUpDate] = useState('');
-  /** Summit Calendar cursor (drives mini-month + week strip) */
+  const [adjustmentDate, setAdjustmentDate] = useState('');
+  const [adjustmentTime, setAdjustmentTime] = useState('');
+  /** Summit Calendar cursor (drives month / week grid) */
   const [calendarCursor, setCalendarCursor] = useState(() => new Date());
   const [calendarSelectedDay, setCalendarSelectedDay] = useState<string | null>(
     null
   );
+  const [calendarViewMode, setCalendarViewMode] = useState<CalendarViewMode>(
+    'month'
+  );
+  const calendarWeekScrollRef = useRef<HTMLDivElement>(null);
   /** Live events pulled from connected Google Calendar */
   const [googleCalendarEvents, setGoogleCalendarEvents] = useState<
     Array<{
@@ -3036,11 +3097,66 @@ export default function SummitApp() {
       summary: string;
       htmlLink?: string;
       location?: string;
+      description?: string;
+      colorId?: string;
+      calendarId?: string;
+      calendarBackground?: string;
+      calendarForeground?: string;
+      organizer?: { email?: string; displayName?: string; self?: boolean };
       start: { dateTime?: string; date?: string };
       end: { dateTime?: string; date?: string };
+      updated?: string;
+      extendedProperties?: {
+        private?: Record<string, string>;
+      };
     }>
   >([]);
+  /** calendarList id → background/foreground (re-resolve on refresh) */
+  const [googleCalendarColorMap, setGoogleCalendarColorMap] = useState<
+    Record<string, { bg: string; fg: string }>
+  >({});
+  /** Writable calendars from calendarList (for create picker) */
+  const [googleCalendarList, setGoogleCalendarList] = useState<
+    Array<{
+      id: string;
+      summary: string;
+      primary?: boolean;
+      backgroundColor?: string;
+      foregroundColor?: string;
+    }>
+  >([]);
+  const [gcalCalendarListNeedsReconnect, setGcalCalendarListNeedsReconnect] =
+    useState(false);
   const [googleEventsLoading, setGoogleEventsLoading] = useState(false);
+  const calendarCloudSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const tasksCloudSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  /** Manual Summit calendar events (localStorage + optional Google sync) */
+  const [calendarEvents, setCalendarEvents] = useState<SummitCalendarEvent[]>(
+    []
+  );
+  /** Google-style create / edit event dialog */
+  const [calEventModal, setCalEventModal] = useState<null | {
+    mode: 'create' | 'edit';
+    eventId?: string;
+  }>(null);
+  const [calEventDraft, setCalEventDraft] = useState({
+    title: '',
+    notes: '',
+    startDate: '',
+    endDate: '',
+    startTime: '09:00',
+    endTime: '10:00',
+    allDay: false,
+    leadId: null as number | null,
+    leadSearch: '',
+    calendarId: 'primary' as string,
+    colorId: undefined as GoogleEventColorId | undefined,
+  });
+  const [calEventBusy, setCalEventBusy] = useState(false);
   /** Local + Google Tasks (Google Tasks-style lists + calendar chips) */
   const [tasks, setTasks] = useState<SummitTask[]>([]);
   const [taskLists, setTaskLists] = useState<SummitTaskList[]>(() => [
@@ -3049,6 +3165,10 @@ export default function SummitApp() {
   const [activeTaskListId, setActiveTaskListId] = useState(DEFAULT_TASK_LIST_ID);
   const [tasksBusy, setTasksBusy] = useState(false);
   const [gtasksNeedsReconnect, setGtasksNeedsReconnect] = useState(false);
+  const [gtasksLastError, setGtasksLastError] = useState<string | null>(null);
+  const [gtasksErrorKind, setGtasksErrorKind] = useState<
+    'scope' | 'api' | 'auth' | 'other' | null
+  >(null);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskDue, setNewTaskDue] = useState('');
   const [newTaskNotes, setNewTaskNotes] = useState('');
@@ -3118,13 +3238,58 @@ export default function SummitApp() {
     }
   };
 
+  const scheduleCloudCalendarSave = (events: SummitCalendarEvent[]) => {
+    if (!supabaseEnabled || !supabase) return;
+    if (calendarCloudSaveTimer.current) {
+      clearTimeout(calendarCloudSaveTimer.current);
+    }
+    calendarCloudSaveTimer.current = setTimeout(() => {
+      void saveCloudCalendarEvents(supabase, events).catch((err) => {
+        console.error('Calendar cloud save failed:', err);
+      });
+    }, 800);
+  };
+
+  const scheduleCloudTasksSave = (
+    nextTasks: SummitTask[],
+    nextLists: SummitTaskList[],
+    nextActiveId: string
+  ) => {
+    if (!supabaseEnabled || !supabase) return;
+    if (tasksCloudSaveTimer.current) {
+      clearTimeout(tasksCloudSaveTimer.current);
+    }
+    tasksCloudSaveTimer.current = setTimeout(() => {
+      void saveCloudTasksBundle(supabase, {
+        tasks: nextTasks,
+        lists: nextLists,
+        activeListId: nextActiveId,
+      }).catch((err) => {
+        console.error('Tasks cloud save failed:', err);
+      });
+    }, 800);
+  };
+
   const persistTasks = (next: SummitTask[]) => {
-    setTasks(next);
+    const safe = Array.isArray(next) ? next : [];
+    setTasks(safe);
     try {
-      localStorage.setItem(SUMMIT_TASKS_KEY, JSON.stringify(next));
+      localStorage.setItem(SUMMIT_TASKS_KEY, JSON.stringify(safe));
     } catch {
       /* ignore */
     }
+    scheduleCloudTasksSave(safe, taskLists, activeTaskListId);
+  };
+
+  const persistCalendarEvents = (next: SummitCalendarEvent[]) => {
+    const safe = Array.isArray(next) ? next : [];
+    setCalendarEvents(safe);
+    try {
+      localStorage.setItem(SUMMIT_CALENDAR_EVENTS_KEY, JSON.stringify(safe));
+    } catch {
+      /* ignore */
+    }
+    scheduleCloudCalendarSave(safe);
   };
 
   const persistTaskLists = (next: SummitTaskList[]) => {
@@ -3135,6 +3300,7 @@ export default function SummitApp() {
     } catch {
       /* ignore */
     }
+    scheduleCloudTasksSave(tasks, safe, activeTaskListId);
   };
 
   const persistActiveTaskListId = (listId: string) => {
@@ -3209,6 +3375,7 @@ export default function SummitApp() {
       (companySettings.company || '').trim() ||
         (companySettings.projectManager || '').trim() ||
         (companySettings.projectManagerPhone || '').trim() ||
+        (companySettings.projectManagerEmail || '').trim() ||
         (companySettings.address || '').trim() ||
         (companySettings.phone || '').trim() ||
         (companySettings.fax || '').trim() ||
@@ -3232,11 +3399,19 @@ export default function SummitApp() {
     return displayPhoneUS(userPhone) || userPhone || '';
   };
 
+  /** Company PM email when set; else profile email (estimates). Blank if neither. */
+  const estimatePmEmail = () => {
+    const fromCompany = (companySettings.projectManagerEmail || '').trim();
+    if (fromCompany) return fromCompany;
+    return (userEmail || '').trim();
+  };
+
   /** Settings PM filled — company-branded mitigation / photo docs should show the block. */
   const companyPmFieldsFilled = () =>
     Boolean(
       (companySettings.projectManager || '').trim() ||
-        (companySettings.projectManagerPhone || '').trim()
+        (companySettings.projectManagerPhone || '').trim() ||
+        (companySettings.projectManagerEmail || '').trim()
     );
 
   /** Show PM on company-billed mitigation / branded photo PDFs when Settings PM is set. */
@@ -4020,10 +4195,18 @@ export default function SummitApp() {
     if (showPm) {
       const pmName = estimatePmName();
       const pmPhone = estimatePmPhone();
+      const pmEmail = (companySettings.projectManagerEmail || '').trim();
       doc.text(pmName || '—', metaRight, propY);
       doc.setTextColor(muted.r, muted.g, muted.b);
       doc.setFontSize(9);
-      if (pmPhone) doc.text(pmPhone, metaRight, propY + 5);
+      let pmOff = 5;
+      if (pmPhone) {
+        doc.text(pmPhone, metaRight, propY + pmOff);
+        pmOff += 4;
+      }
+      if (pmEmail) {
+        doc.text(pmEmail, metaRight, propY + pmOff);
+      }
       doc.setTextColor(ink.r, ink.g, ink.b);
       doc.setFontSize(10);
     }
@@ -4834,6 +5017,7 @@ export default function SummitApp() {
     if (showCompanyPmOnDoc(entity)) {
       const pmName = estimatePmName();
       const pmPhone = estimatePmPhone();
+      const pmEmail = (companySettings.projectManagerEmail || '').trim();
       doc.setTextColor(muted.r, muted.g, muted.b);
       doc.setFontSize(8);
       doc.setFont('helvetica', 'bold');
@@ -4843,14 +5027,18 @@ export default function SummitApp() {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(10);
       doc.text(pmName || '—', metaLeft, y);
+      doc.setTextColor(muted.r, muted.g, muted.b);
+      doc.setFontSize(9);
+      let pmY = y + 5;
       if (pmPhone) {
-        doc.setTextColor(muted.r, muted.g, muted.b);
-        doc.setFontSize(9);
-        doc.text(pmPhone, metaLeft, y + 5);
-        y += 10;
-      } else {
-        y += 6;
+        doc.text(pmPhone, metaLeft, pmY);
+        pmY += 4;
       }
+      if (pmEmail) {
+        doc.text(pmEmail, metaLeft, pmY);
+        pmY += 4;
+      }
+      y = pmPhone || pmEmail ? pmY + 2 : y + 6;
       y += 2;
     }
 
@@ -5606,6 +5794,131 @@ export default function SummitApp() {
         const savedTasks = localStorage.getItem(SUMMIT_TASKS_KEY);
         if (savedTasks) {
           persistTasks(normalizeStoredTasks(JSON.parse(savedTasks)));
+        }
+        const savedCalEvents = localStorage.getItem(SUMMIT_CALENDAR_EVENTS_KEY);
+        if (savedCalEvents) {
+          persistCalendarEvents(
+            normalizeStoredCalendarEvents(JSON.parse(savedCalEvents))
+          );
+        }
+        setCalendarViewMode(readStoredCalendarView());
+
+        // Cloud backup for calendar + tasks (merge over local when present)
+        if (supabaseEnabled && supabase) {
+          void (async () => {
+            try {
+              const [cloudEvents, cloudTasks] = await Promise.all([
+                loadCloudCalendarEvents(supabase),
+                loadCloudTasksBundle(supabase),
+              ]);
+              if (cloudEvents && cloudEvents.length) {
+                const normalized = normalizeStoredCalendarEvents(cloudEvents);
+                if (normalized.length) {
+                  setCalendarEvents(normalized);
+                  try {
+                    localStorage.setItem(
+                      SUMMIT_CALENDAR_EVENTS_KEY,
+                      JSON.stringify(normalized)
+                    );
+                  } catch {
+                    /* ignore */
+                  }
+                }
+              } else {
+                // Seed cloud from this device when backup is empty
+                try {
+                  const raw = localStorage.getItem(SUMMIT_CALENDAR_EVENTS_KEY);
+                  const local = normalizeStoredCalendarEvents(
+                    raw ? JSON.parse(raw) : []
+                  );
+                  if (local.length) {
+                    await saveCloudCalendarEvents(supabase, local);
+                  }
+                } catch {
+                  /* ignore */
+                }
+              }
+              if (cloudTasks) {
+                const lists = normalizeStoredTaskLists(cloudTasks.lists);
+                if (lists.length) {
+                  setTaskLists(lists);
+                  try {
+                    localStorage.setItem(
+                      SUMMIT_TASK_LISTS_KEY,
+                      JSON.stringify(lists)
+                    );
+                  } catch {
+                    /* ignore */
+                  }
+                }
+                const t = normalizeStoredTasks(cloudTasks.tasks);
+                if (t.length) {
+                  setTasks(t);
+                  try {
+                    localStorage.setItem(SUMMIT_TASKS_KEY, JSON.stringify(t));
+                  } catch {
+                    /* ignore */
+                  }
+                }
+                if (
+                  cloudTasks.activeListId &&
+                  lists.some((l) => l.id === cloudTasks.activeListId)
+                ) {
+                  persistActiveTaskListId(cloudTasks.activeListId);
+                }
+                const cloudEmpty =
+                  !(cloudTasks.tasks && cloudTasks.tasks.length) &&
+                  !(cloudTasks.lists && cloudTasks.lists.length);
+                if (cloudEmpty) {
+                  try {
+                    const rawT = localStorage.getItem(SUMMIT_TASKS_KEY);
+                    const rawL = localStorage.getItem(SUMMIT_TASK_LISTS_KEY);
+                    const localT = normalizeStoredTasks(
+                      rawT ? JSON.parse(rawT) : []
+                    );
+                    const localL = normalizeStoredTaskLists(
+                      rawL ? JSON.parse(rawL) : null
+                    );
+                    if (localT.length || localL.length) {
+                      await saveCloudTasksBundle(supabase, {
+                        tasks: localT,
+                        lists: localL,
+                        activeListId:
+                          localStorage.getItem(SUMMIT_ACTIVE_TASK_LIST_KEY) ||
+                          DEFAULT_TASK_LIST_ID,
+                      });
+                    }
+                  } catch {
+                    /* ignore */
+                  }
+                }
+              } else {
+                try {
+                  const rawT = localStorage.getItem(SUMMIT_TASKS_KEY);
+                  const rawL = localStorage.getItem(SUMMIT_TASK_LISTS_KEY);
+                  const localT = normalizeStoredTasks(
+                    rawT ? JSON.parse(rawT) : []
+                  );
+                  const localL = normalizeStoredTaskLists(
+                    rawL ? JSON.parse(rawL) : null
+                  );
+                  if (localT.length || localL.length) {
+                    await saveCloudTasksBundle(supabase, {
+                      tasks: localT,
+                      lists: localL,
+                      activeListId:
+                        localStorage.getItem(SUMMIT_ACTIVE_TASK_LIST_KEY) ||
+                        DEFAULT_TASK_LIST_ID,
+                    });
+                  }
+                } catch {
+                  /* ignore */
+                }
+              }
+            } catch (err) {
+              console.error('Calendar/tasks cloud load failed:', err);
+            }
+          })();
         }
       } catch {
         /* ignore */
@@ -6404,11 +6717,43 @@ export default function SummitApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot after hydrate
   }, [sessionReady]);
 
-  // Pull Google events while Calendar tab is open (month window)
+  // Quiet Google sync: app open / Calendar tab / month change / focus (debounced)
   useEffect(() => {
-    if (!sessionReady || !gcalConnected || activeTab !== 'calendar') return;
-    void loadGoogleEvents({ silent: true, cursor: calendarCursor });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload on tab/month/connect
+    if (!sessionReady || !gcalConnected) return;
+
+    const runQuietSync = (opts?: { cursor?: Date }) => {
+      void refreshFromGoogle({
+        silent: true,
+        cursor: opts?.cursor ?? calendarCursor,
+      });
+    };
+
+    if (activeTab === 'calendar') {
+      runQuietSync({ cursor: calendarCursor });
+    } else if (activeTab === 'tasks') {
+      void syncTasksWithGoogle({ silent: true, pullOnly: true });
+    }
+
+    let focusTimer: number | undefined;
+    const scheduleFocusSync = () => {
+      if (activeTab !== 'calendar') return;
+      window.clearTimeout(focusTimer);
+      focusTimer = window.setTimeout(() => {
+        runQuietSync({ cursor: calendarCursor });
+      }, 1200);
+    };
+    const onFocus = () => scheduleFocusSync();
+    const onVis = () => {
+      if (document.visibilityState === 'visible') scheduleFocusSync();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.clearTimeout(focusTimer);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- quiet sync on tab/month/connect/focus
   }, [
     sessionReady,
     gcalConnected,
@@ -6417,13 +6762,33 @@ export default function SummitApp() {
     calendarCursor.getMonth(),
   ]);
 
-  // Pull Google Tasks when Tasks or Calendar is open
+  // One quiet sync when Google first connects / app hydrates (any tab)
   useEffect(() => {
     if (!sessionReady || !gcalConnected) return;
-    if (activeTab !== 'tasks' && activeTab !== 'calendar') return;
-    void syncTasksWithGoogle({ silent: true, pullOnly: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- tab/connect only
-  }, [sessionReady, gcalConnected, activeTab]);
+    void refreshFromGoogle({ silent: true, cursor: calendarCursor });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per connect/hydrate
+  }, [sessionReady, gcalConnected]);
+
+  // Remember Month | Week preference
+  useEffect(() => {
+    if (!sessionReady) return;
+    try {
+      localStorage.setItem(SUMMIT_CALENDAR_VIEW_KEY, calendarViewMode);
+    } catch {
+      /* ignore */
+    }
+  }, [sessionReady, calendarViewMode]);
+
+  // Week view: scroll time grid to morning when opened
+  useEffect(() => {
+    if (activeTab !== 'calendar' || calendarViewMode !== 'week') return;
+    const el = calendarWeekScrollRef.current;
+    if (!el) return;
+    const id = window.requestAnimationFrame(() => {
+      el.scrollTop = WEEK_VIEW_SCROLL_HOUR * WEEK_VIEW_HOUR_PX;
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [activeTab, calendarViewMode, calendarCursor]);
 
   useEffect(() => {
     if (!sessionReady) return;
@@ -8756,17 +9121,40 @@ export default function SummitApp() {
       const {
         isBrowserGcalConfigured,
         readBrowserGcalSession,
+        ensureBrowserGcalSession,
         loadGoogleIdentityScript,
         browserSessionHasTasksScope,
+        probeGoogleTasksAccess,
       } = await import('@/lib/gcal-browser');
       setGcalConfigured(isBrowserGcalConfigured());
       void loadGoogleIdentityScript().catch(() => undefined);
-      const session = readBrowserGcalSession();
+      let session = readBrowserGcalSession();
+      if (!session) {
+        // Survives browser restart: silent-refresh expired localStorage token
+        session = await ensureBrowserGcalSession();
+      }
       if (session) {
         setGcalConnected(true);
         setGcalEmail(session.email ?? null);
         setGcalName(null);
-        setGtasksNeedsReconnect(!browserSessionHasTasksScope(session));
+        if (!browserSessionHasTasksScope(session)) {
+          setGtasksNeedsReconnect(true);
+          setGtasksErrorKind('scope');
+          setGtasksLastError(
+            'Google Tasks permission missing — tap Reconnect for Tasks and allow Tasks on the consent screen.'
+          );
+        } else {
+          // Scope claims Tasks — verify live (catches API-disabled / stale scope)
+          const probe = await probeGoogleTasksAccess(session.accessToken);
+          setGtasksNeedsReconnect(!probe.ok);
+          if (probe.ok) {
+            setGtasksLastError(null);
+            setGtasksErrorKind(null);
+          } else {
+            setGtasksLastError(probe.error);
+            setGtasksErrorKind(probe.kind);
+          }
+        }
         return;
       }
     } catch {
@@ -8789,9 +9177,30 @@ export default function SummitApp() {
       setGcalConnected(Boolean(data.connected));
       setGcalEmail(data.email ?? null);
       setGcalName(data.name ?? null);
+      // Server cookie path has Tasks scope in consent URL; browser GIS is primary
+      if (data.connected) setGtasksNeedsReconnect(false);
     } catch {
       /* offline / unconfigured */
     }
+  };
+
+  const calendarColorFor = (
+    calendarId?: string | null,
+    stored?: { bg?: string; fg?: string } | null
+  ): CalendarListColor | undefined => {
+    if (stored?.bg) {
+      return { bg: stored.bg, text: stored.fg };
+    }
+    const id = (calendarId || 'primary').trim();
+    const fromMap = googleCalendarColorMap[id];
+    if (fromMap?.bg) return { bg: fromMap.bg, text: fromMap.fg };
+    if (id !== 'primary' && googleCalendarColorMap.primary?.bg) {
+      return {
+        bg: googleCalendarColorMap.primary.bg,
+        text: googleCalendarColorMap.primary.fg,
+      };
+    }
+    return undefined;
   };
 
   const loadGoogleEvents = async (opts?: {
@@ -8800,40 +9209,133 @@ export default function SummitApp() {
     cursor?: Date;
   }) => {
     try {
-      const { readBrowserGcalSession, listUpcomingGoogleEvents } = await import(
-        '@/lib/gcal-browser'
-      );
-      const session = readBrowserGcalSession();
+      const { ensureBrowserGcalSession, listUpcomingGoogleEvents } =
+        await import('@/lib/gcal-browser');
+      const session = await ensureBrowserGcalSession();
       if (!session?.accessToken) {
         if (!opts?.silent) {
           showToast('Connect Google Calendar first');
         }
+        setGcalConnected(false);
         return;
       }
+      setGcalConnected(true);
       setGoogleEventsLoading(true);
       const cursor = opts?.cursor || calendarCursor;
       const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
       monthStart.setHours(0, 0, 0, 0);
       const gridStart = startOfWeekSunday(monthStart);
       const gridEnd = addDays(gridStart, 42);
-      const items = await listUpcomingGoogleEvents(session.accessToken, {
+      const pulled = await listUpcomingGoogleEvents(session.accessToken, {
         maxResults: 120,
         timeMin: gridStart.toISOString(),
         timeMax: gridEnd.toISOString(),
       });
+      // Always store an array — never set a bare object / undefined (crashes render)
+      const items = Array.isArray(pulled?.events)
+        ? pulled.events
+        : Array.isArray(pulled)
+          ? pulled
+          : [];
+      const colorMap =
+        pulled &&
+        typeof pulled === 'object' &&
+        !Array.isArray(pulled) &&
+        pulled.colorMap &&
+        typeof pulled.colorMap === 'object'
+          ? pulled.colorMap
+          : {};
       setGoogleCalendarEvents(items);
+      if (Object.keys(colorMap).length) {
+        setGoogleCalendarColorMap(colorMap);
+      }
+      // Refresh writable calendar list for create picker + color accuracy
+      try {
+        const {
+          listGoogleCalendarList,
+          browserSessionHasCalendarListScope,
+        } = await import('@/lib/gcal-browser');
+        setGcalCalendarListNeedsReconnect(
+          !browserSessionHasCalendarListScope(session)
+        );
+        try {
+          const list = await listGoogleCalendarList(session.accessToken);
+          const writable = (Array.isArray(list) ? list : [])
+            .filter(
+              (c) =>
+                c?.id &&
+                (!c.accessRole ||
+                  c.accessRole === 'owner' ||
+                  c.accessRole === 'writer')
+            )
+            .map((c) => ({
+              id: c.id,
+              summary: c.summary || c.id,
+              primary: c.primary,
+              backgroundColor: c.backgroundColor,
+              foregroundColor: c.foregroundColor,
+            }));
+          setGoogleCalendarList(writable);
+          setGcalCalendarListNeedsReconnect(false);
+        } catch (listErr) {
+          const msg =
+            listErr instanceof Error ? listErr.message : String(listErr);
+          if (/calendarList_forbidden|403/i.test(msg)) {
+            setGcalCalendarListNeedsReconnect(true);
+          }
+        }
+      } catch {
+        /* ignore list helpers */
+      }
+
+      // Merge Google → Summit event store (skip adjustment-synced events)
+      const adjIds = new Set(
+        leads
+          .map((l) => l.calendarEventId)
+          .filter((id): id is string => Boolean(id))
+      );
+      const localRaw = (() => {
+        try {
+          const raw = localStorage.getItem(SUMMIT_CALENDAR_EVENTS_KEY);
+          return normalizeStoredCalendarEvents(raw ? JSON.parse(raw) : []);
+        } catch {
+          return calendarEvents;
+        }
+      })();
+      const merged = mergeGoogleCalendarEventsIntoLocal(localRaw, items, {
+        knownAdjustmentGoogleIds: adjIds,
+      });
+      // Re-resolve calendar colors from fresh calendarList map
+      const recolored = merged.events.map((ev) => {
+        const calId = ev.calendarId || 'primary';
+        const colors = colorMap[calId] || colorMap.primary;
+        if (!colors?.bg) return ev;
+        return {
+          ...ev,
+          calendarColorBg: colors.bg,
+          calendarColorFg: colors.fg,
+        };
+      });
+      persistCalendarEvents(recolored);
+
       if (!opts?.silent) {
+        const parts = [
+          items.length
+            ? `${items.length} Google event${items.length === 1 ? '' : 's'}`
+            : '',
+          merged.imported
+            ? `${merged.imported} imported`
+            : '',
+          merged.updated ? `${merged.updated} updated` : '',
+        ].filter(Boolean);
         showToast(
-          items.length === 0
-            ? 'No Google events this month'
-            : `Loaded ${items.length} Google event${items.length === 1 ? '' : 's'}`
+          parts.length ? `Calendar · ${parts.join(' · ')}` : 'No events this month'
         );
       }
     } catch (e) {
+      const { formatGoogleConnectError } = await import('@/lib/gcal-browser');
       if (!opts?.silent) {
-        showToast(
-          e instanceof Error ? e.message : 'Could not load Google events'
-        );
+        showToast(formatGoogleConnectError(e));
       }
       if (
         e instanceof Error &&
@@ -8847,28 +9349,402 @@ export default function SummitApp() {
     }
   };
 
+  /** Push Summit-only (unsynced) manual events to Google. */
+  const pushUnsyncedCalendarEvents = async (opts?: {
+    silent?: boolean;
+    eventsOverride?: SummitCalendarEvent[];
+  }) => {
+    const {
+      ensureBrowserGcalSession,
+      syncManualEventWithBrowserToken,
+    } = await import('@/lib/gcal-browser');
+    const session = await ensureBrowserGcalSession();
+    if (!session?.accessToken) return;
+    const source =
+      opts?.eventsOverride ||
+      (() => {
+        try {
+          const raw = localStorage.getItem(SUMMIT_CALENDAR_EVENTS_KEY);
+          return normalizeStoredCalendarEvents(raw ? JSON.parse(raw) : []);
+        } catch {
+          return calendarEvents;
+        }
+      })();
+    const unsynced = source.filter((e) => !e.googleEventId);
+    if (unsynced.length === 0) return;
+    let next = [...source];
+    let pushed = 0;
+    for (const ev of unsynced) {
+      try {
+        const out = await syncManualEventWithBrowserToken(session.accessToken, {
+          id: ev.id,
+          title: ev.title,
+          notes: ev.notes,
+          startDate: ev.startDate,
+          endDate: ev.endDate,
+          startTime: ev.startTime,
+          endTime: ev.endTime,
+          allDay: ev.allDay,
+          leadId: ev.leadId,
+          leadName: ev.leadName,
+          googleEventId: ev.googleEventId,
+          calendarId: ev.calendarId || 'primary',
+          colorId: ev.colorId ?? null,
+        });
+        next = next.map((x) =>
+          x.id === ev.id
+            ? {
+                ...x,
+                googleEventId: out.eventId,
+                googleHtmlLink: out.htmlLink || x.googleHtmlLink,
+                calendarId: out.calendarId || x.calendarId || 'primary',
+                updatedAt: new Date().toISOString(),
+              }
+            : x
+        );
+        pushed += 1;
+      } catch {
+        /* keep local */
+      }
+    }
+    if (pushed > 0) {
+      persistCalendarEvents(next);
+      if (!opts?.silent) {
+        showToast(
+          `Pushed ${pushed} event${pushed === 1 ? '' : 's'} to Google`
+        );
+      }
+    }
+  };
+
+  /** Pull Calendar + Tasks from Google and push unsynced Summit events. */
+  const refreshFromGoogle = async (opts?: { silent?: boolean; cursor?: Date }) => {
+    await loadGoogleEvents({ silent: opts?.silent, cursor: opts?.cursor });
+    // Push Summit-only events after pull so bi-directional stays accurate
+    await pushUnsyncedCalendarEvents({ silent: true });
+    // Don't gate on React state — loadGoogleEvents may have just refreshed the token
+    await syncTasksWithGoogle({
+      silent: true,
+      pullOnly: true,
+      assumeConnected: true,
+    });
+    const syncedAt = new Date().toISOString();
+    setGcalLastSync(syncedAt);
+    try {
+      localStorage.setItem('summitGcalLastSync', syncedAt);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const openCreateCalendarEvent = (
+    isoDate: string,
+    opts?: { startTime?: string; endTime?: string; allDay?: boolean }
+  ) => {
+    const startTime = opts?.startTime || '09:00';
+    const endTime = opts?.endTime || defaultEndTime(startTime);
+    const allDay = Boolean(opts?.allDay);
+    const primaryCal =
+      googleCalendarList.find((c) => c.primary) || googleCalendarList[0];
+    setCalEventDraft({
+      title: '',
+      notes: '',
+      startDate: isoDate,
+      endDate: isoDate,
+      startTime,
+      endTime,
+      allDay,
+      leadId: null,
+      leadSearch: '',
+      calendarId: primaryCal?.id || 'primary',
+      colorId: undefined,
+    });
+    setCalEventModal({ mode: 'create' });
+  };
+
+  const openEditCalendarEvent = (event: SummitCalendarEvent) => {
+    setCalEventDraft({
+      title: event.title,
+      notes: event.notes || '',
+      startDate: event.startDate,
+      endDate: event.endDate || event.startDate,
+      startTime: event.startTime || '09:00',
+      endTime: event.endTime || defaultEndTime(event.startTime || '09:00'),
+      allDay: event.allDay,
+      leadId: event.leadId ?? null,
+      leadSearch: '',
+      calendarId: event.calendarId || 'primary',
+      colorId: normalizeGoogleEventColorId(event.colorId),
+    });
+    setCalEventModal({ mode: 'edit', eventId: event.id });
+  };
+
+  const saveCalendarEventDraft = async () => {
+    const title = calEventDraft.title.trim();
+    if (!title) {
+      showToast('Add a title');
+      return;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(calEventDraft.startDate)) {
+      showToast('Pick a date');
+      return;
+    }
+    const endDate =
+      /^\d{4}-\d{2}-\d{2}$/.test(calEventDraft.endDate)
+        ? calEventDraft.endDate
+        : calEventDraft.startDate;
+    const linked =
+      calEventDraft.leadId != null
+        ? leads.find((l) => l.id === calEventDraft.leadId)
+        : undefined;
+    const leadName = linked
+      ? leadDisplayFromParts(linked.clientFirstName, linked.clientLastName) ||
+        undefined
+      : undefined;
+    const now = new Date().toISOString();
+    const allDay = calEventDraft.allDay;
+    const colorId = normalizeGoogleEventColorId(calEventDraft.colorId);
+    const calendarId =
+      (calEventDraft.calendarId || '').trim() || 'primary';
+    const mapColors =
+      googleCalendarColorMap[calendarId] || googleCalendarColorMap.primary;
+    const listColors = googleCalendarList.find((c) => c.id === calendarId);
+    const calendarColorBg =
+      mapColors?.bg || listColors?.backgroundColor || undefined;
+    const calendarColorFg =
+      mapColors?.fg || listColors?.foregroundColor || undefined;
+    const base: SummitCalendarEvent = {
+      id:
+        calEventModal?.mode === 'edit' && calEventModal.eventId
+          ? calEventModal.eventId
+          : newSummitCalendarEventId(),
+      title,
+      notes: calEventDraft.notes.trim() || undefined,
+      startDate: calEventDraft.startDate,
+      endDate: endDate < calEventDraft.startDate ? calEventDraft.startDate : endDate,
+      startTime: allDay ? undefined : calEventDraft.startTime || '09:00',
+      endTime: allDay
+        ? undefined
+        : calEventDraft.endTime ||
+          defaultEndTime(calEventDraft.startTime || '09:00'),
+      allDay,
+      leadId: calEventDraft.leadId ?? undefined,
+      leadName,
+      calendarId,
+      colorId,
+      calendarColorBg,
+      calendarColorFg,
+      updatedAt: now,
+      createdAt: now,
+      source: 'summit',
+    };
+
+    let existing: SummitCalendarEvent | undefined;
+    if (calEventModal?.mode === 'edit' && calEventModal.eventId) {
+      existing = calendarEvents.find((e) => e.id === calEventModal.eventId);
+    }
+    const event: SummitCalendarEvent = existing
+      ? {
+          ...existing,
+          ...base,
+          id: existing.id,
+          createdAt: existing.createdAt,
+          googleEventId: existing.googleEventId,
+          googleHtmlLink: existing.googleHtmlLink,
+          calendarId,
+          colorId,
+          calendarColorBg: calendarColorBg || existing.calendarColorBg,
+          calendarColorFg: calendarColorFg || existing.calendarColorFg,
+          source: existing.source || 'summit',
+        }
+      : base;
+
+    const next =
+      existing != null
+        ? calendarEvents.map((e) => (e.id === event.id ? event : e))
+        : [event, ...calendarEvents];
+    persistCalendarEvents(next);
+    setCalendarSelectedDay(event.startDate);
+    setCalEventModal(null);
+
+    if (gcalConnected) {
+      setCalEventBusy(true);
+      try {
+        const {
+          ensureBrowserGcalSession,
+          syncManualEventWithBrowserToken,
+        } = await import('@/lib/gcal-browser');
+        const session = await ensureBrowserGcalSession();
+        if (session?.accessToken) {
+          const out = await syncManualEventWithBrowserToken(
+            session.accessToken,
+            {
+              id: event.id,
+              title: event.title,
+              notes: event.notes,
+              startDate: event.startDate,
+              endDate: event.endDate,
+              startTime: event.startTime,
+              endTime: event.endTime,
+              allDay: event.allDay,
+              leadId: event.leadId,
+              leadName: event.leadName,
+              googleEventId: event.googleEventId,
+              calendarId: event.calendarId || 'primary',
+              colorId: event.colorId ?? null,
+            }
+          );
+          const synced = next.map((e) =>
+            e.id === event.id
+              ? {
+                  ...e,
+                  googleEventId: out.eventId,
+                  googleHtmlLink: out.htmlLink || e.googleHtmlLink,
+                  calendarId: out.calendarId || e.calendarId || 'primary',
+                  updatedAt: new Date().toISOString(),
+                }
+              : e
+          );
+          persistCalendarEvents(synced);
+          void loadGoogleEvents({ silent: true });
+          showToast(
+            event.leadId
+              ? 'Event saved · linked lead · synced to Google'
+              : 'Event saved · synced to Google'
+          );
+          return;
+        }
+      } catch (e) {
+        const { formatGoogleConnectError } = await import('@/lib/gcal-browser');
+        showToast(
+          `Saved locally — Google sync failed: ${formatGoogleConnectError(e)}`
+        );
+        return;
+      } finally {
+        setCalEventBusy(false);
+      }
+    }
+    showToast(event.leadId ? 'Event saved · lead linked' : 'Event saved');
+  };
+
+  const deleteCalendarEvent = async (eventId: string) => {
+    const target = calendarEvents.find((e) => e.id === eventId);
+    if (!target) return;
+    const next = calendarEvents.filter((e) => e.id !== eventId);
+    persistCalendarEvents(next);
+    setCalEventModal(null);
+    if (target.googleEventId && gcalConnected) {
+      try {
+        const {
+          ensureBrowserGcalSession,
+          deleteGoogleEventWithBrowserToken,
+        } = await import('@/lib/gcal-browser');
+        const session = await ensureBrowserGcalSession();
+        if (session?.accessToken) {
+          await deleteGoogleEventWithBrowserToken(
+            session.accessToken,
+            target.googleEventId,
+            target.calendarId
+          );
+          void loadGoogleEvents({ silent: true });
+        }
+      } catch {
+        showToast('Removed locally — could not delete on Google');
+        return;
+      }
+    }
+    showToast('Event deleted');
+  };
+
   const connectGoogleCalendar = async (opts?: { forceConsent?: boolean }) => {
     setGcalBusy(true);
     try {
-      const { connectGoogleCalendarBrowser, browserSessionHasTasksScope } =
-        await import('@/lib/gcal-browser');
+      const {
+        connectGoogleCalendarBrowser,
+        browserSessionHasTasksScope,
+        probeGoogleTasksAccess,
+      } = await import('@/lib/gcal-browser');
+      // Always force consent when adding Tasks (or first connect) so Google
+      // cannot silently reuse a Calendar-only grant. Calendar stays usable if
+      // the popup is cancelled (prior session is restored in gcal-browser).
       const session = await connectGoogleCalendarBrowser({
-        forceConsent: opts?.forceConsent,
+        forceConsent: opts?.forceConsent ?? true,
       });
       setGcalConfigured(true);
       setGcalConnected(true);
       setGcalEmail(session.email ?? null);
       setGcalName(null);
-      setGtasksNeedsReconnect(!browserSessionHasTasksScope(session));
-      showToast(
-        opts?.forceConsent
-          ? 'Google reconnected (Calendar + Tasks)'
-          : 'Google Calendar connected'
-      );
-      void loadGoogleEvents({ silent: true });
-      void syncTasksWithGoogle({ silent: true, pullOnly: false });
+
+      const scopeOk = browserSessionHasTasksScope(session);
+      let tasksOk = scopeOk;
+      let tasksError: string | null = null;
+      let tasksKind: 'scope' | 'api' | 'auth' | 'other' | null = scopeOk
+        ? null
+        : 'scope';
+      if (session.accessToken) {
+        const probe = await probeGoogleTasksAccess(session.accessToken);
+        if (probe.ok) {
+          tasksOk = true;
+          tasksError = null;
+          tasksKind = null;
+        } else {
+          tasksOk = false;
+          tasksError = probe.error;
+          tasksKind = probe.kind;
+        }
+      }
+      setGtasksNeedsReconnect(!tasksOk);
+      setGtasksLastError(tasksError);
+      setGtasksErrorKind(tasksKind);
+
+      if (tasksOk) {
+        showToast('Google connected (Calendar + Tasks)');
+        void loadGoogleEvents({ silent: true }).then(() =>
+          pushUnsyncedCalendarEvents({ silent: true })
+        );
+        void syncTasksWithGoogle({
+          silent: false,
+          pullOnly: false,
+          assumeConnected: true,
+        });
+      } else {
+        const { GOOGLE_TASKS_API_CONSOLE_STEPS } = await import(
+          '@/lib/gcal-browser'
+        );
+        if (tasksKind === 'api') {
+          console.warn(
+            '[Summit] Google Tasks API blocked — Cloud Console steps:\n' +
+              GOOGLE_TASKS_API_CONSOLE_STEPS
+          );
+        } else if (!scopeOk) {
+          console.warn(
+            '[Summit] Tasks scope missing from token. Granted scopes:',
+            session.scopes || '(none stored)'
+          );
+        }
+        showToast(
+          tasksError ||
+            (tasksKind === 'api'
+              ? 'Calendar works — enable Google Tasks API in Cloud Console (see banner), then Reconnect for Tasks'
+              : 'Calendar connected — tap Reconnect for Tasks and allow Tasks on the Google consent screen')
+        );
+        void loadGoogleEvents({ silent: true }).then(() =>
+          pushUnsyncedCalendarEvents({ silent: true })
+        );
+      }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Connection failed';
+      const { formatGoogleConnectError, readBrowserGcalSession } = await import(
+        '@/lib/gcal-browser'
+      );
+      const msg = formatGoogleConnectError(e);
+      // If reconnect was cancelled, prior Calendar session may have been restored
+      const restored = readBrowserGcalSession();
+      if (restored?.accessToken) {
+        setGcalConnected(true);
+        setGcalEmail(restored.email ?? null);
+        showToast(msg);
+        return;
+      }
       // Fall back to server OAuth redirect if browser GIS fails and secret is set
       if (msg.includes('Missing NEXT_PUBLIC')) {
         showToast(msg);
@@ -8906,7 +9782,10 @@ export default function SummitApp() {
       setGcalEmail(null);
       setGcalName(null);
       setGoogleCalendarEvents([]);
+      setGoogleCalendarColorMap({});
       setGtasksNeedsReconnect(false);
+      setGtasksLastError(null);
+      setGtasksErrorKind(null);
       showToast('Google Calendar disconnected');
     } catch {
       showToast('Could not disconnect');
@@ -8920,14 +9799,14 @@ export default function SummitApp() {
     listsOverride?: SummitTaskList[]
   ): Promise<SummitTask> => {
     const {
-      readBrowserGcalSession,
+      ensureBrowserGcalSession,
       browserSessionHasTasksScope,
     } = await import('@/lib/gcal-browser');
     const {
       createGoogleTask,
       updateGoogleTask,
     } = await import('@/lib/google-tasks');
-    const session = readBrowserGcalSession();
+    const session = await ensureBrowserGcalSession();
     if (!session?.accessToken) return task;
     if (!browserSessionHasTasksScope(session)) {
       setGtasksNeedsReconnect(true);
@@ -8982,15 +9861,17 @@ export default function SummitApp() {
     silent?: boolean;
     /** Only pull from Google (no create/update of Summit-only tasks). */
     pullOnly?: boolean;
+    /** Skip gcalConnected React state (e.g. right after token refresh). */
+    assumeConnected?: boolean;
   }) => {
-    if (!gcalConnected) {
+    if (!opts?.assumeConnected && !gcalConnected) {
       if (!opts?.silent) showToast('Connect Google first');
       return;
     }
     setTasksBusy(true);
     try {
       const {
-        readBrowserGcalSession,
+        ensureBrowserGcalSession,
         browserSessionHasTasksScope,
       } = await import('@/lib/gcal-browser');
       const {
@@ -8999,13 +9880,18 @@ export default function SummitApp() {
         mergeGoogleTasksIntoLocal,
         mergeGoogleListsIntoLocal,
       } = await import('@/lib/google-tasks');
-      const session = readBrowserGcalSession();
+      const session = await ensureBrowserGcalSession();
       if (!session?.accessToken) {
+        setGcalConnected(false);
         if (!opts?.silent) showToast('Connect Google first');
         return;
       }
       if (!browserSessionHasTasksScope(session)) {
         setGtasksNeedsReconnect(true);
+        setGtasksErrorKind('scope');
+        setGtasksLastError(
+          'Token missing Tasks scope — Reconnect for Tasks and allow Tasks on consent.'
+        );
         if (!opts?.silent) {
           showToast('Reconnect Google to enable Tasks sync');
         }
@@ -9014,6 +9900,8 @@ export default function SummitApp() {
 
       const remoteLists = await listGoogleTaskLists(session.accessToken);
       setGtasksNeedsReconnect(false);
+      setGtasksLastError(null);
+      setGtasksErrorKind(null);
       const listsMerged = mergeGoogleListsIntoLocal(taskLists, remoteLists);
       let nextLists = listsMerged.lists;
       persistTaskLists(nextLists);
@@ -9076,9 +9964,35 @@ export default function SummitApp() {
         );
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Tasks sync failed';
-      if (/Tasks permission|reconnect/i.test(msg)) {
+      const { formatGoogleConnectError, probeGoogleTasksAccess } = await import(
+        '@/lib/gcal-browser'
+      );
+      const msg = formatGoogleConnectError(e);
+      if (/Tasks permission|reconnect|Tasks API|403/i.test(msg)) {
         setGtasksNeedsReconnect(true);
+        setGtasksLastError(msg);
+        const lower = msg.toLowerCase();
+        setGtasksErrorKind(
+          lower.includes('tasks api') || lower.includes('enable google tasks')
+            ? 'api'
+            : lower.includes('permission') || lower.includes('scope')
+              ? 'scope'
+              : 'other'
+        );
+        // Refine kind with a live probe when we still have a token
+        try {
+          const { ensureBrowserGcalSession } = await import('@/lib/gcal-browser');
+          const s = await ensureBrowserGcalSession();
+          if (s?.accessToken) {
+            const probe = await probeGoogleTasksAccess(s.accessToken);
+            if (!probe.ok) {
+              setGtasksLastError(probe.error);
+              setGtasksErrorKind(probe.kind);
+            }
+          }
+        } catch {
+          /* keep msg above */
+        }
       }
       if (/expired|401/i.test(msg)) {
         setGcalConnected(false);
@@ -9104,10 +10018,10 @@ export default function SummitApp() {
     };
     if (gcalConnected && !gtasksNeedsReconnect) {
       try {
-        const { readBrowserGcalSession, browserSessionHasTasksScope } =
+        const { ensureBrowserGcalSession, browserSessionHasTasksScope } =
           await import('@/lib/gcal-browser');
         const { createGoogleTaskList } = await import('@/lib/google-tasks');
-        const session = readBrowserGcalSession();
+        const session = await ensureBrowserGcalSession();
         if (session?.accessToken && browserSessionHasTasksScope(session)) {
           const gl = await createGoogleTaskList(session.accessToken, title);
           list = {
@@ -9151,10 +10065,10 @@ export default function SummitApp() {
       !gtasksNeedsReconnect
     ) {
       try {
-        const { readBrowserGcalSession, browserSessionHasTasksScope } =
+        const { ensureBrowserGcalSession, browserSessionHasTasksScope } =
           await import('@/lib/gcal-browser');
         const { renameGoogleTaskList } = await import('@/lib/google-tasks');
-        const session = readBrowserGcalSession();
+        const session = await ensureBrowserGcalSession();
         if (session?.accessToken && browserSessionHasTasksScope(session)) {
           const gl = await renameGoogleTaskList(
             session.accessToken,
@@ -9286,9 +10200,9 @@ export default function SummitApp() {
     if (!target) return;
     if (target.googleTaskId && gcalConnected && !gtasksNeedsReconnect) {
       try {
-        const { readBrowserGcalSession } = await import('@/lib/gcal-browser');
+        const { ensureBrowserGcalSession } = await import('@/lib/gcal-browser');
         const { deleteGoogleTask } = await import('@/lib/google-tasks');
-        const session = readBrowserGcalSession();
+        const session = await ensureBrowserGcalSession();
         const list = taskLists.find((l) => l.id === target.listId);
         const gListId = googleListIdFor(list);
         if (session?.accessToken && gListId) {
@@ -9304,157 +10218,6 @@ export default function SummitApp() {
     }
     persistTasks(tasks.filter((t) => t.id !== taskId));
     showToast('Task deleted');
-  };
-
-  /** Push open jobs/leads to the connected Google Calendar (all-day follow-ups). */
-  const syncLeadsToGoogleCalendar = async (opts?: {
-    leadIds?: number[];
-    silent?: boolean;
-    /** Use when leads state may not have flushed yet (e.g. just scheduled). */
-    leadsOverride?: Lead[];
-  }) => {
-    if (!gcalConnected) {
-      if (!opts?.silent) showToast('Connect Google Calendar in Settings first');
-      return;
-    }
-    setGcalBusy(true);
-    try {
-      const base = opts?.leadsOverride || leads;
-      const source = opts?.leadIds
-        ? base.filter((l) => opts.leadIds!.includes(l.id))
-        : base;
-      // Merge open profile form so follow-up date / contact edits sync immediately
-      const payload = source.map((l) => {
-        const live =
-          isEditingLead && currentLeadId === l.id
-            ? { ...l, ...buildLeadFormPatch() }
-            : l;
-        return {
-          id: live.id,
-          clientFirstName: live.clientFirstName,
-          clientLastName: live.clientLastName,
-          clientAddress: live.clientAddress,
-          clientCity: live.clientCity,
-          clientState: live.clientState,
-          clientZip: live.clientZip,
-          clientPhone: live.clientPhone,
-          clientEmail: live.clientEmail,
-          jobNumber: live.jobNumber,
-          category: live.category,
-          date: live.date,
-          followUpDate: live.followUpDate,
-          notes: live.notes,
-          calendarEventId: live.calendarEventId,
-        };
-      });
-
-      let results: Array<{
-        leadId: number;
-        eventId?: string;
-        htmlLink?: string;
-        startDate?: string;
-        error?: string;
-      }> = [];
-      let synced = 0;
-
-      // Prefer browser GIS token (popup OAuth)
-      const {
-        readBrowserGcalSession,
-        syncLeadsWithBrowserToken,
-        clearBrowserGcalSession,
-      } = await import('@/lib/gcal-browser');
-      const browserSession = readBrowserGcalSession();
-
-      if (browserSession?.accessToken) {
-        const out = await syncLeadsWithBrowserToken(
-          browserSession.accessToken,
-          payload,
-          { skipClosed: true }
-        );
-        results = out.results;
-        synced = out.synced;
-        // Token expired / revoked
-        if (
-          results.some((r) =>
-            (r.error || '').toLowerCase().includes('401')
-          ) ||
-          (results.length > 0 &&
-            results.every(
-              (r) => r.error && !r.eventId && r.error !== 'skipped_closed'
-            ))
-        ) {
-          const authErr = results.find((r) =>
-            /invalid|unauth|401|expired/i.test(r.error || '')
-          );
-          if (authErr) {
-            clearBrowserGcalSession();
-            setGcalConnected(false);
-            showToast('Calendar session expired — connect again');
-            return;
-          }
-        }
-      } else {
-        // Server cookie OAuth fallback
-        const res = await fetch('/api/google/calendar/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ leads: payload, skipClosed: true }),
-        });
-        const data = (await res.json()) as {
-          error?: string;
-          synced?: number;
-          results?: typeof results;
-        };
-        if (!res.ok) {
-          showToast(data.error || 'Calendar sync failed');
-          if (res.status === 401) setGcalConnected(false);
-          return;
-        }
-        results = data.results || [];
-        synced = data.synced ?? results.filter((r) => r.eventId).length;
-      }
-
-      const byId = new Map(
-        results.filter((r) => r.eventId).map((r) => [r.leadId, r] as const)
-      );
-      const syncedAt = new Date().toISOString();
-      const updated = leads.map((lead) => {
-        const hit = byId.get(lead.id);
-        if (!hit?.eventId) return lead;
-        return {
-          ...lead,
-          calendarEventId: hit.eventId,
-          calendarHtmlLink: hit.htmlLink || lead.calendarHtmlLink,
-          calendarSyncedAt: syncedAt,
-          followUpDate: hit.startDate || lead.followUpDate,
-        };
-      });
-      persistLeads(updated);
-      setGcalLastSync(syncedAt);
-      try {
-        localStorage.setItem('summitGcalLastSync', syncedAt);
-      } catch {
-        /* ignore */
-      }
-      if (!opts?.silent) {
-        const n = synced || byId.size;
-        showToast(
-          n === 0
-            ? 'No jobs synced (all closed or empty)'
-            : `Synced ${n} job${n === 1 ? '' : 's'} to Google Calendar`
-        );
-      }
-      // Pull Google side so Summit calendar reflects any remote changes
-      void loadGoogleEvents({ silent: true });
-    } catch (e) {
-      if (!opts?.silent) {
-        showToast(
-          e instanceof Error ? e.message : 'Calendar sync failed'
-        );
-      }
-    } finally {
-      setGcalBusy(false);
-    }
   };
 
   const applyLeadFields = (lead: Lead) => {
@@ -9495,7 +10258,8 @@ export default function SummitApp() {
     setMetAdjuster(lead.metAdjuster ?? false);
     setClaimNumber(lead.claimNumber || '');
     setPolicyNumber(lead.policyNumber || '');
-    setFollowUpDate(lead.followUpDate || '');
+    setAdjustmentDate(lead.adjustmentDate || '');
+    setAdjustmentTime(lead.adjustmentTime || '');
     setLeadCategory(normalizePipelineStage(lead.category));
     setTakeoffForm(
       lead.takeoff && typeof lead.takeoff === 'object'
@@ -10381,10 +11145,12 @@ export default function SummitApp() {
         if (showCompanyPmOnDoc('prowest') && companyBrandName()) {
           const pmName = estimatePmName();
           const pmPhone = estimatePmPhone();
+          const pmEmail = (companySettings.projectManagerEmail || '').trim();
           const pmY = brandSub && brandPhone ? hy + 18.5 : brandPhone || brandSub ? hy + 14.5 : hy + 10.5;
           const pmBits = [
             pmName ? `PM ${pmName}` : '',
             pmPhone || '',
+            pmEmail || '',
           ].filter(Boolean);
           if (pmBits.length) {
             doc.text(pmBits.join(' · '), textX, pmY);
@@ -11093,7 +11859,8 @@ export default function SummitApp() {
     claimNumber,
     policyNumber,
     category: leadCategory,
-    followUpDate: followUpDate || '',
+    adjustmentDate: adjustmentDate || '',
+    adjustmentTime: adjustmentTime || '',
   });
 
   /**
@@ -11742,6 +12509,7 @@ export default function SummitApp() {
     const rule = { r: 190, g: 190, b: 195 };
     const pmName = estimatePmName();
     const pmPhone = estimatePmPhone();
+    const pmEmail = estimatePmEmail();
     const money = (n: number) =>
       `$${Math.round(n).toLocaleString()}`;
     const useCompanyHeader = Boolean(companyBrandName());
@@ -11750,7 +12518,7 @@ export default function SummitApp() {
       : brandCompany;
     const estimateContact = useCompanyHeader
       ? companyContactLine()
-      : [pmPhone, userEmail].filter(Boolean).join(' · ');
+      : [pmPhone, pmEmail].filter(Boolean).join(' · ');
 
     // --- Header: logo (upload or Summit) + Contractor (company) ---
     let y = 16;
@@ -11851,7 +12619,7 @@ export default function SummitApp() {
     doc.setTextColor(muted.r, muted.g, muted.b);
     doc.setFontSize(9);
     doc.text(pmPhone || '—', metaRight, locY + 5);
-    doc.text(userEmail || '—', metaRight, locY + 10);
+    doc.text(pmEmail || '—', metaRight, locY + 10);
     const afterAddrY = locY + Math.max(12, addressLines.length * 5);
     doc.setFontSize(9);
     doc.text(
@@ -11966,7 +12734,7 @@ export default function SummitApp() {
     doc.setFontSize(8);
     doc.setTextColor(muted.r, muted.g, muted.b);
     doc.text(
-      `Questions? ${pmName || '—'} · ${pmPhone || ''} · ${userEmail || ''}`,
+      `Questions? ${pmName || '—'} · ${pmPhone || ''} · ${pmEmail || ''}`,
       left,
       y
     );
@@ -12218,14 +12986,14 @@ export default function SummitApp() {
                   <span className="text-zinc-500">Phone:</span>{' '}
                   {estimatePmPhone() || '—'}
                 </div>
-                {userEmail.trim() ? (
+                {estimatePmEmail() ? (
                   <div className="sm:col-span-2">
                     <span className="text-zinc-500">Email:</span>{' '}
                     <a
-                      href={`mailto:${userEmail}`}
+                      href={`mailto:${estimatePmEmail()}`}
                       className="text-sky-800 hover:underline"
                     >
-                      {userEmail}
+                      {estimatePmEmail()}
                     </a>
                   </div>
                 ) : null}
@@ -12278,7 +13046,7 @@ export default function SummitApp() {
               Questions? Contact {estimatePmName() || '—'}
               {userTitle.trim() ? ` (${userTitle})` : ''} ·{' '}
               {estimatePmPhone() || '—'}
-              {userEmail.trim() ? ` · ${userEmail}` : ''}
+              {estimatePmEmail() ? ` · ${estimatePmEmail()}` : ''}
             </div>
 
             <button
@@ -13399,6 +14167,12 @@ export default function SummitApp() {
                           <span className="text-zinc-500">Phone:</span>{' '}
                           {estimatePmPhone() || '—'}
                         </div>
+                        {(companySettings.projectManagerEmail || '').trim() ? (
+                          <div className="sm:col-span-2">
+                            <span className="text-zinc-500">Email:</span>{' '}
+                            {(companySettings.projectManagerEmail || '').trim()}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   ) : null}
@@ -13569,7 +14343,11 @@ export default function SummitApp() {
                           {showCompanyPmOnDoc('prowest') ? (
                             <div className="text-zinc-600 pt-1">
                               PM:{' '}
-                              {[estimatePmName(), estimatePmPhone()]
+                              {[
+                                estimatePmName(),
+                                estimatePmPhone(),
+                                (companySettings.projectManagerEmail || '').trim(),
+                              ]
                                 .filter(Boolean)
                                 .join(' · ') || '—'}
                             </div>
@@ -13997,6 +14775,392 @@ export default function SummitApp() {
           {toastMessage}
         </div>
       )}
+      {calEventModal && (() => {
+        const editing =
+          calEventModal.mode === 'edit' && calEventModal.eventId
+            ? calendarEvents.find((e) => e.id === calEventModal.eventId)
+            : null;
+        const q = calEventDraft.leadSearch.trim().toLowerCase();
+        const leadChoices = leads
+          .filter((l) => normalizePipelineStage(l.category) !== 'Closed')
+          .filter((l) => {
+            if (!q) return true;
+            const name = leadDisplayFromParts(
+              l.clientFirstName,
+              l.clientLastName
+            ).toLowerCase();
+            const job = (l.jobNumber || '').toLowerCase();
+            const addr = (l.clientAddress || '').toLowerCase();
+            return (
+              name.includes(q) || job.includes(q) || addr.includes(q)
+            );
+          })
+          .slice(0, 8);
+        const linkedLead =
+          calEventDraft.leadId != null
+            ? leads.find((l) => l.id === calEventDraft.leadId)
+            : null;
+        const linkedLabel = linkedLead
+          ? leadDisplayFromParts(
+              linkedLead.clientFirstName,
+              linkedLead.clientLastName
+            ) || `Lead #${linkedLead.id}`
+          : editing?.leadName ||
+            (calEventDraft.leadId != null
+              ? `Lead #${calEventDraft.leadId}`
+              : '');
+        return (
+          <div className="fixed inset-0 z-[95] bg-black/40 flex items-end sm:items-center justify-center p-4">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="cal-event-title"
+              className="bg-white rounded-3xl w-full max-w-lg shadow-lg border border-zinc-200 overflow-hidden max-h-[min(92vh,720px)] flex flex-col"
+            >
+              <div className="p-5 sm:p-6 border-b border-zinc-100">
+                <h2
+                  id="cal-event-title"
+                  className="text-lg font-semibold text-zinc-900"
+                >
+                  {calEventModal.mode === 'create' ? 'Create event' : 'Event'}
+                </h2>
+                <p className="text-sm text-zinc-500 mt-1">
+                  Title, time, optional notes — link a lead if you want.
+                </p>
+              </div>
+              <div className="p-5 sm:p-6 space-y-4 overflow-y-auto flex-1">
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                    Title
+                  </span>
+                  <input
+                    type="text"
+                    value={calEventDraft.title}
+                    onChange={(e) =>
+                      setCalEventDraft((d) => ({ ...d, title: e.target.value }))
+                    }
+                    placeholder="Add title"
+                    autoFocus
+                    className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                  />
+                </label>
+                <label className="flex items-center gap-2 text-sm text-zinc-800">
+                  <input
+                    type="checkbox"
+                    checked={calEventDraft.allDay}
+                    onChange={(e) =>
+                      setCalEventDraft((d) => ({
+                        ...d,
+                        allDay: e.target.checked,
+                      }))
+                    }
+                    className="rounded border-zinc-300"
+                  />
+                  All day
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="block space-y-1.5">
+                    <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                      Date
+                    </span>
+                    <input
+                      type="date"
+                      value={calEventDraft.startDate}
+                      onChange={(e) =>
+                        setCalEventDraft((d) => ({
+                          ...d,
+                          startDate: e.target.value,
+                          endDate:
+                            d.endDate < e.target.value
+                              ? e.target.value
+                              : d.endDate,
+                        }))
+                      }
+                      className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                    />
+                  </label>
+                  <label className="block space-y-1.5">
+                    <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                      End date
+                    </span>
+                    <input
+                      type="date"
+                      value={calEventDraft.endDate}
+                      onChange={(e) =>
+                        setCalEventDraft((d) => ({
+                          ...d,
+                          endDate: e.target.value,
+                        }))
+                      }
+                      className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                    />
+                  </label>
+                </div>
+                {!calEventDraft.allDay ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="block space-y-1.5">
+                      <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                        Start
+                      </span>
+                      <input
+                        type="time"
+                        value={calEventDraft.startTime}
+                        onChange={(e) =>
+                          setCalEventDraft((d) => ({
+                            ...d,
+                            startTime: e.target.value,
+                            endTime:
+                              d.endTime <= e.target.value
+                                ? defaultEndTime(e.target.value)
+                                : d.endTime,
+                          }))
+                        }
+                        className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                      />
+                    </label>
+                    <label className="block space-y-1.5">
+                      <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                        End
+                      </span>
+                      <input
+                        type="time"
+                        value={calEventDraft.endTime}
+                        onChange={(e) =>
+                          setCalEventDraft((d) => ({
+                            ...d,
+                            endTime: e.target.value,
+                          }))
+                        }
+                        className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                      />
+                    </label>
+                  </div>
+                ) : null}
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                    Notes
+                  </span>
+                  <textarea
+                    value={calEventDraft.notes}
+                    onChange={(e) =>
+                      setCalEventDraft((d) => ({ ...d, notes: e.target.value }))
+                    }
+                    rows={3}
+                    placeholder="Add description"
+                    className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-300 resize-none"
+                  />
+                </label>
+                {googleCalendarList.length > 0 ? (
+                  <label className="block space-y-1.5">
+                    <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                      Calendar
+                    </span>
+                    <select
+                      value={calEventDraft.calendarId || 'primary'}
+                      onChange={(e) =>
+                        setCalEventDraft((d) => ({
+                          ...d,
+                          calendarId: e.target.value,
+                        }))
+                      }
+                      className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300 bg-white"
+                    >
+                      {googleCalendarList.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.summary}
+                          {c.primary ? ' (primary)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                <div className="space-y-2">
+                  <div className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                    Color
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      title="Calendar default"
+                      aria-label="Calendar default color"
+                      onClick={() =>
+                        setCalEventDraft((d) => ({
+                          ...d,
+                          colorId: undefined,
+                        }))
+                      }
+                      className={`h-7 w-7 rounded-full border-2 ${
+                        !calEventDraft.colorId
+                          ? 'border-zinc-900 ring-2 ring-zinc-900/20'
+                          : 'border-white shadow-sm'
+                      }`}
+                      style={{
+                        backgroundColor: (() => {
+                          const id = calEventDraft.calendarId || 'primary';
+                          const fromMap =
+                            googleCalendarColorMap[id] ||
+                            googleCalendarColorMap.primary;
+                          if (fromMap?.bg) return fromMap.bg;
+                          const fromList = googleCalendarList.find(
+                            (c) => c.id === id
+                          );
+                          return (
+                            fromList?.backgroundColor ||
+                            GOOGLE_CALENDAR_DEFAULT_COLOR.solid
+                          );
+                        })(),
+                      }}
+                    />
+                    {GOOGLE_EVENT_COLORS.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        title={c.name}
+                        aria-label={`Color ${c.name}`}
+                        onClick={() =>
+                          setCalEventDraft((d) => ({
+                            ...d,
+                            colorId: c.id,
+                          }))
+                        }
+                        className={`h-7 w-7 rounded-full border-2 ${
+                          calEventDraft.colorId === c.id
+                            ? 'border-zinc-900 ring-2 ring-zinc-900/20'
+                            : 'border-white shadow-sm'
+                        }`}
+                        style={{ backgroundColor: c.solid }}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <div className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                    Link lead
+                  </div>
+                  {calEventDraft.leadId != null ? (
+                    <div className="flex items-center justify-between gap-2 rounded-2xl border border-sky-200 bg-sky-50/50 px-3 py-2.5">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-zinc-900 truncate">
+                          {linkedLabel}
+                        </div>
+                        <div className="text-xs text-zinc-500">Linked lead</div>
+                      </div>
+                      <div className="flex gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const id = calEventDraft.leadId!;
+                            setCalEventModal(null);
+                            openLeadProfile(id);
+                          }}
+                          className="px-3 py-1.5 text-xs font-semibold rounded-lg btn-primary"
+                        >
+                          Open lead
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCalEventDraft((d) => ({
+                              ...d,
+                              leadId: null,
+                              leadSearch: '',
+                            }))
+                          }
+                          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-zinc-200 text-zinc-700 hover:bg-white"
+                        >
+                          Unlink
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <input
+                        type="search"
+                        value={calEventDraft.leadSearch}
+                        onChange={(e) =>
+                          setCalEventDraft((d) => ({
+                            ...d,
+                            leadSearch: e.target.value,
+                          }))
+                        }
+                        placeholder="Search leads…"
+                        className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                      />
+                      <div className="max-h-36 overflow-y-auto space-y-1">
+                        {leadChoices.map((lead) => {
+                          const name =
+                            leadDisplayFromParts(
+                              lead.clientFirstName,
+                              lead.clientLastName
+                            ) || 'Untitled';
+                          return (
+                            <button
+                              key={`link-${lead.id}`}
+                              type="button"
+                              onClick={() =>
+                                setCalEventDraft((d) => ({
+                                  ...d,
+                                  leadId: lead.id,
+                                  leadSearch: '',
+                                }))
+                              }
+                              className="w-full text-left px-3 py-2 rounded-xl text-sm hover:bg-zinc-50 border border-transparent hover:border-zinc-200"
+                            >
+                              <span className="font-medium text-zinc-900">
+                                {name}
+                              </span>
+                              {lead.jobNumber ? (
+                                <span className="text-zinc-400">
+                                  {' '}
+                                  · #{lead.jobNumber}
+                                </span>
+                              ) : null}
+                            </button>
+                          );
+                        })}
+                        {leadChoices.length === 0 ? (
+                          <p className="text-xs text-zinc-400 px-1 py-2">
+                            No matching leads
+                          </p>
+                        ) : null}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div className="px-5 sm:px-6 pb-5 sm:pb-6 pt-2 flex flex-col sm:flex-row gap-2 border-t border-zinc-100">
+                {calEventModal.mode === 'edit' && calEventModal.eventId ? (
+                  <button
+                    type="button"
+                    disabled={calEventBusy}
+                    onClick={() =>
+                      void deleteCalendarEvent(calEventModal.eventId!)
+                    }
+                    className="sm:mr-auto px-4 py-3 rounded-2xl text-sm font-medium text-red-700 border border-red-200 hover:bg-red-50 disabled:opacity-50"
+                  >
+                    Delete
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setCalEventModal(null)}
+                  className="px-4 py-3 rounded-2xl text-sm font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={calEventBusy}
+                  onClick={() => void saveCalendarEventDraft()}
+                  className="btn-primary px-5 py-3 rounded-2xl text-sm font-semibold disabled:opacity-50"
+                >
+                  {calEventBusy ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {pendingLeave && (
         <div className="fixed inset-0 z-[95] bg-black/40 flex items-end sm:items-center justify-center p-4">
           <div
@@ -15077,7 +16241,11 @@ export default function SummitApp() {
                           {showCompanyPmOnDoc('prowest') ? (
                             <div className="text-zinc-600 pt-1">
                               PM:{' '}
-                              {[estimatePmName(), estimatePmPhone()]
+                              {[
+                                estimatePmName(),
+                                estimatePmPhone(),
+                                (companySettings.projectManagerEmail || '').trim(),
+                              ]
                                 .filter(Boolean)
                                 .join(' · ') || '—'}
                             </div>
@@ -15671,6 +16839,11 @@ export default function SummitApp() {
                         <div className="text-zinc-600 mt-0.5">
                           {estimatePmPhone() || '—'}
                         </div>
+                        {(companySettings.projectManagerEmail || '').trim() ? (
+                          <div className="text-zinc-600 mt-0.5">
+                            {(companySettings.projectManagerEmail || '').trim()}
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
@@ -15919,7 +17092,7 @@ export default function SummitApp() {
                 })}
               </div>
 
-              {/* Quick links — match original card stack */}
+              {/* Quick links — sidebar order, New Lead first */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                 <div
                   onClick={() => createNewLead()}
@@ -15930,6 +17103,18 @@ export default function SummitApp() {
                   </div>
                   <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
                     Create a job · estimate from the lead profile
+                  </p>
+                </div>
+
+                <div
+                  onClick={() => handleTabChange('leads')}
+                  className="group bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
+                >
+                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900 transition-colors">
+                    Pipeline
+                  </div>
+                  <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
+                    Pipeline board · open a job to estimate
                   </p>
                 </div>
 
@@ -15958,30 +17143,6 @@ export default function SummitApp() {
                 </div>
 
                 <div
-                  onClick={() => handleTabChange('leads')}
-                  className="group bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
-                >
-                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900 transition-colors">
-                    Pipeline
-                  </div>
-                  <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
-                    Pipeline board · open a job to estimate
-                  </p>
-                </div>
-
-                <div
-                  onClick={() => handleTabChange('documents')}
-                  className="group bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
-                >
-                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900 transition-colors">
-                    Documents
-                  </div>
-                  <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
-                    Contracts and files
-                  </p>
-                </div>
-
-                <div
                   onClick={() => handleTabChange('calendar')}
                   className="group bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
                 >
@@ -15989,7 +17150,7 @@ export default function SummitApp() {
                     Calendar
                   </div>
                   <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
-                    Schedule and follow-ups
+                    Adjustments and bookings
                   </p>
                 </div>
 
@@ -16008,6 +17169,19 @@ export default function SummitApp() {
 
                 <button
                   type="button"
+                  onClick={() => handleTabChange('performance')}
+                  className="group text-left bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 transition-all duration-200"
+                >
+                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900 transition-colors">
+                    Performance
+                  </div>
+                  <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
+                    Pipeline health · jobs and estimates
+                  </p>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => handleTabChange('tools')}
                   className="group text-left bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 transition-all duration-200"
                 >
@@ -16018,6 +17192,18 @@ export default function SummitApp() {
                     Weather, canvassing
                   </p>
                 </button>
+
+                <div
+                  onClick={() => handleTabChange('documents')}
+                  className="group bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 cursor-pointer transition-all duration-200"
+                >
+                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900 transition-colors">
+                    Documents
+                  </div>
+                  <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
+                    Contracts and files
+                  </p>
+                </div>
               </div>
             </div>
           );
@@ -16333,18 +17519,7 @@ export default function SummitApp() {
           const openJobs = leads.filter(
             (l) => normalizePipelineStage(l.category) !== 'Closed'
           );
-          const synced = openJobs.filter((l) => l.calendarEventId);
           const todayIso = toLocalIsoDate(new Date());
-
-          // Group jobs by schedule date
-          const byDate = new Map<string, Lead[]>();
-          for (const lead of openJobs) {
-            const key = leadScheduleIso(lead);
-            if (!key) continue;
-            const list = byDate.get(key) || [];
-            list.push(lead);
-            byDate.set(key, list);
-          }
 
           // Month grid: full weeks covering the month
           const monthStart = new Date(
@@ -16357,539 +17532,1085 @@ export default function SummitApp() {
           const monthDays = Array.from({ length: 42 }, (_, i) =>
             addDays(monthGridStart, i)
           );
+          // Week grid: Sunday–Saturday containing cursor / selected day
+          const weekAnchor = calendarSelectedDay
+            ? new Date(calendarSelectedDay + 'T12:00:00')
+            : calendarCursor;
+          weekAnchor.setHours(12, 0, 0, 0);
+          const weekStart = startOfWeekSunday(
+            calendarViewMode === 'week' ? calendarCursor : weekAnchor
+          );
+          const weekDays = Array.from({ length: 7 }, (_, i) =>
+            addDays(weekStart, i)
+          );
+          const weekEnd = weekDays[6]!;
           const selectedIso =
             calendarSelectedDay ||
             todayIso ||
             toLocalIsoDate(calendarCursor);
-          const dayJobs = byDate.get(selectedIso) || [];
-          const unscheduled = openJobs.filter((l) => !leadScheduleIso(l));
 
-          const weekStart = startOfWeekSunday(calendarCursor);
-          const weekDays = Array.from({ length: 7 }, (_, i) =>
-            addDays(weekStart, i)
-          );
-
-          const gcalEventDayIso = (event: {
+          const gcalEventDayKeys = (event: {
             start?: { dateTime?: string; date?: string };
-          }): string | null => {
-            const raw = event.start?.date || event.start?.dateTime;
-            if (!raw) return null;
-            if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-            const d = new Date(raw);
-            if (Number.isNaN(d.getTime())) return null;
-            return toLocalIsoDate(d);
+            end?: { dateTime?: string; date?: string };
+          }): string[] => {
+            const startRaw = event.start?.date || event.start?.dateTime;
+            if (!startRaw) return [];
+            const allDay = Boolean(event.start?.date && !event.start?.dateTime);
+            if (allDay) {
+              const startDate = event.start!.date!;
+              const endExclusive =
+                event.end?.date ||
+                (() => {
+                  const d = new Date(startDate + 'T12:00:00');
+                  d.setDate(d.getDate() + 1);
+                  return toLocalIsoDate(d);
+                })();
+              const endInclusive = (() => {
+                const d = new Date(endExclusive + 'T12:00:00');
+                d.setDate(d.getDate() - 1);
+                return toLocalIsoDate(d);
+              })();
+              const keys: string[] = [];
+              let cur = startDate;
+              let guard = 0;
+              const last =
+                endInclusive < startDate ? startDate : endInclusive;
+              while (cur <= last && guard < 60) {
+                keys.push(cur);
+                const d = new Date(cur + 'T12:00:00');
+                d.setDate(d.getDate() + 1);
+                cur = toLocalIsoDate(d);
+                guard += 1;
+              }
+              return keys.length ? keys : [startDate];
+            }
+            const startD = new Date(event.start!.dateTime!);
+            if (Number.isNaN(startD.getTime())) return [];
+            const endD = event.end?.dateTime
+              ? new Date(event.end.dateTime)
+              : new Date(startD.getTime() + 60 * 60 * 1000);
+            const keys: string[] = [];
+            const cursor = new Date(startD);
+            cursor.setHours(12, 0, 0, 0);
+            const endDay = new Date(endD);
+            // End exactly at midnight → prior day only
+            if (
+              endD.getHours() === 0 &&
+              endD.getMinutes() === 0 &&
+              endD.getSeconds() === 0 &&
+              endD.getTime() > startD.getTime()
+            ) {
+              endDay.setTime(endD.getTime() - 1);
+            }
+            endDay.setHours(12, 0, 0, 0);
+            let guard = 0;
+            while (cursor.getTime() <= endDay.getTime() && guard < 60) {
+              keys.push(toLocalIsoDate(cursor));
+              cursor.setDate(cursor.getDate() + 1);
+              guard += 1;
+            }
+            return keys.length ? keys : [toLocalIsoDate(startD)];
           };
 
-          const googleByDate = new Map<string, typeof googleCalendarEvents>();
-          for (const event of googleCalendarEvents) {
-            const key = gcalEventDayIso(event);
-            if (!key) continue;
-            const list = googleByDate.get(key) || [];
-            list.push(event);
-            googleByDate.set(key, list);
+          const safeGoogleEvents = Array.isArray(googleCalendarEvents)
+            ? googleCalendarEvents
+            : [];
+          const safeCalendarEvents = Array.isArray(calendarEvents)
+            ? calendarEvents
+            : [];
+          const safeTasks = Array.isArray(tasks) ? tasks : [];
+
+          const googleByDate = new Map<
+            string,
+            (typeof safeGoogleEvents)[number][]
+          >();
+          for (const event of safeGoogleEvents) {
+            if (!event || typeof event !== 'object') continue;
+            for (const key of gcalEventDayKeys(event)) {
+              const list = googleByDate.get(key) || [];
+              list.push(event);
+              googleByDate.set(key, list);
+            }
           }
 
           const dayGoogle = googleByDate.get(selectedIso) || [];
 
+          const daySummitEvents = safeCalendarEvents.filter((ev) =>
+            eventOccursOnDay(ev, selectedIso)
+          );
+
+          // Google events not already represented as Summit events or lead adjustments
+          const summitGoogleIds = new Set(
+            safeCalendarEvents
+              .map((e) => e?.googleEventId)
+              .filter((id): id is string => Boolean(id))
+          );
+          const adjustmentGoogleIds = new Set(
+            (Array.isArray(openJobs) ? openJobs : [])
+              .map((l) => l?.calendarEventId)
+              .filter((id): id is string => Boolean(id))
+          );
+          const dayGoogleOnly = dayGoogle.filter(
+            (ev) =>
+              ev?.id &&
+              !summitGoogleIds.has(ev.id) &&
+              !adjustmentGoogleIds.has(ev.id)
+          );
+
           const tasksByDate = new Map<string, SummitTask[]>();
-          for (const task of tasks) {
-            if (!task.dueDate || task.completed) continue;
+          for (const task of safeTasks) {
+            if (!task?.dueDate || task.completed) continue;
             const list = tasksByDate.get(task.dueDate) || [];
             list.push(task);
             tasksByDate.set(task.dueDate, list);
           }
           const dayTasks = tasksByDate.get(selectedIso) || [];
 
-          const scheduleLeadOnDay = (leadId: number, iso: string) => {
-            const updated = leads.map((l) =>
-              l.id === leadId ? { ...l, followUpDate: iso } : l
-            );
-            persistLeads(updated);
-            setCalendarSelectedDay(iso);
-            showToast(`Scheduled for ${iso}`);
-            if (gcalConnected) {
-              void syncLeadsToGoogleCalendar({
-                leadIds: [leadId],
-                silent: true,
-                leadsOverride: updated,
-              });
-            }
-          };
-
-          const scheduleName = firstNameFrom(userName, 'Joe');
           const monthLabel = calendarCursor.toLocaleDateString(undefined, {
             month: 'long',
             year: 'numeric',
           });
+          const weekLabel = (() => {
+            const a = weekStart.toLocaleDateString(undefined, {
+              month: 'short',
+              day: 'numeric',
+            });
+            const b = weekEnd.toLocaleDateString(undefined, {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+            });
+            return `${a} – ${b}`;
+          })();
+          const nowMinutes =
+            new Date().getHours() * 60 + new Date().getMinutes();
+          const gridHeight = WEEK_VIEW_HOURS * WEEK_VIEW_HOUR_PX;
+
+          type WeekAllDayChip = {
+            key: string;
+            label: string;
+            kind: 'event' | 'task' | 'google';
+            colorId?: string;
+            calendarColor?: CalendarListColor;
+            onOpen?: () => void;
+          };
+          type WeekTimedBlock = {
+            key: string;
+            label: string;
+            sub?: string;
+            kind: 'event' | 'task' | 'google';
+            colorId?: string;
+            calendarColor?: CalendarListColor;
+            top: number;
+            height: number;
+            startMin: number;
+            endMin: number;
+            leftPct: number;
+            widthPct: number;
+            zIndex: number;
+            onOpen?: () => void;
+          };
+
+          const weekAllDayForIso = (iso: string): WeekAllDayChip[] => {
+            const chips: WeekAllDayChip[] = [];
+            for (const ev of safeCalendarEvents.filter((e) =>
+              e && eventOccursOnDay(e, iso)
+            )) {
+              if (!ev.allDay && ev.startTime) continue;
+              chips.push({
+                key: `e-${ev.id}`,
+                label: ev.title,
+                kind: 'event',
+                colorId: ev.colorId,
+                calendarColor: calendarColorFor(ev.calendarId, {
+                  bg: ev.calendarColorBg,
+                  fg: ev.calendarColorFg,
+                }),
+                onOpen: () => openEditCalendarEvent(ev),
+              });
+            }
+            for (const task of tasksByDate.get(iso) || []) {
+              chips.push({
+                key: `t-${task.id}`,
+                label: task.title,
+                kind: 'task',
+              });
+            }
+            for (const ev of (googleByDate.get(iso) || []).filter(
+              (g) =>
+                !summitGoogleIds.has(g.id) && !adjustmentGoogleIds.has(g.id)
+            )) {
+              const isAllDay = Boolean(ev.start?.date && !ev.start?.dateTime);
+              if (!isAllDay) continue;
+              chips.push({
+                key: `g-${ev.id}`,
+                label: ev.summary || 'Google event',
+                kind: 'google',
+                colorId: ev.colorId,
+                calendarColor: calendarColorFor(ev.calendarId, {
+                  bg: ev.calendarBackground,
+                  fg: ev.calendarForeground,
+                }),
+              });
+            }
+            return chips;
+          };
+
+          const weekTimedForIso = (iso: string): WeekTimedBlock[] => {
+            const blocks: WeekTimedBlock[] = [];
+            for (const ev of safeCalendarEvents.filter((e) =>
+              e && eventOccursOnDay(e, iso)
+            )) {
+              if (ev.allDay || !ev.startTime) continue;
+              const range = timedEventMinutesOnDay(ev, iso);
+              if (!range) continue;
+              const { startMin: start, endMin: end } = range;
+              const dur = end - start;
+              blocks.push({
+                key: `e-${ev.id}`,
+                label: ev.title,
+                sub: formatEventTimeLabel(ev),
+                kind: 'event',
+                colorId: ev.colorId,
+                calendarColor: calendarColorFor(ev.calendarId, {
+                  bg: ev.calendarColorBg,
+                  fg: ev.calendarColorFg,
+                }),
+                top: (start / 60) * WEEK_VIEW_HOUR_PX,
+                height: Math.max(
+                  WEEK_VIEW_MIN_EVENT_PX,
+                  (dur / 60) * WEEK_VIEW_HOUR_PX
+                ),
+                startMin: start,
+                endMin: end,
+                leftPct: 0,
+                widthPct: 100,
+                zIndex: 10,
+                onOpen: () => openEditCalendarEvent(ev),
+              });
+            }
+            for (const ev of (googleByDate.get(iso) || []).filter(
+              (g) =>
+                !summitGoogleIds.has(g.id) && !adjustmentGoogleIds.has(g.id)
+            )) {
+              if (ev.start?.date && !ev.start?.dateTime) continue;
+              const startRaw = ev.start?.dateTime;
+              if (!startRaw) continue;
+              const startD = new Date(startRaw);
+              if (Number.isNaN(startD.getTime())) continue;
+              const endD = ev.end?.dateTime
+                ? new Date(ev.end.dateTime)
+                : new Date(startD.getTime() + 60 * 60 * 1000);
+              const startDayIso = toLocalIsoDate(startD);
+              let endDayIso = toLocalIsoDate(endD);
+              const endsMidnight =
+                endD.getHours() === 0 &&
+                endD.getMinutes() === 0 &&
+                endD.getSeconds() === 0 &&
+                endD.getTime() > startD.getTime();
+              if (endsMidnight) {
+                const prev = new Date(endD.getTime() - 1);
+                endDayIso = toLocalIsoDate(prev);
+              }
+              const start =
+                startDayIso === iso
+                  ? startD.getHours() * 60 + startD.getMinutes()
+                  : 0;
+              let end =
+                endDayIso === iso && !endsMidnight
+                  ? endD.getHours() * 60 + endD.getMinutes()
+                  : endDayIso === iso && endsMidnight
+                    ? 24 * 60
+                    : endDayIso > iso
+                      ? 24 * 60
+                      : endD.getHours() * 60 + endD.getMinutes();
+              if (startDayIso === iso && endDayIso > iso) end = 24 * 60;
+              // Don't invent a 60‑min collision window for zero-length events
+              if (!(end > start)) end = Math.min(24 * 60, start + 1);
+              const dur = end - start;
+              blocks.push({
+                key: `g-${ev.id}`,
+                label: ev.summary || 'Google event',
+                kind: 'google',
+                colorId: ev.colorId,
+                calendarColor: calendarColorFor(ev.calendarId, {
+                  bg: ev.calendarBackground,
+                  fg: ev.calendarForeground,
+                }),
+                top: (start / 60) * WEEK_VIEW_HOUR_PX,
+                height: Math.max(
+                  WEEK_VIEW_MIN_EVENT_PX,
+                  (dur / 60) * WEEK_VIEW_HOUR_PX
+                ),
+                startMin: start,
+                endMin: end,
+                leftPct: 0,
+                widthPct: 100,
+                zIndex: 10,
+              });
+            }
+            const layout = layoutOverlappingTimedEvents(
+              blocks.map((b) => ({
+                key: b.key,
+                startMin: b.startMin,
+                endMin: b.endMin,
+              }))
+            );
+            return blocks.map((b) => {
+              const place = layout.get(b.key);
+              return {
+                ...b,
+                leftPct: place?.leftPct ?? 0,
+                widthPct: place?.widthPct ?? 100,
+                zIndex: place?.zIndex ?? 10,
+              };
+            });
+          };
+
+          const openCreateAtSlot = (iso: string, clientY: number, target: HTMLElement) => {
+            const rect = target.getBoundingClientRect();
+            const y = clientY - rect.top;
+            const rawMins = (y / WEEK_VIEW_HOUR_PX) * 60;
+            const snapped = Math.max(
+              0,
+              Math.min(23 * 60 + 30, snapMinutes(rawMins, 30))
+            );
+            const startTime = minutesToHhmm(snapped);
+            openCreateCalendarEvent(iso, {
+              startTime,
+              endTime: defaultEndTime(startTime),
+              allDay: false,
+            });
+          };
 
           return (
             <div className="page-shell page-fade space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div>
                   <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
                     {appDisplayName()} Calendar
                   </h1>
-                  <p className="text-zinc-500 mt-1">
-                    {scheduleName}
-                    {gcalEmail ? ` · ${gcalEmail}` : ''}
-                    {gcalConnected
-                      ? ` · ${synced.length}/${openJobs.length} jobs linked`
-                      : ' · Connect Google for two-way sync'}
-                  </p>
+                  {gcalEmail ? (
+                    <p className="text-zinc-500 mt-1 text-sm">{gcalEmail}</p>
+                  ) : null}
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                  <div
+                    className="inline-flex rounded-2xl border border-zinc-200 p-0.5 bg-zinc-50/80"
+                    role="group"
+                    aria-label="Calendar view"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setCalendarViewMode('month')}
+                      className={`px-3.5 py-2 rounded-[0.9rem] text-sm font-semibold transition-colors ${
+                        calendarViewMode === 'month'
+                          ? 'bg-white text-zinc-900 shadow-sm'
+                          : 'text-zinc-500 hover:text-zinc-800'
+                      }`}
+                    >
+                      Month
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCalendarViewMode('week');
+                        const anchor = calendarSelectedDay
+                          ? new Date(calendarSelectedDay + 'T12:00:00')
+                          : calendarCursor;
+                        setCalendarCursor(anchor);
+                      }}
+                      className={`px-3.5 py-2 rounded-[0.9rem] text-sm font-semibold transition-colors ${
+                        calendarViewMode === 'week'
+                          ? 'bg-white text-zinc-900 shadow-sm'
+                          : 'text-zinc-500 hover:text-zinc-800'
+                      }`}
+                    >
+                      Week
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCalendarViewMode('day');
+                        const anchor = calendarSelectedDay
+                          ? new Date(calendarSelectedDay + 'T12:00:00')
+                          : calendarCursor;
+                        setCalendarCursor(anchor);
+                        setCalendarSelectedDay(toLocalIsoDate(anchor));
+                      }}
+                      className={`px-3.5 py-2 rounded-[0.9rem] text-sm font-semibold transition-colors ${
+                        calendarViewMode === 'day'
+                          ? 'bg-white text-zinc-900 shadow-sm'
+                          : 'text-zinc-500 hover:text-zinc-800'
+                      }`}
+                    >
+                      Day
+                    </button>
+                  </div>
                   <button
                     type="button"
                     onClick={() => {
                       const now = new Date();
                       setCalendarCursor(now);
                       setCalendarSelectedDay(toLocalIsoDate(now));
+                      setCalendarViewMode('day');
                     }}
                     className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50"
                   >
                     Today
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => handleTabChange('tasks')}
-                    className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50"
+                  <div
+                    className="inline-flex rounded-2xl border border-zinc-200 p-0.5 bg-zinc-50/80"
+                    role="group"
+                    aria-label="Calendar or Tasks"
                   >
-                    Tasks
-                  </button>
-                  {gcalConnected ? (
-                    <>
-                      <button
-                        type="button"
-                        disabled={googleEventsLoading}
-                        onClick={() =>
-                          void loadGoogleEvents({ cursor: calendarCursor })
-                        }
-                        className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold disabled:opacity-50"
-                      >
-                        {googleEventsLoading
-                          ? 'Loading…'
-                          : 'Refresh from Google'}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={gcalBusy || openJobs.length === 0}
-                        onClick={() => void syncLeadsToGoogleCalendar()}
-                        className="px-5 py-2.5 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
-                      >
-                        {gcalBusy ? 'Syncing…' : 'Sync jobs → Google'}
-                      </button>
-                    </>
-                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleTabChange('calendar')}
+                      className="px-3.5 py-2 rounded-[0.9rem] text-sm font-semibold transition-colors bg-white text-zinc-900 shadow-sm"
+                    >
+                      Calendar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleTabChange('tasks')}
+                      className="px-3.5 py-2 rounded-[0.9rem] text-sm font-semibold transition-colors text-zinc-500 hover:text-zinc-800"
+                    >
+                      Tasks
+                    </button>
+                  </div>
+                  {!gcalConnected ? (
                     <button
                       type="button"
                       disabled={gcalBusy}
                       onClick={() => void connectGoogleCalendar()}
-                      className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold disabled:opacity-50"
+                      className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
                     >
                       Connect Google
                     </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Classic: mini month + week strip + Google agenda */}
-              <div className="flex flex-col lg:flex-row gap-6 lg:gap-8">
-                <div className="w-full lg:w-64 shrink-0 bg-white border border-zinc-200 rounded-2xl p-4 h-fit">
-                  <div className="flex items-center justify-between mb-3">
+                  ) : null}
+                  {gcalConnected && gtasksNeedsReconnect ? (
                     <button
                       type="button"
+                      disabled={gcalBusy}
                       onClick={() =>
-                        setCalendarCursor((prev) => {
-                          const n = new Date(prev);
-                          n.setMonth(n.getMonth() - 1);
-                          return n;
-                        })
+                        void connectGoogleCalendar({ forceConsent: true })
                       }
-                      className="w-8 h-8 rounded-lg text-zinc-600 hover:bg-zinc-100 text-sm"
-                      aria-label="Previous month"
+                      className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-amber-300 text-amber-950 bg-amber-50 hover:bg-amber-100 disabled:opacity-50"
                     >
-                      ←
+                      Reconnect for Tasks
                     </button>
-                    <div className="text-center text-zinc-900 font-semibold text-sm">
-                      {monthLabel}
-                    </div>
+                  ) : null}
+                  {gcalConnected && gcalCalendarListNeedsReconnect ? (
                     <button
                       type="button"
+                      disabled={gcalBusy}
                       onClick={() =>
-                        setCalendarCursor((prev) => {
-                          const n = new Date(prev);
-                          n.setMonth(n.getMonth() + 1);
-                          return n;
-                        })
+                        void connectGoogleCalendar({ forceConsent: true })
                       }
-                      className="w-8 h-8 rounded-lg text-zinc-600 hover:bg-zinc-100 text-sm"
-                      aria-label="Next month"
+                      className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-amber-300 text-amber-950 bg-amber-50 hover:bg-amber-100 disabled:opacity-50"
                     >
-                      →
+                      Reconnect for colors
                     </button>
-                  </div>
-                  <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-medium text-zinc-400 mb-1">
-                    {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
-                      <div key={`mh-${i}`}>{d}</div>
-                    ))}
-                  </div>
-                  <div className="grid grid-cols-7 gap-1 text-center text-xs">
-                    {monthDays.map((day) => {
-                      const iso = toLocalIsoDate(day);
-                      const inMonth =
-                        day.getMonth() === calendarCursor.getMonth();
-                      const isToday = iso === todayIso;
-                      const isSelected = iso === selectedIso;
-                      const hasJob = (byDate.get(iso) || []).length > 0;
-                      const hasTask = (tasksByDate.get(iso) || []).length > 0;
-                      return (
-                        <button
-                          key={`mini-${iso}`}
-                          type="button"
-                          onClick={() => {
-                            setCalendarSelectedDay(iso);
-                            setCalendarCursor(day);
-                          }}
-                          className={`py-1.5 rounded-lg tabular-nums transition-colors ${
-                            isSelected
-                              ? 'day-highlight font-semibold'
-                              : isToday
-                                ? 'bg-transparent text-slate-800 font-semibold border border-slate-500'
-                                : inMonth
-                                  ? 'text-zinc-800 hover:bg-white'
-                                  : 'text-zinc-300'
-                          }`}
-                        >
-                          {day.getDate()}
-                          {(hasJob || hasTask) && !isSelected ? (
-                            <span
-                              className={`block w-1 h-1 mx-auto mt-0.5 rounded-full ${
-                                hasTask && !hasJob
-                                  ? 'bg-amber-500'
-                                  : 'bg-slate-500'
-                              }`}
-                            />
-                          ) : null}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  ) : null}
                   <button
                     type="button"
-                    onClick={() => {
-                      const now = new Date();
-                      setCalendarCursor(now);
-                      setCalendarSelectedDay(toLocalIsoDate(now));
-                    }}
-                    className="mt-3 w-full text-xs font-medium text-slate-800 hover:underline"
+                    onClick={() => openCreateCalendarEvent(selectedIso)}
+                    className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold"
                   >
-                    Today
+                    Create event
                   </button>
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  <div className="grid grid-cols-7 gap-2 text-center text-sm mb-4">
-                    {weekDays.map((day) => {
-                      const iso = toLocalIsoDate(day);
-                      const isToday = iso === todayIso;
-                      const isSelected = iso === selectedIso;
-                      const label = day.toLocaleDateString('en-US', {
-                        weekday: 'short',
-                        day: 'numeric',
-                      });
-                      return (
-                        <button
-                          key={`wk-${iso}`}
-                          type="button"
-                          onClick={() => {
-                            setCalendarSelectedDay(iso);
-                            setCalendarCursor(day);
-                          }}
-                          className={`rounded-xl py-3 border transition-colors ${
-                            isSelected
-                              ? 'day-highlight font-semibold'
-                              : isToday
-                                ? 'bg-transparent text-slate-900 border-slate-500 font-medium'
-                                : 'bg-white border-zinc-200 text-zinc-700 hover:border-sky-300'
-                          }`}
-                        >
-                          {label.toUpperCase()}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div className="space-y-3 max-h-[min(420px,45vh)] overflow-y-auto">
-                    {!gcalConnected ? (
-                      <div className="text-center py-14 text-zinc-400 text-sm rounded-2xl border border-dashed border-zinc-200 bg-white">
-                        <p>Connect Google to see your agenda</p>
-                        <button
-                          type="button"
-                          disabled={gcalBusy}
-                          onClick={() => void connectGoogleCalendar()}
-                          className="btn-primary mt-4 px-5 py-2.5 rounded-2xl text-sm font-semibold"
-                        >
-                          Connect Google
-                        </button>
-                      </div>
-                    ) : googleEventsLoading &&
-                      googleCalendarEvents.length === 0 ? (
-                      <div className="text-center py-14 text-zinc-400 text-sm">
-                        Loading events…
-                      </div>
-                    ) : googleCalendarEvents.length === 0 ? (
-                      <div className="text-center py-14 text-zinc-400 text-sm rounded-2xl border border-dashed border-zinc-200 bg-white">
-                        Refresh Google Calendar to see your events
-                      </div>
-                    ) : (
-                      googleCalendarEvents.map((event) => {
-                        const startRaw =
-                          event.start?.dateTime || event.start?.date;
-                        const isAllDay = Boolean(
-                          event.start?.date && !event.start?.dateTime
-                        );
-                        const timeLabel = !startRaw
-                          ? '—'
-                          : isAllDay
-                            ? 'All day'
-                            : new Date(startRaw).toLocaleTimeString([], {
-                                hour: 'numeric',
-                                minute: '2-digit',
-                              });
-                        return (
-                          <div
-                            key={`agenda-${event.id}`}
-                            className="flex items-center gap-6 bg-transparent border border-slate-500 hover:border-slate-400 rounded-2xl p-4 transition"
-                          >
-                            <div className="w-24 shrink-0 font-mono text-slate-500 text-sm">
-                              {timeLabel}
-                            </div>
-                            <div className="flex-1 min-w-0 font-semibold text-zinc-900 truncate">
-                              {event.summary || '(No title)'}
-                            </div>
-                            {event.htmlLink ? (
-                              <a
-                                href={event.htmlLink}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-xs text-slate-500 bg-transparent px-3 py-1 rounded-full border border-slate-500 shrink-0"
-                              >
-                                Open
-                              </a>
-                            ) : (
-                              <div className="text-xs text-slate-500 bg-transparent px-3 py-1 rounded-full border border-slate-500 shrink-0">
-                                Open
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
                 </div>
               </div>
 
-              {/* Full month grid */}
+              {/* Month or week grid — hidden in Day mode (day breakdown is primary) */}
+              {calendarViewMode !== 'day' ? (
               <div className="rounded-3xl border border-zinc-200 bg-white overflow-hidden">
                 <div className="flex items-center justify-between px-4 sm:px-5 py-4 border-b border-zinc-100">
                   <button
                     type="button"
-                    onClick={() =>
-                      setCalendarCursor((prev) => {
-                        const n = new Date(prev);
-                        n.setMonth(n.getMonth() - 1);
-                        return n;
-                      })
-                    }
+                    onClick={() => {
+                      if (calendarViewMode === 'week') {
+                        const n = addDays(startOfWeekSunday(calendarCursor), -7);
+                        setCalendarCursor(n);
+                        setCalendarSelectedDay(toLocalIsoDate(n));
+                      } else {
+                        setCalendarCursor((prev) => {
+                          const n = new Date(prev);
+                          n.setMonth(n.getMonth() - 1);
+                          return n;
+                        });
+                      }
+                    }}
                     className="w-9 h-9 rounded-xl text-zinc-600 hover:bg-zinc-100 text-sm font-semibold"
-                    aria-label="Previous month"
+                    aria-label={
+                      calendarViewMode === 'week'
+                        ? 'Previous week'
+                        : 'Previous month'
+                    }
                   >
                     ←
                   </button>
                   <div className="text-center text-zinc-900 font-semibold text-lg tracking-tight">
-                    {monthLabel}
+                    {calendarViewMode === 'week' ? weekLabel : monthLabel}
                   </div>
                   <button
                     type="button"
-                    onClick={() =>
-                      setCalendarCursor((prev) => {
-                        const n = new Date(prev);
-                        n.setMonth(n.getMonth() + 1);
-                        return n;
-                      })
-                    }
+                    onClick={() => {
+                      if (calendarViewMode === 'week') {
+                        const n = addDays(startOfWeekSunday(calendarCursor), 7);
+                        setCalendarCursor(n);
+                        setCalendarSelectedDay(toLocalIsoDate(n));
+                      } else {
+                        setCalendarCursor((prev) => {
+                          const n = new Date(prev);
+                          n.setMonth(n.getMonth() + 1);
+                          return n;
+                        });
+                      }
+                    }}
                     className="w-9 h-9 rounded-xl text-zinc-600 hover:bg-zinc-100 text-sm font-semibold"
-                    aria-label="Next month"
+                    aria-label={
+                      calendarViewMode === 'week' ? 'Next week' : 'Next month'
+                    }
                   >
                     →
                   </button>
                 </div>
-                <div className="grid grid-cols-7 border-b border-zinc-100 text-center text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
-                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(
-                    (d) => (
-                      <div key={d} className="py-2">
-                        {d}
-                      </div>
-                    )
-                  )}
-                </div>
-                <div className="grid grid-cols-7 auto-rows-fr">
-                  {monthDays.map((day) => {
-                    const iso = toLocalIsoDate(day);
-                    const inMonth =
-                      day.getMonth() === calendarCursor.getMonth();
-                    const isToday = iso === todayIso;
-                    const isSelected = iso === selectedIso;
-                    const jobs = byDate.get(iso) || [];
-                    const gEvents = googleByDate.get(iso) || [];
-                    const dayTaskList = tasksByDate.get(iso) || [];
-                    const chips = [
-                      ...jobs.slice(0, 1).map((lead) => ({
-                        key: `j-${lead.id}`,
-                        label:
-                          [lead.clientFirstName, lead.clientLastName]
-                            .filter(Boolean)
-                            .join(' ') ||
-                          lead.category ||
-                          'Job',
-                        kind: 'job' as const,
-                      })),
-                      ...dayTaskList.slice(0, 1).map((task) => ({
-                        key: `t-${task.id}`,
-                        label: task.title,
-                        kind: 'task' as const,
-                      })),
-                      ...gEvents
-                        .filter((ev) => {
-                          // Avoid double-listing Summit-synced Google events
-                          const summitIds = new Set(
-                            jobs
-                              .map((j) => j.calendarEventId)
-                              .filter(Boolean) as string[]
-                          );
-                          return !summitIds.has(ev.id);
-                        })
-                        .slice(
-                          0,
-                          Math.max(
-                            0,
-                            3 -
-                              Math.min(1, jobs.length) -
-                              Math.min(1, dayTaskList.length)
-                          )
-                        )
-                        .map((ev) => ({
-                          key: `g-${ev.id}`,
-                          label: ev.summary || 'Google event',
-                          kind: 'google' as const,
-                        })),
-                    ];
-                    const more =
-                      jobs.length +
-                      dayTaskList.length +
-                      gEvents.filter((ev) => {
-                        const summitIds = new Set(
-                          jobs
-                            .map((j) => j.calendarEventId)
-                            .filter(Boolean) as string[]
-                        );
-                        return !summitIds.has(ev.id);
-                      }).length -
-                      chips.length;
-                    return (
-                      <button
-                        key={iso}
-                        type="button"
-                        onClick={() => {
-                          setCalendarSelectedDay(iso);
-                          if (!inMonth) setCalendarCursor(day);
-                        }}
-                        className={`min-h-[5.5rem] sm:min-h-[6.75rem] p-1.5 sm:p-2 text-left border-b border-r border-zinc-100 transition-colors align-top ${
-                          isSelected
-                            ? 'bg-sky-50 ring-2 ring-inset ring-sky-400'
-                            : isToday
-                              ? 'bg-zinc-50'
-                              : 'bg-white hover:bg-zinc-50/80'
-                        } ${inMonth ? '' : 'opacity-45'}`}
-                      >
-                        <div
-                          className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs tabular-nums font-semibold ${
-                            isToday
-                              ? 'bg-zinc-900 text-white'
-                              : 'text-zinc-800'
-                          }`}
-                        >
-                          {day.getDate()}
-                        </div>
-                        <div className="mt-1 space-y-0.5">
-                          {chips.map((chip) => (
+
+                {calendarViewMode === 'week' ? (
+                  <div className="flex flex-col min-h-0">
+                    {/* Day headers */}
+                    <div className="grid grid-cols-[3.25rem_repeat(7,minmax(0,1fr))] border-b border-zinc-100">
+                      <div className="border-r border-zinc-100" />
+                      {weekDays.map((day) => {
+                        const iso = toLocalIsoDate(day);
+                        const isToday = iso === todayIso;
+                        const isSelected = iso === selectedIso;
+                        return (
+                          <button
+                            key={`wh-${iso}`}
+                            type="button"
+                            onClick={() => {
+                              setCalendarSelectedDay(iso);
+                              setCalendarCursor(day);
+                            }}
+                            className={`py-2 px-1 text-center border-r border-zinc-100 last:border-r-0 transition-colors ${
+                              isSelected ? 'bg-sky-50' : 'hover:bg-zinc-50'
+                            }`}
+                          >
+                            <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
+                              {day.toLocaleDateString(undefined, {
+                                weekday: 'short',
+                              })}
+                            </div>
                             <div
-                              key={chip.key}
-                              className={`truncate rounded-md px-1.5 py-0.5 text-[10px] sm:text-[11px] font-medium ${
-                                chip.kind === 'job'
-                                  ? 'bg-slate-800 text-white'
-                                  : chip.kind === 'task'
-                                    ? 'bg-amber-100 text-amber-950'
-                                    : 'bg-emerald-100 text-emerald-900'
+                              className={`mx-auto mt-0.5 inline-flex h-7 w-7 items-center justify-center rounded-full text-sm font-semibold tabular-nums ${
+                                isToday
+                                  ? 'bg-zinc-900 text-white'
+                                  : 'text-zinc-800'
                               }`}
                             >
-                              {chip.label}
+                              {day.getDate()}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* All-day row */}
+                    <div className="grid grid-cols-[3.25rem_repeat(7,minmax(0,1fr))] border-b border-zinc-200 bg-zinc-50/40">
+                      <div className="px-1 py-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-400 text-right pr-2 border-r border-zinc-100">
+                        All day
+                      </div>
+                      {weekDays.map((day) => {
+                        const iso = toLocalIsoDate(day);
+                        const chips = weekAllDayForIso(iso);
+                        return (
+                          <div
+                            key={`wa-${iso}`}
+                            className="min-h-[2.75rem] p-1 space-y-0.5 border-r border-zinc-100 last:border-r-0"
+                            onDoubleClick={() =>
+                              openCreateCalendarEvent(iso, { allDay: true })
+                            }
+                          >
+                            {chips.slice(0, 3).map((chip) => {
+                              const colorStyle =
+                                chip.kind === 'event' || chip.kind === 'google'
+                                  ? eventChipColorStyle(
+                                      chip.colorId,
+                                      chip.calendarColor
+                                    )
+                                  : undefined;
+                              return (
+                              <button
+                                key={chip.key}
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCalendarSelectedDay(iso);
+                                  if (chip.onOpen) chip.onOpen();
+                                }}
+                                style={colorStyle}
+                                className={`block w-full text-left truncate rounded-md px-1.5 py-0.5 text-[10px] sm:text-[11px] font-medium ${
+                                  colorStyle
+                                    ? ''
+                                    : chip.kind === 'event'
+                                      ? 'bg-sky-100 text-sky-950'
+                                      : chip.kind === 'task'
+                                        ? 'bg-amber-100 text-amber-950'
+                                        : 'bg-emerald-100 text-emerald-900'
+                                }`}
+                              >
+                                {chip.label}
+                              </button>
+                              );
+                            })}
+                            {chips.length > 3 ? (
+                              <div className="text-[10px] text-zinc-400 px-0.5">
+                                +{chips.length - 3} more
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Timed grid */}
+                    <div
+                      ref={calendarWeekScrollRef}
+                      className="overflow-y-auto max-h-[min(62vh,38rem)]"
+                    >
+                      <div
+                        className="grid grid-cols-[3.25rem_repeat(7,minmax(0,1fr))] relative"
+                        style={{ height: gridHeight }}
+                      >
+                        {/* Hour labels + lines */}
+                        <div className="relative border-r border-zinc-100">
+                          {Array.from({ length: WEEK_VIEW_HOURS }, (_, h) => (
+                            <div
+                              key={`hl-${h}`}
+                              className="absolute right-0 left-0 border-t border-zinc-100"
+                              style={{
+                                top: h * WEEK_VIEW_HOUR_PX,
+                                height: WEEK_VIEW_HOUR_PX,
+                              }}
+                            >
+                              {h > 0 ? (
+                                <span className="absolute -top-2 right-2 text-[10px] font-medium text-zinc-400 tabular-nums">
+                                  {formatHourLabel(h)}
+                                </span>
+                              ) : null}
                             </div>
                           ))}
-                          {more > 0 ? (
-                            <div className="text-[10px] text-zinc-400 px-0.5">
-                              +{more} more
-                            </div>
-                          ) : null}
                         </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
 
-              {/* Selected day detail — Summit jobs + Google events */}
+                        {weekDays.map((day) => {
+                          const iso = toLocalIsoDate(day);
+                          const isToday = iso === todayIso;
+                          const blocks = weekTimedForIso(iso);
+                          return (
+                            <div
+                              key={`wt-${iso}`}
+                              role="presentation"
+                              className={`relative border-r border-zinc-100 last:border-r-0 cursor-pointer ${
+                                isToday ? 'bg-sky-50/30' : ''
+                              }`}
+                              style={{ height: gridHeight }}
+                              onClick={(e) => {
+                                if (
+                                  (e.target as HTMLElement).closest(
+                                    '[data-week-block]'
+                                  )
+                                )
+                                  return;
+                                setCalendarSelectedDay(iso);
+                                setCalendarCursor(day);
+                                openCreateAtSlot(
+                                  iso,
+                                  e.clientY,
+                                  e.currentTarget
+                                );
+                              }}
+                            >
+                              {Array.from(
+                                { length: WEEK_VIEW_HOURS },
+                                (_, h) => (
+                                  <div
+                                    key={`gl-${iso}-${h}`}
+                                    className="absolute left-0 right-0 border-t border-zinc-100 pointer-events-none"
+                                    style={{
+                                      top: h * WEEK_VIEW_HOUR_PX,
+                                      height: WEEK_VIEW_HOUR_PX,
+                                    }}
+                                  />
+                                )
+                              )}
+                              {isToday ? (
+                                <div
+                                  className="absolute left-0 right-0 z-20 pointer-events-none"
+                                  style={{
+                                    top: (nowMinutes / 60) * WEEK_VIEW_HOUR_PX,
+                                  }}
+                                >
+                                  <div className="relative border-t-2 border-rose-500">
+                                    <span className="absolute -left-1 -top-1.5 h-3 w-3 rounded-full bg-rose-500" />
+                                  </div>
+                                </div>
+                              ) : null}
+                              {blocks.map((block) => {
+                                const colorStyle =
+                                  block.kind === 'event' ||
+                                  block.kind === 'google'
+                                    ? eventBlockColorStyle(
+                                        block.colorId,
+                                        block.calendarColor
+                                      )
+                                    : undefined;
+                                return (
+                                <button
+                                  key={block.key}
+                                  type="button"
+                                  data-week-block
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setCalendarSelectedDay(iso);
+                                    if (block.onOpen) block.onOpen();
+                                  }}
+                                  className={`absolute overflow-hidden rounded-md px-1.5 pt-0.5 pb-0.5 text-left text-[10px] sm:text-[11px] font-semibold leading-tight shadow-sm flex flex-col justify-start items-stretch ${
+                                    colorStyle
+                                      ? ''
+                                      : 'bg-amber-400 text-amber-950'
+                                  }`}
+                                  style={{
+                                    top: block.top,
+                                    height: block.height,
+                                    left: `calc(${block.leftPct}% + 1px)`,
+                                    width: `calc(${block.widthPct}% - 2px)`,
+                                    zIndex: block.zIndex,
+                                    ...(colorStyle || {}),
+                                  }}
+                                  title={block.label}
+                                >
+                                  <div className="truncate shrink-0">
+                                    {block.label}
+                                  </div>
+                                  {block.sub && block.height >= 36 ? (
+                                    <div className="truncate opacity-90 font-medium shrink-0">
+                                      {block.sub}
+                                    </div>
+                                  ) : null}
+                                </button>
+                                );
+                              })}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-7 border-b border-zinc-100 text-center text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
+                      {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(
+                        (d) => (
+                          <div key={d} className="py-2">
+                            {d}
+                          </div>
+                        )
+                      )}
+                    </div>
+                    <div className="grid grid-cols-7 auto-rows-fr">
+                      {monthDays.map((day) => {
+                        const iso = toLocalIsoDate(day);
+                        const inMonth =
+                          day.getMonth() === calendarCursor.getMonth();
+                        const isToday = iso === todayIso;
+                        const isSelected = iso === selectedIso;
+                        const gEvents = (googleByDate.get(iso) || []).filter(
+                          (ev) =>
+                            !summitGoogleIds.has(ev.id) &&
+                            !adjustmentGoogleIds.has(ev.id)
+                        );
+                        const dayTaskList = tasksByDate.get(iso) || [];
+                        const dayEvts = calendarEvents.filter((ev) =>
+                          eventOccursOnDay(ev, iso)
+                        );
+                        type DayChip = {
+                          key: string;
+                          label: string;
+                          kind: 'event' | 'task' | 'google';
+                          colorId?: string;
+                          calendarColor?: CalendarListColor;
+                          onOpen?: () => void;
+                        };
+                        const chips: DayChip[] = [
+                          ...dayEvts.slice(0, 2).map((ev) => ({
+                            key: `e-${ev.id}`,
+                            label: ev.title,
+                            kind: 'event' as const,
+                            colorId: ev.colorId,
+                            calendarColor: calendarColorFor(ev.calendarId, {
+                              bg: ev.calendarColorBg,
+                              fg: ev.calendarColorFg,
+                            }),
+                            onOpen: () => openEditCalendarEvent(ev),
+                          })),
+                          ...dayTaskList.slice(0, 1).map((task) => ({
+                            key: `t-${task.id}`,
+                            label: task.title,
+                            kind: 'task' as const,
+                          })),
+                          ...gEvents
+                            .slice(
+                              0,
+                              Math.max(
+                                0,
+                                3 -
+                                  Math.min(2, dayEvts.length) -
+                                  Math.min(1, dayTaskList.length)
+                              )
+                            )
+                            .map((ev) => ({
+                              key: `g-${ev.id}`,
+                              label: ev.summary || 'Google event',
+                              kind: 'google' as const,
+                              colorId: ev.colorId,
+                              calendarColor: calendarColorFor(ev.calendarId, {
+                                bg: ev.calendarBackground,
+                                fg: ev.calendarForeground,
+                              }),
+                            })),
+                        ].slice(0, 3);
+                        const more =
+                          dayEvts.length +
+                          dayTaskList.length +
+                          gEvents.length -
+                          chips.length;
+                        return (
+                          <div
+                            key={iso}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => {
+                              setCalendarSelectedDay(iso);
+                              if (!inMonth) setCalendarCursor(day);
+                            }}
+                            onDoubleClick={() => {
+                              setCalendarSelectedDay(iso);
+                              if (!inMonth) setCalendarCursor(day);
+                              openCreateCalendarEvent(iso);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                setCalendarSelectedDay(iso);
+                                if (!inMonth) setCalendarCursor(day);
+                              }
+                            }}
+                            className={`min-h-[5.5rem] sm:min-h-[6.75rem] p-1.5 sm:p-2 text-left border-b border-r border-zinc-100 transition-colors align-top cursor-pointer ${
+                              isSelected
+                                ? 'bg-sky-50 ring-2 ring-inset ring-sky-400'
+                                : isToday
+                                  ? 'bg-zinc-50'
+                                  : 'bg-white hover:bg-zinc-50/80'
+                            } ${inMonth ? '' : 'opacity-45'}`}
+                          >
+                            <div
+                              className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs tabular-nums font-semibold ${
+                                isToday
+                                  ? 'bg-zinc-900 text-white'
+                                  : 'text-zinc-800'
+                              }`}
+                            >
+                              {day.getDate()}
+                            </div>
+                            <div className="mt-1 space-y-0.5">
+                              {chips.map((chip) => {
+                                const colorStyle =
+                                  chip.kind === 'event' ||
+                                  chip.kind === 'google'
+                                    ? eventChipColorStyle(
+                                        chip.colorId,
+                                        chip.calendarColor
+                                      )
+                                    : undefined;
+                                return (
+                                <button
+                                  key={chip.key}
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setCalendarSelectedDay(iso);
+                                    if (chip.onOpen) chip.onOpen();
+                                  }}
+                                  style={colorStyle}
+                                  className={`block w-full text-left truncate rounded-md px-1.5 py-0.5 text-[10px] sm:text-[11px] font-medium ${
+                                    colorStyle
+                                      ? ''
+                                      : chip.kind === 'event'
+                                        ? 'bg-sky-100 text-sky-950'
+                                        : chip.kind === 'task'
+                                          ? 'bg-amber-100 text-amber-950'
+                                          : 'bg-emerald-100 text-emerald-900'
+                                  }`}
+                                >
+                                  {chip.label}
+                                </button>
+                                );
+                              })}
+                              {more > 0 ? (
+                                <div className="text-[10px] text-zinc-400 px-0.5">
+                                  +{more} more
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+              ) : null}
+
+              {/* Day breakdown — primary content in Day mode; also shown under Month/Week */}
               <div className="rounded-3xl border border-zinc-200 bg-white p-5 sm:p-6 space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                  <div>
-                    <h2 className="text-lg font-semibold text-zinc-900">
-                      {selectedIso === todayIso
-                        ? 'Today'
-                        : new Date(selectedIso + 'T12:00:00').toLocaleDateString(
-                            undefined,
-                            {
+                  <div className="flex items-start gap-2 min-w-0">
+                    {calendarViewMode === 'day' ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const d = addDays(
+                            new Date(selectedIso + 'T12:00:00'),
+                            -1
+                          );
+                          setCalendarCursor(d);
+                          setCalendarSelectedDay(toLocalIsoDate(d));
+                        }}
+                        className="w-9 h-9 rounded-xl text-zinc-600 hover:bg-zinc-100 text-sm font-semibold shrink-0"
+                        aria-label="Previous day"
+                      >
+                        ←
+                      </button>
+                    ) : null}
+                    <div className="min-w-0">
+                      <h2 className="text-lg font-semibold text-zinc-900">
+                        {selectedIso === todayIso
+                          ? 'Today'
+                          : new Date(
+                              selectedIso + 'T12:00:00'
+                            ).toLocaleDateString(undefined, {
                               weekday: 'long',
                               month: 'long',
                               day: 'numeric',
-                            }
-                          )}
-                    </h2>
-                    <p className="text-sm text-zinc-500 mt-0.5">
-                      {dayJobs.length + dayGoogle.length + dayTasks.length === 0
-                        ? 'Nothing scheduled — assign a job below, add a task, or book in Google'
-                        : [
-                            dayJobs.length
-                              ? `${dayJobs.length} job${dayJobs.length === 1 ? '' : 's'}`
-                              : '',
-                            dayTasks.length
-                              ? `${dayTasks.length} task${dayTasks.length === 1 ? '' : 's'}`
-                              : '',
-                            dayGoogle.length
-                              ? `${dayGoogle.length} Google`
-                              : '',
-                          ]
-                            .filter(Boolean)
-                            .join(' · ')}
-                    </p>
+                            })}
+                      </h2>
+                      <p className="text-sm text-zinc-500 mt-0.5">
+                        {daySummitEvents.length +
+                          dayGoogleOnly.length +
+                          dayTasks.length ===
+                        0
+                          ? 'Nothing scheduled — create an event or add a task'
+                          : [
+                              daySummitEvents.length
+                                ? `${daySummitEvents.length} event${daySummitEvents.length === 1 ? '' : 's'}`
+                                : '',
+                              dayTasks.length
+                                ? `${dayTasks.length} task${dayTasks.length === 1 ? '' : 's'}`
+                                : '',
+                              dayGoogleOnly.length
+                                ? `${dayGoogleOnly.length} Google`
+                                : '',
+                            ]
+                              .filter(Boolean)
+                              .join(' · ')}
+                      </p>
+                    </div>
+                    {calendarViewMode === 'day' ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const d = addDays(
+                            new Date(selectedIso + 'T12:00:00'),
+                            1
+                          );
+                          setCalendarCursor(d);
+                          setCalendarSelectedDay(toLocalIsoDate(d));
+                        }}
+                        className="w-9 h-9 rounded-xl text-zinc-600 hover:bg-zinc-100 text-sm font-semibold shrink-0"
+                        aria-label="Next day"
+                      >
+                        →
+                      </button>
+                    ) : null}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleTabChange('tasks')}
-                    className="px-4 py-2 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50 shrink-0 self-start"
-                  >
-                    Open Tasks
-                  </button>
                 </div>
+
+                {daySummitEvents.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                      Events
+                    </div>
+                    {daySummitEvents.map((event) => {
+                      const chipStyle = eventChipColorStyle(
+                        event.colorId,
+                        calendarColorFor(event.calendarId, {
+                          bg: event.calendarColorBg,
+                          fg: event.calendarColorFg,
+                        })
+                      );
+                      return (
+                      <div
+                        key={`day-ev-${event.id}`}
+                        className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-2xl border border-zinc-200/80 px-4 py-3"
+                        style={{
+                          backgroundColor: chipStyle.backgroundColor,
+                          color: chipStyle.color,
+                        }}
+                      >
+                        <button
+                          type="button"
+                          className="text-left min-w-0"
+                          onClick={() => openEditCalendarEvent(event)}
+                        >
+                          <div className="font-semibold truncate">
+                            {event.title}
+                          </div>
+                          <div className="text-xs mt-0.5 opacity-90">
+                            {formatEventTimeLabel(event)}
+                            {event.leadId != null
+                              ? ` · Lead: ${event.leadName || `#${event.leadId}`}`
+                              : ''}
+                            {event.googleEventId ? ' · Synced' : ''}
+                          </div>
+                        </button>
+                        <div className="flex gap-2 shrink-0">
+                          {event.leadId != null ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openLeadProfile(event.leadId!, undefined)
+                              }
+                              className="px-3 py-1.5 text-xs font-semibold rounded-lg btn-primary"
+                            >
+                              Open lead
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => openEditCalendarEvent(event)}
+                            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-zinc-200 text-zinc-700 hover:bg-zinc-50 bg-white/70"
+                          >
+                            Edit
+                          </button>
+                        </div>
+                      </div>
+                      );
+                    })}
+                  </div>
+                )}
 
                 {dayTasks.length > 0 && (
                   <div className="space-y-2">
@@ -16934,68 +18655,12 @@ export default function SummitApp() {
                   </div>
                 )}
 
-                {dayJobs.length > 0 && (
-                  <div className="space-y-2">
-                    <div className="text-xs font-medium uppercase tracking-wide text-zinc-400">
-                      Jobs
-                    </div>
-                    {dayJobs.map((lead, leadIdx) => {
-                      const name =
-                        [lead.clientFirstName, lead.clientLastName]
-                          .filter(Boolean)
-                          .join(' ') || 'Untitled job';
-                      return (
-                        <div
-                          key={`day-${lead.id}-${leadIdx}`}
-                          className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-2xl border border-zinc-200 px-4 py-3"
-                        >
-                          <button
-                            type="button"
-                            className="text-left min-w-0"
-                            onClick={() => openLeadProfile(lead.id, lead)}
-                          >
-                            <div className="font-semibold text-zinc-900 truncate">
-                              {name}
-                            </div>
-                            <div className="text-xs text-zinc-500 mt-0.5">
-                              {lead.category}
-                              {lead.jobNumber ? ` · #${lead.jobNumber}` : ''}
-                              {lead.calendarEventId ? ' · Synced' : ''}
-                            </div>
-                          </button>
-                          <div className="flex gap-2 shrink-0">
-                            <button
-                              type="button"
-                              disabled={!gcalConnected || gcalBusy}
-                              onClick={() =>
-                                void syncLeadsToGoogleCalendar({
-                                  leadIds: [lead.id],
-                                })
-                              }
-                              className="px-3 py-1.5 text-xs font-semibold rounded-lg btn-primary disabled:opacity-50"
-                            >
-                              {lead.calendarEventId ? 'Update Google' : 'Sync'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => openLeadProfile(lead.id, lead)}
-                              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
-                            >
-                              Open
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {dayGoogle.length > 0 && (
+                {dayGoogleOnly.length > 0 && (
                   <div className="space-y-2">
                     <div className="text-xs font-medium uppercase tracking-wide text-zinc-400">
                       Google Calendar
                     </div>
-                    {dayGoogle.map((event) => {
+                    {dayGoogleOnly.map((event) => {
                       const startRaw =
                         event.start?.dateTime || event.start?.date;
                       const isAllDay = Boolean(
@@ -17036,56 +18701,11 @@ export default function SummitApp() {
                   </div>
                 )}
 
-                {unscheduled.length > 0 && (
-                  <div className="pt-2 border-t border-zinc-100">
-                    <div className="text-xs font-medium uppercase tracking-wide text-zinc-400 mb-2">
-                      Schedule on this day
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {unscheduled.slice(0, 8).map((lead, leadIdx) => {
-                        const name =
-                          [lead.clientFirstName, lead.clientLastName]
-                            .filter(Boolean)
-                            .join(' ') || 'Untitled';
-                        return (
-                          <button
-                            key={`unsch-${lead.id}-${leadIdx}`}
-                            type="button"
-                            onClick={() =>
-                              scheduleLeadOnDay(lead.id, selectedIso)
-                            }
-                            className="px-3 py-1.5 rounded-full text-xs font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-100 hover:border-sky-300"
-                          >
-                            + {name}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {!gcalConnected && (
-                  <p className="text-sm text-zinc-500">
-                    Connect Google to mirror bookings both ways. Needs{' '}
-                    <code className="text-xs bg-zinc-100 px-1 rounded">
-                      NEXT_PUBLIC_GOOGLE_CLIENT_ID
-                    </code>{' '}
-                    in{' '}
-                    <code className="text-xs bg-zinc-100 px-1 rounded">
-                      .env.local
-                    </code>
-                    .
-                  </p>
-                )}
-
-                {gcalConnected &&
-                  unscheduled.length === 0 &&
-                  dayJobs.length === 0 &&
-                  dayGoogle.length === 0 &&
+                {daySummitEvents.length === 0 &&
+                  dayGoogleOnly.length === 0 &&
                   dayTasks.length === 0 && (
                     <p className="text-sm text-zinc-500">
-                      Empty day — schedule a job above, add a task, or refresh
-                      Google events.
+                      Empty day — create an event or add a task.
                     </p>
                   )}
               </div>
@@ -17109,64 +18729,54 @@ export default function SummitApp() {
                     {activeTaskList?.title || 'My Tasks'} · {openTasks.length}{' '}
                     open
                     {doneTasks.length ? ` · ${doneTasks.length} done` : ''}
-                    {gcalConnected
-                      ? gtasksNeedsReconnect
-                        ? ' · Reconnect Google for Tasks sync'
-                        : ' · Synced with Google Tasks'
-                      : ' · Saved on this device'}
                   </p>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {gcalConnected && gtasksNeedsReconnect ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <div
+                    className="inline-flex rounded-2xl border border-zinc-200 p-0.5 bg-zinc-50/80"
+                    role="group"
+                    aria-label="Calendar or Tasks"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleTabChange('calendar')}
+                      className="px-3.5 py-2 rounded-[0.9rem] text-sm font-semibold transition-colors text-zinc-500 hover:text-zinc-800"
+                    >
+                      Calendar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleTabChange('tasks')}
+                      className="px-3.5 py-2 rounded-[0.9rem] text-sm font-semibold transition-colors bg-white text-zinc-900 shadow-sm"
+                    >
+                      Tasks
+                    </button>
+                  </div>
+                  {!gcalConnected ? (
                     <button
                       type="button"
                       disabled={gcalBusy}
                       onClick={() =>
                         void connectGoogleCalendar({ forceConsent: true })
                       }
-                      className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold disabled:opacity-50"
+                      className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
                     >
-                      Reconnect for Tasks
+                      Connect Google
                     </button>
-                  ) : gcalConnected ? (
-                    <button
-                      type="button"
-                      disabled={tasksBusy}
-                      onClick={() => void syncTasksWithGoogle()}
-                      className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold disabled:opacity-50"
-                    >
-                      {tasksBusy ? 'Syncing…' : 'Refresh from Google'}
-                    </button>
-                  ) : (
+                  ) : gtasksNeedsReconnect ? (
                     <button
                       type="button"
                       disabled={gcalBusy}
-                      onClick={() => void connectGoogleCalendar({ forceConsent: true })}
-                      className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold disabled:opacity-50"
+                      onClick={() =>
+                        void connectGoogleCalendar({ forceConsent: true })
+                      }
+                      className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-amber-300 text-amber-950 bg-amber-50 hover:bg-amber-100 disabled:opacity-50"
                     >
-                      Connect Google Tasks
+                      Reconnect for Tasks
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => handleTabChange('calendar')}
-                    className="px-5 py-2.5 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50"
-                  >
-                    View calendar
-                  </button>
+                  ) : null}
                 </div>
               </div>
-
-              {gtasksNeedsReconnect && gcalConnected ? (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-950">
-                  Google is connected for Calendar, but Tasks needs a fresh
-                  consent. Tap <strong>Reconnect for Tasks</strong> to grant{' '}
-                  <code className="text-xs bg-amber-100 px-1 rounded">
-                    tasks
-                  </code>{' '}
-                  scope (enable Google Tasks API in Cloud Console too).
-                </div>
-              ) : null}
 
               <div className="rounded-3xl border border-zinc-200 bg-white p-5 sm:p-6 space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -17621,12 +19231,9 @@ export default function SummitApp() {
 
         {activeTab === 'settings' && (
           <div className="page-shell page-fade">
-            <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
+            <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight mb-8">
               Profile settings
             </h1>
-            <p className="text-zinc-500 mt-1 mb-8">
-              Your contact appears on estimates and PDFs as the project manager.
-            </p>
 
             <div className="space-y-6">
               <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6 space-y-4">
@@ -17681,37 +19288,11 @@ export default function SummitApp() {
               </section>
 
               <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6 space-y-4">
-                <div>
-                  <h2 className="text-lg font-semibold text-zinc-900">
-                    Google Calendar & Tasks
-                  </h2>
-                  <p className="text-sm text-zinc-500 mt-1">
-                    Connect once for Calendar (job follow-ups) and Tasks
-                    (bi-directional with Google Tasks).
-                  </p>
-                </div>
+                <h2 className="text-lg font-semibold text-zinc-900">
+                  Google Calendar & Tasks
+                </h2>
 
-                {!gcalConfigured ? (
-                  <div className="rounded-2xl border border-dashed border-zinc-200 bg-zinc-50 px-4 py-4 text-sm text-zinc-600">
-                    <p className="font-medium text-zinc-800">Setup required</p>
-                    <p className="mt-1">
-                      Add{' '}
-                      <code className="text-xs bg-zinc-200/80 px-1 rounded">
-                        NEXT_PUBLIC_GOOGLE_CLIENT_ID
-                      </code>{' '}
-                      to{' '}
-                      <code className="text-xs bg-zinc-200/80 px-1 rounded">
-                        .env.local
-                      </code>
-                      , enable the Google Calendar API and Google Tasks API, and
-                      add{' '}
-                      <code className="text-xs bg-zinc-200/80 px-1 rounded">
-                        http://localhost:3000
-                      </code>{' '}
-                      under Authorized JavaScript origins.
-                    </p>
-                  </div>
-                ) : gcalConnected ? (
+                {gcalConnected ? (
                   <div className="space-y-3">
                     <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 px-4 py-3">
                       <div className="text-sm font-semibold text-emerald-900">
@@ -17723,51 +19304,37 @@ export default function SummitApp() {
                       </div>
                       {gcalLastSync && (
                         <div className="text-xs text-emerald-700/80 mt-1">
-                          Last calendar sync{' '}
+                          Last sync{' '}
                           {new Date(gcalLastSync).toLocaleString()}
                         </div>
                       )}
                     </div>
-                    {gtasksNeedsReconnect ? (
-                      <div className="rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-950">
-                        Calendar works, but Tasks needs re-consent for the{' '}
-                        <code className="text-xs bg-amber-100 px-1 rounded">
-                          tasks
-                        </code>{' '}
-                        scope.
-                        <div className="mt-2">
-                          <button
-                            type="button"
-                            disabled={gcalBusy}
-                            onClick={() =>
-                              void connectGoogleCalendar({
-                                forceConsent: true,
-                              })
-                            }
-                            className="btn-primary px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-50"
-                          >
-                            Reconnect for Tasks
-                          </button>
-                        </div>
-                      </div>
-                    ) : null}
                     <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        disabled={gcalBusy || leads.length === 0}
-                        onClick={() => void syncLeadsToGoogleCalendar()}
-                        className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold disabled:opacity-50"
-                      >
-                        {gcalBusy ? 'Syncing…' : 'Sync jobs to calendar'}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={tasksBusy || gtasksNeedsReconnect}
-                        onClick={() => void syncTasksWithGoogle()}
-                        className="px-5 py-2.5 rounded-2xl text-sm font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
-                      >
-                        {tasksBusy ? 'Syncing…' : 'Sync tasks'}
-                      </button>
+                      {gtasksNeedsReconnect ? (
+                        <button
+                          type="button"
+                          disabled={gcalBusy}
+                          onClick={() =>
+                            void connectGoogleCalendar({
+                              forceConsent: true,
+                            })
+                          }
+                          className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold disabled:opacity-50"
+                        >
+                          Reconnect for Tasks
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={gcalBusy}
+                          onClick={() =>
+                            void connectGoogleCalendar({ forceConsent: true })
+                          }
+                          className="px-5 py-2.5 rounded-2xl text-sm font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+                        >
+                          Reconnect
+                        </button>
+                      )}
                       <button
                         type="button"
                         disabled={gcalBusy}
@@ -17776,25 +19343,7 @@ export default function SummitApp() {
                       >
                         Disconnect
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => handleTabChange('calendar')}
-                        className="px-5 py-2.5 rounded-2xl text-sm font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
-                      >
-                        View calendar
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleTabChange('tasks')}
-                        className="px-5 py-2.5 rounded-2xl text-sm font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
-                      >
-                        Open Tasks
-                      </button>
                     </div>
-                    <p className="text-xs text-zinc-400">
-                      Closed jobs are skipped. Tasks sync with your Google Tasks
-                      default list.
-                    </p>
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -17818,10 +19367,6 @@ export default function SummitApp() {
                       </svg>
                       Connect Google
                     </button>
-                    <p className="text-xs text-zinc-400">
-                      You’ll authorize {appDisplayName()} for Calendar events and
-                      Google Tasks.
-                    </p>
                   </div>
                 )}
               </section>
@@ -17880,13 +19425,6 @@ export default function SummitApp() {
                     );
                   })}
                 </div>
-                <p className="text-xs text-zinc-400">
-                  Now showing{' '}
-                  <span className="font-medium text-zinc-600">
-                    {themeMode === 'night' ? 'Night' : 'Day'}
-                  </span>
-                  {themePref === 'auto' ? ' (auto)' : ''}. Saved on this device.
-                </p>
               </section>
 
               <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6 space-y-4">
@@ -17956,21 +19494,8 @@ export default function SummitApp() {
                     Logo
                   </div>
                   <div className="flex items-center gap-4">
-                    {renderAppMark({ size: 'lg' })}
-                    <div className="flex flex-wrap gap-2">
-                      <label className="btn-primary px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer">
-                        {appLogoDataUrl() ? 'Replace logo' : 'Upload logo'}
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            if (f) void handleCompanyLogoFile(f);
-                            e.target.value = '';
-                          }}
-                        />
-                      </label>
+                    <div className="flex flex-col items-start gap-1.5">
+                      {renderAppMark({ size: 'lg' })}
                       {appLogoDataUrl() ? (
                         <button
                           type="button"
@@ -17981,12 +19506,25 @@ export default function SummitApp() {
                               logoPath: '',
                             })
                           }
-                          className="px-4 py-2 rounded-xl text-sm font-semibold border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                          className="text-xs text-zinc-500 hover:text-zinc-800 underline-offset-2 hover:underline"
                         >
-                          Use Summit logo
+                          Remove
                         </button>
                       ) : null}
                     </div>
+                    <label className="inline-flex items-center justify-center btn-primary px-8 py-3 rounded-full text-sm font-semibold cursor-pointer">
+                      Upload +
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) void handleCompanyLogoFile(f);
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
                   </div>
                 </div>
                 <div>
@@ -18035,6 +19573,24 @@ export default function SummitApp() {
                     }
                     className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base focus:outline-none focus:border-zinc-400 bg-white"
                     placeholder=""
+                  />
+                </div>
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 mb-1.5">
+                    Project manager email
+                  </div>
+                  <input
+                    type="email"
+                    value={companySettings.projectManagerEmail}
+                    onChange={(e) =>
+                      setCompanySettings({
+                        ...companySettings,
+                        projectManagerEmail: e.target.value,
+                      })
+                    }
+                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base focus:outline-none focus:border-zinc-400 bg-white"
+                    placeholder=""
+                    inputMode="email"
                   />
                 </div>
                 <div>
@@ -20464,55 +22020,7 @@ export default function SummitApp() {
                                   className={fieldClass}
                                 />
                               </div>
-                              <div>
-                                <div className={labelClass}>Follow-up date</div>
-                                <input
-                                  type="date"
-                                  value={followUpDate}
-                                  onChange={(e) => setFollowUpDate(e.target.value)}
-                                  className={fieldClass}
-                                />
-                                <p className="text-xs text-zinc-400 mt-1.5">
-                                  Used when syncing this job to Google Calendar
-                                </p>
-                              </div>
                             </div>
-                            {gcalConnected && currentLeadId != null && (
-                              <div className="mt-4 flex flex-wrap items-center gap-2">
-                                <button
-                                  type="button"
-                                  disabled={gcalBusy}
-                                  onClick={() => {
-                                    saveLeadDraft({ silent: true });
-                                    void syncLeadsToGoogleCalendar({
-                                      leadIds: [currentLeadId],
-                                    });
-                                  }}
-                                  className="px-4 py-2 rounded-xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
-                                >
-                                  {gcalBusy
-                                    ? 'Syncing…'
-                                    : leads.find((l) => l.id === currentLeadId)
-                                          ?.calendarEventId
-                                      ? 'Update Google Calendar'
-                                      : 'Add to Google Calendar'}
-                                </button>
-                                {leads.find((l) => l.id === currentLeadId)
-                                  ?.calendarHtmlLink && (
-                                  <a
-                                    href={
-                                      leads.find((l) => l.id === currentLeadId)
-                                        ?.calendarHtmlLink
-                                    }
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-sm font-medium text-sky-800 hover:underline"
-                                  >
-                                    Open event →
-                                  </a>
-                                )}
-                              </div>
-                            )}
 
                             <div className="mt-6 pt-5 border-t border-zinc-100">
                               <div className="flex items-center justify-between mb-3">
@@ -22137,7 +23645,26 @@ export default function SummitApp() {
                                 Met with adjuster
                               </label>
                             </div>
+                            <div>
+                              <div className={labelClass}>Adjustment date</div>
+                              <input
+                                type="date"
+                                value={adjustmentDate}
+                                onChange={(e) => setAdjustmentDate(e.target.value)}
+                                className={fieldClass}
+                              />
+                            </div>
+                            <div>
+                              <div className={labelClass}>Adjustment time</div>
+                              <input
+                                type="time"
+                                value={adjustmentTime}
+                                onChange={(e) => setAdjustmentTime(e.target.value)}
+                                className={fieldClass}
+                              />
+                            </div>
                           </div>
+
                         </section>
                       )}
 

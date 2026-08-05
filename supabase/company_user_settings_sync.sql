@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS public.app_settings (
 );
 
 COMMENT ON TABLE public.app_settings IS
-  'Org-wide key/value settings (job_number_prefix, company_settings, user_profile, …)';
+  'Org-wide key/value settings (job_number_prefix, company_settings, user_profile, summit_calendar_events, summit_tasks_bundle, …)';
 
 -- Anon/authenticated read+write (matches current Summit single-tenant anon client usage).
 -- Tighten when Auth is added.

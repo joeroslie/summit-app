@@ -5,6 +5,7 @@
 
 export const GCAL_SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
   'https://www.googleapis.com/auth/tasks',
   'openid',
   'email',
@@ -34,7 +35,10 @@ export type LeadCalendarPayload = {
   jobNumber?: string;
   category: string;
   date?: string;
-  followUpDate?: string;
+  /** Insurance adjuster appointment (YYYY-MM-DD) */
+  adjustmentDate?: string;
+  /** Optional local time HH:MM */
+  adjustmentTime?: string;
   notes?: { text: string; date: string }[];
   calendarEventId?: string;
 };
@@ -174,33 +178,44 @@ export function toIsoDate(raw?: string | null): string | null {
 }
 
 /**
- * Pick an event date for a lead:
- * 1) followUpDate  2) lead.date  3) today + stage offset (active pipeline)
+ * Calendar / Google event date — adjustment appointments only.
+ * Never uses date of loss, follow-up, or creation date.
  */
 export function resolveLeadEventDate(
-  lead: LeadCalendarPayload,
-  today = new Date()
-): string {
-  const fromFollow = toIsoDate(lead.followUpDate);
-  if (fromFollow) return fromFollow;
-  const fromLead = toIsoDate(lead.date);
-  if (fromLead) return fromLead;
+  lead: LeadCalendarPayload
+): string | null {
+  return toIsoDate(lead.adjustmentDate);
+}
 
-  const stageOffset: Record<string, number> = {
-    Lead: 1,
-    Prospect: 2,
-    Approved: 5,
-    Completed: 7,
-    Invoiced: 10,
-    Closed: 0,
+/** Normalize HH:MM (from `<input type="time">`) */
+export function normalizeAdjustmentTime(raw?: string | null): string | null {
+  if (!raw || !raw.trim()) return null;
+  const m = raw.trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+function addOneHour(isoDate: string, hhmm: string): { date: string; time: string } {
+  const [hh, mm] = hhmm.split(':').map(Number);
+  let endH = hh + 1;
+  let endDate = isoDate;
+  if (endH >= 24) {
+    endH -= 24;
+    const d = new Date(`${isoDate}T12:00:00`);
+    d.setDate(d.getDate() + 1);
+    endDate =
+      toIsoDate(
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      ) || isoDate;
+  }
+  return {
+    date: endDate,
+    time: `${String(endH).padStart(2, '0')}:${String(mm).padStart(2, '0')}`,
   };
-  const days = stageOffset[lead.category] ?? 1;
-  const d = new Date(today);
-  d.setHours(12, 0, 0, 0);
-  d.setDate(d.getDate() + days);
-  // skip Sunday
-  if (d.getDay() === 0) d.setDate(d.getDate() + 1);
-  return toIsoDate(d.toISOString()) || d.toISOString().slice(0, 10);
 }
 
 export function leadDisplayName(lead: LeadCalendarPayload): string {
@@ -220,10 +235,27 @@ export function leadLocation(lead: LeadCalendarPayload): string {
 export function buildCalendarEventBody(lead: LeadCalendarPayload) {
   const name = leadDisplayName(lead);
   const startDate = resolveLeadEventDate(lead);
-  // All-day end is exclusive next day
-  const end = new Date(`${startDate}T12:00:00`);
-  end.setDate(end.getDate() + 1);
-  const endDate = end.toISOString().slice(0, 10);
+  if (!startDate) {
+    throw new Error('skipped_no_adjustment');
+  }
+
+  const time = normalizeAdjustmentTime(lead.adjustmentTime);
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  let start: { date: string } | { dateTime: string; timeZone: string };
+  let end: { date: string } | { dateTime: string; timeZone: string };
+
+  if (time) {
+    const endAt = addOneHour(startDate, time);
+    start = { dateTime: `${startDate}T${time}:00`, timeZone };
+    end = { dateTime: `${endAt.date}T${endAt.time}:00`, timeZone };
+  } else {
+    // All-day end is exclusive next day
+    const endDay = new Date(`${startDate}T12:00:00`);
+    endDay.setDate(endDay.getDate() + 1);
+    const endDate = `${endDay.getFullYear()}-${String(endDay.getMonth() + 1).padStart(2, '0')}-${String(endDay.getDate()).padStart(2, '0')}`;
+    start = { date: startDate };
+    end = { date: endDate };
+  }
 
   const noteLines = (lead.notes || [])
     .slice(-3)
@@ -231,7 +263,7 @@ export function buildCalendarEventBody(lead: LeadCalendarPayload) {
     .join('\n');
 
   const description = [
-    `Summit job · Stage: ${lead.category}`,
+    `Summit adjustment · Stage: ${lead.category}`,
     lead.jobNumber ? `Job #: ${lead.jobNumber}` : '',
     lead.clientPhone ? `Phone: ${lead.clientPhone}` : '',
     lead.clientEmail ? `Email: ${lead.clientEmail}` : '',
@@ -242,11 +274,11 @@ export function buildCalendarEventBody(lead: LeadCalendarPayload) {
     .join('\n');
 
   return {
-    summary: `[${lead.category}] ${name}${lead.jobNumber ? ` · #${lead.jobNumber}` : ''}`,
+    summary: `Adjustment · ${name}${lead.jobNumber ? ` · #${lead.jobNumber}` : ''}`,
     description,
     location: leadLocation(lead) || undefined,
-    start: { date: startDate },
-    end: { date: endDate },
+    start,
+    end,
     reminders: {
       useDefault: false,
       overrides: [
@@ -258,6 +290,7 @@ export function buildCalendarEventBody(lead: LeadCalendarPayload) {
       private: {
         summitLeadId: String(lead.id),
         summitSource: 'summit-crm',
+        summitKind: 'adjustment',
       },
     },
   };
@@ -267,8 +300,11 @@ export async function upsertCalendarEvent(
   accessToken: string,
   lead: LeadCalendarPayload
 ): Promise<{ eventId: string; htmlLink?: string; startDate: string }> {
+  const startDate = resolveLeadEventDate(lead);
+  if (!startDate) {
+    throw new Error('skipped_no_adjustment');
+  }
   const body = buildCalendarEventBody(lead);
-  const startDate = body.start.date;
 
   if (lead.calendarEventId) {
     const res = await fetch(
@@ -310,6 +346,185 @@ export async function upsertCalendarEvent(
   }
   const data = (await res.json()) as { id: string; htmlLink?: string };
   return { eventId: data.id, htmlLink: data.htmlLink, startDate };
+}
+
+/** Manual / linked Summit calendar event (not an adjustment appointment). */
+export type ManualCalendarPayload = {
+  id: string;
+  title: string;
+  notes?: string;
+  startDate: string;
+  endDate: string;
+  startTime?: string;
+  endTime?: string;
+  allDay: boolean;
+  leadId?: number;
+  leadName?: string;
+  googleEventId?: string;
+  /** Target Google calendar id (primary or email). Defaults to primary. */
+  calendarId?: string;
+  /** Google Calendar event colorId "1"–"11"; null clears to calendar default */
+  colorId?: string | null;
+};
+
+function resolveManualCalendarId(calendarId?: string | null): string {
+  const id = (calendarId || '').trim();
+  return id || 'primary';
+}
+
+export function buildManualCalendarEventBody(ev: ManualCalendarPayload) {
+  const startDate = toIsoDate(ev.startDate);
+  if (!startDate) throw new Error('invalid_start_date');
+  const endDate = toIsoDate(ev.endDate) || startDate;
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const allDay = ev.allDay || !normalizeAdjustmentTime(ev.startTime);
+
+  let start: { date: string } | { dateTime: string; timeZone: string };
+  let end: { date: string } | { dateTime: string; timeZone: string };
+
+  if (!allDay) {
+    const startT = normalizeAdjustmentTime(ev.startTime)!;
+    const endT =
+      normalizeAdjustmentTime(ev.endTime) ||
+      addOneHour(startDate, startT).time;
+    const endD =
+      endDate !== startDate
+        ? endDate
+        : endT < startT
+          ? addOneHour(startDate, startT).date
+          : endDate;
+    start = { dateTime: `${startDate}T${startT}:00`, timeZone };
+    end = { dateTime: `${endD}T${endT}:00`, timeZone };
+  } else {
+    // All-day end is exclusive next day after inclusive endDate
+    const endExclusive = new Date(`${endDate}T12:00:00`);
+    endExclusive.setDate(endExclusive.getDate() + 1);
+    const endEx = `${endExclusive.getFullYear()}-${String(endExclusive.getMonth() + 1).padStart(2, '0')}-${String(endExclusive.getDate()).padStart(2, '0')}`;
+    start = { date: startDate };
+    end = { date: endEx };
+  }
+
+  const leadLine = ev.leadId
+    ? `Summit event · Linked lead: ${ev.leadName || `#${ev.leadId}`} [summit-lead:${ev.leadId}]`
+    : 'Summit event';
+  const description = [
+    ev.notes?.trim() || '',
+    leadLine,
+    `[summit-event:${ev.id}]`,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+
+  const privateProps: Record<string, string> = {
+    summitEventId: ev.id,
+    summitSource: 'summit-crm',
+    summitKind: 'event',
+  };
+  if (ev.leadId != null) privateProps.summitLeadId = String(ev.leadId);
+  if (ev.leadName) privateProps.summitLeadName = ev.leadName;
+
+  const colorPayload =
+    ev.colorId === null
+      ? { colorId: null as null }
+      : ev.colorId && /^(?:[1-9]|1[01])$/.test(String(ev.colorId).trim())
+        ? { colorId: String(ev.colorId).trim() }
+        : {};
+
+  return {
+    summary: ev.title.trim() || '(No title)',
+    description,
+    start,
+    end,
+    ...colorPayload,
+    reminders: {
+      useDefault: true,
+    },
+    extendedProperties: {
+      private: privateProps,
+    },
+  };
+}
+
+export async function upsertManualCalendarEvent(
+  accessToken: string,
+  ev: ManualCalendarPayload
+): Promise<{ eventId: string; htmlLink?: string; calendarId: string }> {
+  const body = buildManualCalendarEventBody(ev);
+  const calendarId = resolveManualCalendarId(ev.calendarId);
+  const calPath = encodeURIComponent(calendarId);
+
+  if (ev.googleEventId) {
+    // Try the event's calendar first; fall back to primary if moved/legacy
+    const tryIds = Array.from(
+      new Set([calendarId, 'primary'].filter(Boolean))
+    );
+    for (const tryId of tryIds) {
+      const res = await fetch(
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(tryId)}/events/${encodeURIComponent(ev.googleEventId)}`,
+        {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        }
+      );
+      if (res.ok) {
+        const data = (await res.json()) as { id: string; htmlLink?: string };
+        return {
+          eventId: data.id,
+          htmlLink: data.htmlLink,
+          calendarId: tryId,
+        };
+      }
+      if (res.status !== 404 && res.status !== 410) {
+        const err = await res.text();
+        throw new Error(`Update failed: ${err}`);
+      }
+    }
+  }
+
+  const res = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${calPath}/events`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }
+  );
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Create failed: ${err}`);
+  }
+  const data = (await res.json()) as { id: string; htmlLink?: string };
+  return { eventId: data.id, htmlLink: data.htmlLink, calendarId };
+}
+
+export async function deleteGoogleCalendarEvent(
+  accessToken: string,
+  googleEventId: string,
+  calendarId?: string | null
+): Promise<void> {
+  const tryIds = Array.from(
+    new Set([resolveManualCalendarId(calendarId), 'primary'])
+  );
+  let lastErr = '';
+  for (const tryId of tryIds) {
+    const res = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(tryId)}/events/${encodeURIComponent(googleEventId)}`,
+      {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }
+    );
+    if (res.ok || res.status === 404 || res.status === 410) return;
+    lastErr = await res.text();
+  }
+  throw new Error(`Delete failed: ${lastErr}`);
 }
 
 export async function ensureFreshTokens(

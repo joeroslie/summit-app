@@ -147,10 +147,26 @@ function tasksAuthError(status: number, body: string): Error {
   }
   if (
     status === 403 &&
-    /insufficient|ACCESS_TOKEN_SCOPE|PERMISSION/i.test(body)
+    /accessNotConfigured|has not been used|DISABLED|API has not been|accessNotEnabled|SERVICE_DISABLED/i.test(
+      body
+    )
+  ) {
+    return new Error(
+      'Enable Google Tasks API in Cloud Console → APIs & Services → Library, wait a minute, then Reconnect for Tasks'
+    );
+  }
+  if (
+    status === 403 &&
+    /insufficient|ACCESS_TOKEN_SCOPE|PERMISSION|Required '\S*tasks/i.test(body)
   ) {
     return new Error(
       'Google Tasks permission missing — reconnect Google to grant Tasks access'
+    );
+  }
+  if (status === 403) {
+    // Ambiguous 403: prefer Tasks API guidance (most common when Calendar works)
+    return new Error(
+      `Google Tasks blocked (403). Enable Google Tasks API in Cloud Console → APIs & Services → Library, then Reconnect for Tasks. Details: ${body.slice(0, 120)}`
     );
   }
   return new Error(

@@ -47,6 +47,10 @@ export async function POST(req: NextRequest) {
       results.push({ leadId: lead.id, error: 'skipped_closed' });
       continue;
     }
+    if (!lead.adjustmentDate?.trim()) {
+      results.push({ leadId: lead.id, error: 'skipped_no_adjustment' });
+      continue;
+    }
     try {
       const out = await upsertCalendarEvent(tokens.access_token, lead);
       results.push({

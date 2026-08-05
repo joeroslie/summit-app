@@ -1,20 +1,32 @@
 /**
- * Browser-side Google Calendar via Google Identity Services (GIS).
+ * Browser-side Google Calendar + Tasks via Google Identity Services (GIS).
  * Needs only NEXT_PUBLIC_GOOGLE_CLIENT_ID — no client secret.
+ *
+ * Tokens persist in localStorage on this device (survive tab/browser restart).
+ * Access tokens still expire (~1h); we silent-refresh when possible.
+ * Safe for single-tenant local CRM — not a multi-user vault.
  */
 
 import {
   upsertCalendarEvent,
+  upsertManualCalendarEvent,
+  deleteGoogleCalendarEvent,
   type LeadCalendarPayload,
+  type ManualCalendarPayload,
   type SyncLeadResult,
 } from '@/lib/google-calendar';
 import { GOOGLE_TASKS_SCOPE } from '@/lib/google-tasks';
 
-/** Calendar + Tasks — reconnect required after Tasks scope was added. */
+/**
+ * Calendar events + calendarList (colors / multi-cal) + Tasks.
+ * calendarList.readonly needed for per-calendar backgroundColor.
+ */
 export const GCAL_SCOPE = [
   'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
   GOOGLE_TASKS_SCOPE,
 ].join(' ');
+
 const TOKEN_KEY = 'summit_gcal_browser_token';
 const TOKEN_EXP_KEY = 'summit_gcal_browser_token_exp';
 const EMAIL_KEY = 'summit_gcal_browser_email';
@@ -36,9 +48,11 @@ declare global {
           initTokenClient: (config: {
             client_id: string;
             scope: string;
+            include_granted_scopes?: boolean;
             callback: (resp: {
               access_token?: string;
               expires_in?: number;
+              scope?: string;
               error?: string;
               error_description?: string;
             }) => void;
@@ -65,56 +79,311 @@ export function isBrowserGcalConfigured(): boolean {
   return Boolean(getPublicGoogleClientId());
 }
 
-export function readBrowserGcalSession(): BrowserGcalSession | null {
+function storageGet(key: string): string | null {
+  try {
+    const fromLocal = localStorage.getItem(key);
+    if (fromLocal != null) return fromLocal;
+    // Migrate prior sessionStorage tokens (lost on tab close)
+    const fromSession = sessionStorage.getItem(key);
+    if (fromSession != null) {
+      localStorage.setItem(key, fromSession);
+      try {
+        sessionStorage.removeItem(key);
+      } catch {
+        /* ignore */
+      }
+      return fromSession;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function storageSet(key: string, value: string) {
+  localStorage.setItem(key, value);
+  try {
+    sessionStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+}
+
+function storageRemove(key: string) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+  try {
+    sessionStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Raw session including expired tokens (for silent refresh). */
+function readRawBrowserGcalSession(): BrowserGcalSession | null {
   if (typeof window === 'undefined') return null;
   try {
-    const accessToken = sessionStorage.getItem(TOKEN_KEY);
-    const expRaw = sessionStorage.getItem(TOKEN_EXP_KEY);
+    const accessToken = storageGet(TOKEN_KEY);
+    const expRaw = storageGet(TOKEN_EXP_KEY);
     if (!accessToken || !expRaw) return null;
     const expiresAt = Number(expRaw);
-    if (!Number.isFinite(expiresAt) || expiresAt < Date.now() + 30_000) {
-      clearBrowserGcalSession();
-      return null;
-    }
+    if (!Number.isFinite(expiresAt)) return null;
     return {
       accessToken,
       expiresAt,
-      email: sessionStorage.getItem(EMAIL_KEY) || undefined,
-      scopes: sessionStorage.getItem(SCOPES_KEY) || undefined,
+      email: storageGet(EMAIL_KEY) || undefined,
+      scopes: storageGet(SCOPES_KEY) || undefined,
     };
   } catch {
     return null;
   }
 }
 
+export function readBrowserGcalSession(): BrowserGcalSession | null {
+  const session = readRawBrowserGcalSession();
+  if (!session) return null;
+  if (session.expiresAt < Date.now() + 30_000) return null;
+  return session;
+}
+
 export function writeBrowserGcalSession(session: BrowserGcalSession) {
-  sessionStorage.setItem(TOKEN_KEY, session.accessToken);
-  sessionStorage.setItem(TOKEN_EXP_KEY, String(session.expiresAt));
-  if (session.email) sessionStorage.setItem(EMAIL_KEY, session.email);
-  else sessionStorage.removeItem(EMAIL_KEY);
-  if (session.scopes) sessionStorage.setItem(SCOPES_KEY, session.scopes);
-  else sessionStorage.removeItem(SCOPES_KEY);
+  storageSet(TOKEN_KEY, session.accessToken);
+  storageSet(TOKEN_EXP_KEY, String(session.expiresAt));
+  if (session.email) storageSet(EMAIL_KEY, session.email);
+  else storageRemove(EMAIL_KEY);
+  if (session.scopes) storageSet(SCOPES_KEY, session.scopes);
+  else storageRemove(SCOPES_KEY);
 }
 
 export function clearBrowserGcalSession() {
-  try {
-    sessionStorage.removeItem(TOKEN_KEY);
-    sessionStorage.removeItem(TOKEN_EXP_KEY);
-    sessionStorage.removeItem(EMAIL_KEY);
-    sessionStorage.removeItem(SCOPES_KEY);
-  } catch {
-    /* ignore */
-  }
+  storageRemove(TOKEN_KEY);
+  storageRemove(TOKEN_EXP_KEY);
+  storageRemove(EMAIL_KEY);
+  storageRemove(SCOPES_KEY);
 }
 
-/** True when stored session was granted with Tasks scope (or unknown / legacy). */
+/** Normalize space-delimited OAuth scopes for comparisons. */
+export function normalizeOAuthScopes(scope?: string | null): string[] {
+  if (!scope?.trim()) return [];
+  return scope
+    .trim()
+    .split(/[\s,+]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** True when a scope list includes Google Tasks. */
+export function scopesIncludeTasks(scope?: string | null): boolean {
+  const scopes = normalizeOAuthScopes(scope);
+  return (
+    scopes.includes(GOOGLE_TASKS_SCOPE) ||
+    scopes.some((sc) => sc.endsWith('/auth/tasks'))
+  );
+}
+
+const CALENDAR_LIST_SCOPE =
+  'https://www.googleapis.com/auth/calendar.calendarlist.readonly';
+
+/** True when scope list includes calendarList.readonly (per-calendar colors). */
+export function scopesIncludeCalendarList(scope?: string | null): boolean {
+  const scopes = normalizeOAuthScopes(scope);
+  return (
+    scopes.includes(CALENDAR_LIST_SCOPE) ||
+    scopes.some((sc) => sc.includes('calendar.calendarlist'))
+  );
+}
+
+/** True when stored session was granted with Tasks scope. Legacy (no scopes) = false. */
 export function browserSessionHasTasksScope(
   session?: BrowserGcalSession | null
 ): boolean {
-  const s = session ?? readBrowserGcalSession();
+  const s = session ?? readBrowserGcalSession() ?? readRawBrowserGcalSession();
   if (!s) return false;
   if (!s.scopes) return false; // legacy token — must reconnect for Tasks
-  return s.scopes.includes(GOOGLE_TASKS_SCOPE);
+  return scopesIncludeTasks(s.scopes);
+}
+
+/** True when session can read calendarList (colors / multi-cal). */
+export function browserSessionHasCalendarListScope(
+  session?: BrowserGcalSession | null
+): boolean {
+  const s = session ?? readBrowserGcalSession() ?? readRawBrowserGcalSession();
+  if (!s) return false;
+  if (!s.scopes) return false;
+  return scopesIncludeCalendarList(s.scopes);
+}
+
+/**
+ * Resolve actual granted scopes from Google tokeninfo (authoritative).
+ * GIS callback often omits `scope` — never invent Tasks from that omission.
+ */
+export async function fetchAccessTokenScopes(
+  accessToken: string
+): Promise<string[]> {
+  try {
+    const res = await fetch(
+      `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${encodeURIComponent(accessToken)}`
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as { scope?: string };
+    return normalizeOAuthScopes(data.scope);
+  } catch {
+    return [];
+  }
+}
+
+/** Cloud Console steps when Tasks API is the blocker (show to Joe). */
+export const GOOGLE_TASKS_API_CONSOLE_STEPS = [
+  'Open Google Cloud Console → select the same project as your OAuth client',
+  'APIs & Services → Library → search “Google Tasks API” → Enable',
+  'Also confirm Google Calendar API is Enabled',
+  'APIs & Services → OAuth consent screen → Edit app → Scopes → Add https://www.googleapis.com/auth/tasks → Save',
+  'Credentials → your Web client → Authorized JavaScript origins includes http://localhost:3000 (and your prod origin)',
+  'In Summit: Disconnect Google, then Connect / Reconnect for Tasks',
+  'On Google’s consent screen, leave Tasks checked (granular consent can uncheck it)',
+  'Wait ~1 minute after enabling the API if you just turned it on',
+].join('\n');
+
+/** Human-readable Google auth / API errors with Cloud Console guidance. */
+export function formatGoogleConnectError(err: unknown): string {
+  const raw =
+    err instanceof Error
+      ? err.message
+      : typeof err === 'string'
+        ? err
+        : 'Google connection failed';
+  const m = raw.toLowerCase();
+
+  if (m.includes('missing next_public_google_client_id')) {
+    return raw;
+  }
+  if (
+    m.includes('origin_mismatch') ||
+    m.includes('idpiframe_initialization_failed') ||
+    m.includes('invalid_client')
+  ) {
+    return 'OAuth client misconfigured — in Google Cloud Console → Credentials → your Web client, add http://localhost:3000 under Authorized JavaScript origins, then reconnect.';
+  }
+  if (m.includes('access_denied') || m.includes('popup_closed')) {
+    return 'Google sign-in was cancelled — connect again and allow Calendar + Tasks.';
+  }
+  if (
+    m.includes('tasks api') ||
+    (m.includes('enable google tasks') && m.includes('library'))
+  ) {
+    return 'Enable Google Tasks API in Cloud Console → APIs & Services → Library, wait ~1 minute, then tap Reconnect for Tasks.';
+  }
+  if (
+    m.includes('access_not_configured') ||
+    m.includes('has not been used') ||
+    m.includes('is disabled') ||
+    m.includes('api not enabled')
+  ) {
+    return 'Enable Google Calendar API and Google Tasks API in Cloud Console → APIs & Services → Library, wait a minute, then reconnect.';
+  }
+  if (
+    m.includes('tasks permission') ||
+    m.includes('tasks access') ||
+    m.includes('insufficient') ||
+    m.includes('access_token_scope')
+  ) {
+    return 'Google Tasks permission missing — tap Reconnect for Tasks (allow Tasks on the Google consent screen). Also enable Google Tasks API in Cloud Console if needed.';
+  }
+  if (m.includes('expired') || m.includes('401')) {
+    return 'Google session expired — reconnect Calendar + Tasks.';
+  }
+  return raw;
+}
+
+/**
+ * Live probe: confirm the access token can call Google Tasks.
+ * Distinguishes missing scope vs Tasks API not enabled in Cloud Console.
+ */
+export async function probeGoogleTasksAccess(
+  accessToken: string
+): Promise<{ ok: true } | { ok: false; error: string; kind: 'scope' | 'api' | 'auth' | 'other' }> {
+  // Prefer tokeninfo for scope before hitting Tasks API
+  const scopes = await fetchAccessTokenScopes(accessToken);
+  const hasTasksScope =
+    scopes.length === 0
+      ? null // unknown — fall through to API
+      : scopesIncludeTasks(scopes.join(' '));
+
+  if (hasTasksScope === false) {
+    return {
+      ok: false,
+      error:
+        'Token is missing https://www.googleapis.com/auth/tasks — Reconnect for Tasks and leave Tasks checked on the consent screen.',
+      kind: 'scope',
+    };
+  }
+
+  try {
+    const { listGoogleTaskLists } = await import('@/lib/google-tasks');
+    await listGoogleTaskLists(accessToken);
+    return { ok: true };
+  } catch (e) {
+    const raw = e instanceof Error ? e.message : String(e);
+    const msg = formatGoogleConnectError(e);
+    const lower = `${msg} ${raw}`.toLowerCase();
+    let kind: 'scope' | 'api' | 'auth' | 'other' = 'other';
+    if (
+      lower.includes('tasks api') ||
+      lower.includes('enable google tasks') ||
+      lower.includes('access_not_configured') ||
+      lower.includes('accessnotconfigured') ||
+      lower.includes('has not been used') ||
+      lower.includes('service_disabled') ||
+      lower.includes('api not enabled')
+    ) {
+      kind = 'api';
+    } else if (
+      lower.includes('permission') ||
+      lower.includes('scope') ||
+      lower.includes('insufficient') ||
+      lower.includes('access_token_scope')
+    ) {
+      kind = 'scope';
+    } else if (lower.includes('expired') || lower.includes('401')) {
+      kind = 'auth';
+    }
+    const error =
+      kind === 'api'
+        ? `${msg}\n\n${GOOGLE_TASKS_API_CONSOLE_STEPS}`
+        : msg;
+    return { ok: false, error, kind };
+  }
+}
+
+/** Revoke current GIS token (best-effort) and clear local session storage. */
+export function revokeBrowserGcalToken(): Promise<void> {
+  const session =
+    readBrowserGcalSession() || readRawBrowserGcalSession();
+  const token = session?.accessToken;
+  clearBrowserGcalSession();
+  if (!token) return Promise.resolve();
+  return loadGoogleIdentityScript()
+    .then(
+      () =>
+        new Promise<void>((resolve) => {
+          try {
+            const revoke = window.google?.accounts?.oauth2?.revoke;
+            if (!revoke) {
+              resolve();
+              return;
+            }
+            revoke(token, () => resolve());
+            // GIS revoke callback can hang; don't block reconnect forever
+            setTimeout(() => resolve(), 1500);
+          } catch {
+            resolve();
+          }
+        })
+    )
+    .catch(() => undefined);
 }
 
 let gsiLoadPromise: Promise<void> | null = null;
@@ -167,11 +436,17 @@ async function fetchTokenEmail(accessToken: string): Promise<string | undefined>
 }
 
 /**
- * Opens Google account picker / consent and stores an access token in sessionStorage.
+ * Opens Google account picker / consent and stores an access token in localStorage.
  * Pass forceConsent when adding new scopes (e.g. Tasks) so Google re-prompts.
+ * forceConsent revokes the prior token first so Calendar-only grants don't block Tasks.
+ * If the user cancels, the previous Calendar session is restored.
+ * Pass silent to reuse prior grant without UI (fails if consent missing/expired).
+ *
+ * Scopes are verified via tokeninfo — we never invent Tasks from a missing GIS `scope`.
  */
-export function connectGoogleCalendarBrowser(opts?: {
+export async function connectGoogleCalendarBrowser(opts?: {
   forceConsent?: boolean;
+  silent?: boolean;
 }): Promise<BrowserGcalSession> {
   const clientId = getPublicGoogleClientId();
   if (!clientId) {
@@ -182,57 +457,130 @@ export function connectGoogleCalendarBrowser(opts?: {
     );
   }
 
-  return loadGoogleIdentityScript().then(
-    () =>
-      new Promise<BrowserGcalSession>((resolve, reject) => {
-        const oauth2 = window.google?.accounts?.oauth2;
-        if (!oauth2) {
-          reject(new Error('Google Identity Services not available'));
-          return;
-        }
+  // Snapshot so a cancelled Tasks reconnect does not wipe Calendar.
+  const previous =
+    !opts?.silent
+      ? readBrowserGcalSession() || readRawBrowserGcalSession()
+      : readRawBrowserGcalSession();
 
-        const client = oauth2.initTokenClient({
-          client_id: clientId,
-          scope: GCAL_SCOPE,
-          callback: (resp) => {
-            void (async () => {
-              if (resp.error || !resp.access_token) {
-                reject(
-                  new Error(
+  // Reconnect for Tasks: revoke + clear localStorage so Google cannot silently
+  // reuse a Calendar-only token when we request Calendar + Tasks together.
+  if (opts?.forceConsent && !opts?.silent) {
+    await revokeBrowserGcalToken();
+    clearBrowserGcalSession();
+  }
+
+  try {
+    await loadGoogleIdentityScript();
+
+    const session = await new Promise<BrowserGcalSession>((resolve, reject) => {
+      const oauth2 = window.google?.accounts?.oauth2;
+      if (!oauth2) {
+        reject(new Error('Google Identity Services not available'));
+        return;
+      }
+
+      const client = oauth2.initTokenClient({
+        client_id: clientId,
+        scope: GCAL_SCOPE,
+        include_granted_scopes: true,
+        callback: (resp) => {
+          void (async () => {
+            if (resp.error || !resp.access_token) {
+              reject(
+                new Error(
+                  formatGoogleConnectError(
                     resp.error_description ||
                       resp.error ||
                       'Google sign-in was cancelled'
                   )
-                );
-                return;
-              }
-              const expiresIn = resp.expires_in ?? 3600;
-              const email = await fetchTokenEmail(resp.access_token);
-              const session: BrowserGcalSession = {
-                accessToken: resp.access_token,
-                expiresAt: Date.now() + expiresIn * 1000,
-                email,
-                scopes: GCAL_SCOPE,
-              };
-              writeBrowserGcalSession(session);
-              resolve(session);
-            })();
-          },
-          error_callback: (err) => {
-            reject(new Error(err.message || err.type || 'Google auth error'));
-          },
-        });
+                )
+              );
+              return;
+            }
+            const expiresIn = resp.expires_in ?? 3600;
+            const email = await fetchTokenEmail(resp.access_token);
 
-        // Empty prompt reuses prior grant when possible; consent for new scopes
-        client.requestAccessToken(
-          opts?.forceConsent ? { prompt: 'consent' } : {}
-        );
-      })
-  );
+            // Authoritative scopes from tokeninfo (GIS often omits resp.scope).
+            let scopeList = normalizeOAuthScopes(resp.scope);
+            if (scopeList.length === 0 || opts?.forceConsent) {
+              const fromInfo = await fetchAccessTokenScopes(resp.access_token);
+              if (fromInfo.length) scopeList = fromInfo;
+            }
+            if (scopeList.length === 0 && opts?.silent) {
+              scopeList = normalizeOAuthScopes(
+                previous?.scopes || readRawBrowserGcalSession()?.scopes
+              );
+            }
+            // Interactive: never invent Calendar+Tasks if Google didn't return them.
+            const granted =
+              scopeList.length > 0 ? scopeList.join(' ') : undefined;
+
+            const next: BrowserGcalSession = {
+              accessToken: resp.access_token,
+              expiresAt: Date.now() + expiresIn * 1000,
+              email,
+              scopes: granted,
+            };
+            writeBrowserGcalSession(next);
+            resolve(next);
+          })();
+        },
+        error_callback: (err) => {
+          reject(
+            new Error(
+              formatGoogleConnectError(
+                err.message || err.type || 'Google auth error'
+              )
+            )
+          );
+        },
+      });
+
+      if (opts?.silent) {
+        client.requestAccessToken({ prompt: '' });
+      } else if (opts?.forceConsent) {
+        // Force account + consent so Tasks appears again after Calendar-only grant
+        client.requestAccessToken({ prompt: 'consent select_account' });
+      } else {
+        client.requestAccessToken({});
+      }
+    });
+
+    return session;
+  } catch (err) {
+    if (previous && opts?.forceConsent && !opts?.silent) {
+      writeBrowserGcalSession(previous);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Return a usable access token: reuse if fresh, else silent GIS refresh.
+ * Clears storage if refresh fails (user must reconnect).
+ */
+export async function ensureBrowserGcalSession(): Promise<BrowserGcalSession | null> {
+  const fresh = readBrowserGcalSession();
+  if (fresh) return fresh;
+
+  const raw = readRawBrowserGcalSession();
+  // Only attempt silent refresh if we previously connected on this device
+  if (!raw && !storageGet(EMAIL_KEY) && !storageGet(SCOPES_KEY)) {
+    return null;
+  }
+
+  try {
+    return await connectGoogleCalendarBrowser({ silent: true });
+  } catch {
+    clearBrowserGcalSession();
+    return null;
+  }
 }
 
 export function disconnectGoogleCalendarBrowser() {
-  const session = readBrowserGcalSession();
+  const session =
+    readBrowserGcalSession() || readRawBrowserGcalSession();
   if (session?.accessToken && window.google?.accounts?.oauth2?.revoke) {
     try {
       window.google.accounts.oauth2.revoke(session.accessToken);
@@ -243,48 +591,232 @@ export function disconnectGoogleCalendarBrowser() {
   clearBrowserGcalSession();
 }
 
+export type GoogleCalendarListEntry = {
+  id: string;
+  summary?: string;
+  description?: string;
+  primary?: boolean;
+  selected?: boolean;
+  accessRole?: string;
+  /** Calendar color id "1"–"24" */
+  colorId?: string;
+  /** Hex from Google (preferred for paint) */
+  backgroundColor?: string;
+  foregroundColor?: string;
+};
+
 export type GoogleCalendarListItem = {
   id: string;
   summary: string;
   htmlLink?: string;
   location?: string;
   description?: string;
+  /** Google event colorId "1"–"11" */
+  colorId?: string;
+  /** Calendar this event was listed from */
+  calendarId?: string;
+  organizer?: { email?: string; displayName?: string; self?: boolean };
+  calendarBackground?: string;
+  calendarForeground?: string;
   start: { dateTime?: string; date?: string };
   end: { dateTime?: string; date?: string };
+  updated?: string;
+  extendedProperties?: {
+    private?: Record<string, string>;
+  };
 };
 
-/** Upcoming events from the user's primary calendar (GIS access token). */
-export async function listUpcomingGoogleEvents(
+function gcalAuthHeaders(accessToken: string): HeadersInit {
+  return {
+    Authorization: `Bearer ${accessToken}`,
+    Accept: 'application/json',
+  };
+}
+
+function throwGcalListError(status: number, err: string): never {
+  if (status === 401) {
+    throw new Error('Session expired — reconnect Google Calendar');
+  }
+  if (
+    status === 403 &&
+    /accessNotConfigured|has not been used|disabled/i.test(err)
+  ) {
+    throw new Error(
+      'Enable Google Calendar API in Cloud Console → APIs & Services → Library, then reconnect.'
+    );
+  }
+  throw new Error(`Failed to load events: ${err.slice(0, 160)}`);
+}
+
+/** User's calendar list (colors + which calendars are selected). */
+export async function listGoogleCalendarList(
+  accessToken: string
+): Promise<GoogleCalendarListEntry[]> {
+  const res = await fetch(
+    'https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250',
+    { headers: gcalAuthHeaders(accessToken) }
+  );
+  if (!res.ok) {
+    const err = await res.text();
+    if (res.status === 401) {
+      throw new Error('Session expired — reconnect Google Calendar');
+    }
+    if (res.status === 403) {
+      // Missing calendarlist.readonly — caller may fall back to primary
+      throw new Error(`calendarList_forbidden:${err.slice(0, 120)}`);
+    }
+    throw new Error(`Failed to load calendars: ${err.slice(0, 160)}`);
+  }
+  const data = (await res.json()) as { items?: GoogleCalendarListEntry[] };
+  return data.items || [];
+}
+
+/** Events from one calendar id (primary or email). */
+export async function listGoogleEventsForCalendar(
   accessToken: string,
+  calendarId: string,
   opts?: { maxResults?: number; timeMin?: string; timeMax?: string }
 ): Promise<GoogleCalendarListItem[]> {
   const qs = new URLSearchParams({
     singleEvents: 'true',
     orderBy: 'startTime',
-    maxResults: String(opts?.maxResults ?? 25),
+    maxResults: String(opts?.maxResults ?? 100),
     timeMin: opts?.timeMin || new Date().toISOString(),
   });
   if (opts?.timeMax) qs.set('timeMax', opts.timeMax);
 
   const res = await fetch(
-    `https://www.googleapis.com/calendar/v3/calendars/primary/events?${qs.toString()}`,
-    {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: 'application/json',
-      },
-    }
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${qs.toString()}`,
+    { headers: gcalAuthHeaders(accessToken) }
   );
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(
-      res.status === 401
-        ? 'Session expired — reconnect Google Calendar'
-        : `Failed to load events: ${err.slice(0, 160)}`
-    );
+    throwGcalListError(res.status, err);
   }
   const data = (await res.json()) as { items?: GoogleCalendarListItem[] };
-  return data.items || [];
+  return (data.items || []).map((item) => ({
+    ...item,
+    calendarId,
+  }));
+}
+
+export type GoogleEventsPullResult = {
+  events: GoogleCalendarListItem[];
+  /** calendarList id → hex colors */
+  colorMap: Record<string, { bg: string; fg: string }>;
+};
+
+function colorMapFromCalendarList(
+  calendars: GoogleCalendarListEntry[]
+): Record<string, { bg: string; fg: string }> {
+  const map: Record<string, { bg: string; fg: string }> = {};
+  for (const c of calendars) {
+    if (!c.id || !c.backgroundColor) continue;
+    const entry = {
+      bg: c.backgroundColor,
+      fg: c.foregroundColor || '#ffffff',
+    };
+    map[c.id] = entry;
+    if (c.primary) map.primary = entry;
+  }
+  return map;
+}
+
+/**
+ * Pull events from selected calendars, tagged with calendarId + list colors.
+ * Falls back to primary-only when calendarList scope is missing.
+ */
+export async function listUpcomingGoogleEvents(
+  accessToken: string,
+  opts?: { maxResults?: number; timeMin?: string; timeMax?: string }
+): Promise<GoogleEventsPullResult> {
+  const perCal = Math.max(25, opts?.maxResults ?? 100);
+  let calendars: GoogleCalendarListEntry[] = [];
+  try {
+    calendars = await listGoogleCalendarList(accessToken);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : '';
+    if (!/calendarList_forbidden|403/i.test(msg)) throw e;
+    calendars = [];
+  }
+
+  const colorMap = colorMapFromCalendarList(calendars);
+
+  const selected = calendars.filter((c) => c.selected !== false && c.id);
+  const toFetch =
+    selected.length > 0
+      ? selected
+      : calendars.length > 0
+        ? calendars.filter((c) => c.id)
+        : [
+            {
+              id: 'primary',
+              primary: true,
+              selected: true,
+              backgroundColor: '#4285f4',
+              foregroundColor: '#ffffff',
+            } satisfies GoogleCalendarListEntry,
+          ];
+
+  const settled = await Promise.allSettled(
+    toFetch.map((cal) =>
+      listGoogleEventsForCalendar(accessToken, cal.id, {
+        maxResults: perCal,
+        timeMin: opts?.timeMin,
+        timeMax: opts?.timeMax,
+      })
+    )
+  );
+
+  const out: GoogleCalendarListItem[] = [];
+  for (let i = 0; i < settled.length; i++) {
+    const result = settled[i]!;
+    const cal = toFetch[i]!;
+    if (result.status !== 'fulfilled') continue;
+    const colors = colorMap[cal.id] || {
+      bg: cal.backgroundColor || '#4285f4',
+      fg: cal.foregroundColor || '#ffffff',
+    };
+    for (const item of result.value) {
+      out.push({
+        ...item,
+        calendarId: cal.id,
+        calendarBackground: colors.bg,
+        calendarForeground: colors.fg,
+      });
+    }
+  }
+
+  // If every multi-cal fetch failed, last-resort primary
+  if (out.length === 0 && toFetch[0]?.id !== 'primary') {
+    try {
+      const primary = await listGoogleEventsForCalendar(
+        accessToken,
+        'primary',
+        opts
+      );
+      const primaryColors = colorMap.primary || {
+        bg: '#4285f4',
+        fg: '#ffffff',
+      };
+      return {
+        events: primary.map((item) => ({
+          ...item,
+          calendarId: 'primary',
+          calendarBackground: primaryColors.bg,
+          calendarForeground: primaryColors.fg,
+        })),
+        colorMap,
+      };
+    } catch {
+      /* keep empty */
+    }
+  }
+
+  return {
+    events: Array.isArray(out) ? out : [],
+    colorMap: colorMap && typeof colorMap === 'object' ? colorMap : {},
+  };
 }
 
 /** Create/update Calendar events for leads using the browser access token. */
@@ -299,6 +831,10 @@ export async function syncLeadsWithBrowserToken(
   for (const lead of leads) {
     if (skipClosed && lead.category === 'Closed') {
       results.push({ leadId: lead.id, error: 'skipped_closed' });
+      continue;
+    }
+    if (!lead.adjustmentDate?.trim()) {
+      results.push({ leadId: lead.id, error: 'skipped_no_adjustment' });
       continue;
     }
     try {
@@ -321,4 +857,21 @@ export async function syncLeadsWithBrowserToken(
     results,
     synced: results.filter((r) => r.eventId).length,
   };
+}
+
+/** Create/update a manual Summit calendar event on Google. */
+export async function syncManualEventWithBrowserToken(
+  accessToken: string,
+  event: ManualCalendarPayload
+): Promise<{ eventId: string; htmlLink?: string; calendarId: string }> {
+  return upsertManualCalendarEvent(accessToken, event);
+}
+
+/** Delete a Google Calendar event by id (browser token). */
+export async function deleteGoogleEventWithBrowserToken(
+  accessToken: string,
+  googleEventId: string,
+  calendarId?: string | null
+): Promise<void> {
+  return deleteGoogleCalendarEvent(accessToken, googleEventId, calendarId);
 }

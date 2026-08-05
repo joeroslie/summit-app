@@ -6,8 +6,18 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 export const APP_SETTINGS_COMPANY_KEY = 'company_settings';
 export const APP_SETTINGS_USER_PROFILE_KEY = 'user_profile';
+/** Summit calendar events JSON (local-first mirror for backup). */
+export const APP_SETTINGS_CALENDAR_EVENTS_KEY = 'summit_calendar_events';
+/** Summit tasks + task lists JSON bundle. */
+export const APP_SETTINGS_TASKS_BUNDLE_KEY = 'summit_tasks_bundle';
 export const COMPANY_ASSETS_BUCKET = 'company-assets';
 export const COMPANY_LOGO_STORAGE_PATH = 'logo/company-logo.png';
+
+export type SummitTasksCloudBundle = {
+  tasks: unknown[];
+  lists: unknown[];
+  activeListId?: string;
+};
 
 export type UserProfileSettings = {
   name: string;
@@ -21,6 +31,8 @@ export type CompanySettingsCloud = {
   company: string;
   projectManager: string;
   projectManagerPhone: string;
+  /** Project manager email on docs (optional; blank unless filled). */
+  projectManagerEmail: string;
   address: string;
   phone: string;
   fax: string;
@@ -75,6 +87,7 @@ export function companySettingsForCloud(
     company: settings.company || '',
     projectManager: settings.projectManager || '',
     projectManagerPhone: settings.projectManagerPhone || '',
+    projectManagerEmail: settings.projectManagerEmail || '',
     address: settings.address || '',
     phone: settings.phone || '',
     fax: settings.fax || '',
@@ -214,6 +227,10 @@ export async function loadCloudCompanySettings(
       typeof parsed.projectManagerPhone === 'string'
         ? parsed.projectManagerPhone
         : '',
+    projectManagerEmail:
+      typeof parsed.projectManagerEmail === 'string'
+        ? parsed.projectManagerEmail
+        : '',
     address: typeof parsed.address === 'string' ? parsed.address : '',
     phone: typeof parsed.phone === 'string' ? parsed.phone : '',
     fax: typeof parsed.fax === 'string' ? parsed.fax : '',
@@ -262,4 +279,55 @@ export async function saveCloudCompanySettings(
   payload.logoPath = syncedLogo.logoPath;
   await upsertAppSetting(supabase, APP_SETTINGS_COMPANY_KEY, payload);
   return payload;
+}
+
+/** Load Summit calendar events array from app_settings (or null if empty). */
+export async function loadCloudCalendarEvents(
+  supabase: SupabaseClient
+): Promise<unknown[] | null> {
+  const raw = await fetchAppSetting(supabase, APP_SETTINGS_CALENDAR_EVENTS_KEY);
+  const parsed = parseAppSettingValue(raw);
+  if (Array.isArray(parsed)) return parsed;
+  const rec = asRecord(parsed);
+  if (rec && Array.isArray(rec.events)) return rec.events;
+  return null;
+}
+
+export async function saveCloudCalendarEvents(
+  supabase: SupabaseClient,
+  events: unknown[]
+): Promise<void> {
+  await upsertAppSetting(supabase, APP_SETTINGS_CALENDAR_EVENTS_KEY, {
+    events: Array.isArray(events) ? events : [],
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/** Load tasks + lists bundle from app_settings. */
+export async function loadCloudTasksBundle(
+  supabase: SupabaseClient
+): Promise<SummitTasksCloudBundle | null> {
+  const raw = await fetchAppSetting(supabase, APP_SETTINGS_TASKS_BUNDLE_KEY);
+  const parsed = asRecord(parseAppSettingValue(raw));
+  if (!parsed) return null;
+  return {
+    tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
+    lists: Array.isArray(parsed.lists) ? parsed.lists : [],
+    activeListId:
+      typeof parsed.activeListId === 'string'
+        ? parsed.activeListId
+        : undefined,
+  };
+}
+
+export async function saveCloudTasksBundle(
+  supabase: SupabaseClient,
+  bundle: SummitTasksCloudBundle
+): Promise<void> {
+  await upsertAppSetting(supabase, APP_SETTINGS_TASKS_BUNDLE_KEY, {
+    tasks: Array.isArray(bundle.tasks) ? bundle.tasks : [],
+    lists: Array.isArray(bundle.lists) ? bundle.lists : [],
+    activeListId: bundle.activeListId || '',
+    updatedAt: new Date().toISOString(),
+  });
 }

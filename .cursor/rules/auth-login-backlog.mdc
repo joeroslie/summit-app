@@ -1,0 +1,13 @@
+---
+description: Backlog — auth / login (password settings, real user auth, RLS; not built yet)
+alwaysApply: true
+---
+
+# Auth / login (planned — not built yet)
+
+When real login lands, include:
+- Password settings / change password
+- Proper user auth (not anon-only)
+- Tighten Supabase RLS (currently single-tenant anon policies on app_settings, etc.)
+
+Do not build until Joe asks.
