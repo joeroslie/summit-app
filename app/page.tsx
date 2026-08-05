@@ -3099,6 +3099,24 @@ export default function SummitApp() {
     'month'
   );
   const calendarWeekScrollRef = useRef<HTMLDivElement>(null);
+  /**
+   * Google event ids just created/updated from Summit — protect from
+   * delete-on-pull until Google list APIs catch up (~2 min).
+   */
+  const retainGoogleIdsRef = useRef<Map<string, number>>(new Map());
+  const rememberRetainedGoogleId = (googleEventId?: string | null) => {
+    const id = (googleEventId || '').trim();
+    if (!id) return;
+    retainGoogleIdsRef.current.set(id, Date.now() + 120_000);
+  };
+  const activeRetainGoogleIds = (): Set<string> => {
+    const now = Date.now();
+    const map = retainGoogleIdsRef.current;
+    for (const [id, until] of map) {
+      if (until <= now) map.delete(id);
+    }
+    return new Set(map.keys());
+  };
   /** Live events pulled from connected Google Calendar */
   const [googleCalendarEvents, setGoogleCalendarEvents] = useState<
     Array<{
@@ -9442,6 +9460,7 @@ export default function SummitApp() {
           startDate: pullWindow.startDate,
           endDateExclusive: pullWindow.endDateExclusive,
         },
+        retainGoogleIds: activeRetainGoogleIds(),
       });
       // Re-resolve calendar colors from fresh calendarList map on every pull
       const mergedEvents = Array.isArray(merged?.events) ? merged.events : [];
@@ -9535,6 +9554,7 @@ export default function SummitApp() {
           calendarId: ev.calendarId || 'primary',
           colorId: ev.colorId ?? null,
         });
+        rememberRetainedGoogleId(out.eventId);
         next = next.map((x) =>
           x.id === ev.id
             ? {
@@ -9706,9 +9726,10 @@ export default function SummitApp() {
       source: 'summit',
     };
 
+    const localEvents = Array.isArray(calendarEvents) ? calendarEvents : [];
     let existing: SummitCalendarEvent | undefined;
     if (calEventModal?.mode === 'edit' && calEventModal.eventId) {
-      existing = calendarEvents.find((e) => e.id === calEventModal.eventId);
+      existing = localEvents.find((e) => e.id === calEventModal.eventId);
     }
     const event: SummitCalendarEvent = existing
       ? {
@@ -9728,99 +9749,144 @@ export default function SummitApp() {
 
     const next =
       existing != null
-        ? calendarEvents.map((e) => (e.id === event.id ? event : e))
-        : [event, ...calendarEvents];
+        ? localEvents.map((e) => (e.id === event.id ? event : e))
+        : [event, ...localEvents];
     persistCalendarEvents(next);
     setCalendarSelectedDay(event.startDate);
     setCalEventModal(null);
 
-    if (gcalConnected) {
-      setCalEventBusy(true);
-      try {
-        const {
-          ensureBrowserGcalSession,
-          syncManualEventWithBrowserToken,
-        } = await import('@/lib/gcal-browser');
-        const session = await ensureBrowserGcalSession();
-        if (session?.accessToken) {
-          const out = await syncManualEventWithBrowserToken(
-            session.accessToken,
-            {
-              id: event.id,
-              title: event.title,
-              notes: event.notes,
-              startDate: event.startDate,
-              endDate: event.endDate,
-              startTime: event.startTime,
-              endTime: event.endTime,
-              allDay: event.allDay,
-              leadId: event.leadId,
-              leadName: event.leadName,
-              googleEventId: event.googleEventId,
-              calendarId: event.calendarId || 'primary',
-              colorId: event.colorId ?? null,
-            }
-          );
-          const synced = next.map((e) =>
-            e.id === event.id
-              ? {
-                  ...e,
-                  googleEventId: out.eventId,
-                  googleHtmlLink: out.htmlLink || e.googleHtmlLink,
-                  calendarId: out.calendarId || e.calendarId || 'primary',
-                  updatedAt: new Date().toISOString(),
-                }
-              : e
-          );
-          persistCalendarEvents(synced);
-          void loadGoogleEvents({ silent: true });
-          showToast(
-            event.leadId
-              ? 'Event saved · linked lead · synced to Google'
-              : 'Event saved · synced to Google'
-          );
-          return;
-        }
-      } catch (e) {
-        const { formatGoogleConnectError } = await import('@/lib/gcal-browser');
-        showToast(
-          `Saved locally — Google sync failed: ${formatGoogleConnectError(e)}`
-        );
+    // Summit → Google create/update immediately when a browser token exists
+    try {
+      const { hasBrowserGcalToken } = await import('@/lib/gcal-browser');
+      if (!gcalConnected && !hasBrowserGcalToken()) {
+        showToast(event.leadId ? 'Event saved · lead linked' : 'Event saved');
         return;
-      } finally {
-        setCalEventBusy(false);
+      }
+    } catch {
+      if (!gcalConnected) {
+        showToast(event.leadId ? 'Event saved · lead linked' : 'Event saved');
+        return;
       }
     }
-    showToast(event.leadId ? 'Event saved · lead linked' : 'Event saved');
+
+    setCalEventBusy(true);
+    try {
+      const {
+        ensureBrowserGcalSession,
+        syncManualEventWithBrowserToken,
+        hasBrowserGcalToken,
+      } = await import('@/lib/gcal-browser');
+      const session = await ensureBrowserGcalSession();
+      if (session?.accessToken) {
+        setGcalConnected(true);
+        const out = await syncManualEventWithBrowserToken(
+          session.accessToken,
+          {
+            id: event.id,
+            title: event.title,
+            notes: event.notes,
+            startDate: event.startDate,
+            endDate: event.endDate,
+            startTime: event.startTime,
+            endTime: event.endTime,
+            allDay: event.allDay,
+            leadId: event.leadId,
+            leadName: event.leadName,
+            googleEventId: event.googleEventId,
+            calendarId: event.calendarId || 'primary',
+            colorId: event.colorId ?? null,
+          }
+        );
+        rememberRetainedGoogleId(out.eventId);
+        const synced = next.map((e) =>
+          e.id === event.id
+            ? {
+                ...e,
+                googleEventId: out.eventId,
+                googleHtmlLink: out.htmlLink || e.googleHtmlLink,
+                calendarId: out.calendarId || e.calendarId || 'primary',
+                updatedAt: new Date().toISOString(),
+              }
+            : e
+        );
+        persistCalendarEvents(synced);
+        // Soft pull (retain protects just-pushed id from delete-on-pull lag)
+        void loadGoogleEvents({ silent: true });
+        showToast(
+          event.leadId
+            ? 'Event saved · linked lead · synced to Google'
+            : 'Event saved · synced to Google'
+        );
+        return;
+      }
+      setGcalConnected(hasBrowserGcalToken());
+      showToast(
+        hasBrowserGcalToken()
+          ? 'Saved locally — Google session expired, tap Reconnect'
+          : event.leadId
+            ? 'Event saved · lead linked'
+            : 'Event saved'
+      );
+    } catch (e) {
+      const { formatGoogleConnectError } = await import('@/lib/gcal-browser');
+      showToast(
+        `Saved locally — Google sync failed: ${formatGoogleConnectError(e)}`
+      );
+    } finally {
+      setCalEventBusy(false);
+    }
   };
 
   const deleteCalendarEvent = async (eventId: string) => {
-    const target = calendarEvents.find((e) => e.id === eventId);
+    const target = (Array.isArray(calendarEvents) ? calendarEvents : []).find(
+      (e) => e.id === eventId
+    );
     if (!target) return;
-    const next = calendarEvents.filter((e) => e.id !== eventId);
+    const next = (Array.isArray(calendarEvents) ? calendarEvents : []).filter(
+      (e) => e.id !== eventId
+    );
     persistCalendarEvents(next);
     setCalEventModal(null);
-    if (target.googleEventId && gcalConnected) {
-      try {
-        const {
-          ensureBrowserGcalSession,
-          deleteGoogleEventWithBrowserToken,
-        } = await import('@/lib/gcal-browser');
-        const session = await ensureBrowserGcalSession();
-        if (session?.accessToken) {
-          await deleteGoogleEventWithBrowserToken(
-            session.accessToken,
-            target.googleEventId,
-            target.calendarId
-          );
-          void loadGoogleEvents({ silent: true });
-        }
-      } catch {
-        showToast('Removed locally — could not delete on Google');
+
+    const googleId = (target.googleEventId || '').trim();
+    if (!googleId) {
+      showToast('Event deleted');
+      return;
+    }
+
+    // Summit → Google delete immediately when linked + token present
+    try {
+      const {
+        ensureBrowserGcalSession,
+        deleteGoogleEventWithBrowserToken,
+        hasBrowserGcalToken,
+      } = await import('@/lib/gcal-browser');
+      if (!gcalConnected && !hasBrowserGcalToken()) {
+        showToast('Event deleted');
         return;
       }
+      const session = await ensureBrowserGcalSession();
+      if (session?.accessToken) {
+        setGcalConnected(true);
+        // Drop retain so a later pull won't resurrect this id
+        retainGoogleIdsRef.current.delete(googleId);
+        await deleteGoogleEventWithBrowserToken(
+          session.accessToken,
+          googleId,
+          target.calendarId
+        );
+        showToast('Event deleted · removed from Google');
+        return;
+      }
+      setGcalConnected(hasBrowserGcalToken());
+      showToast(
+        hasBrowserGcalToken()
+          ? 'Removed locally — Google session expired, reconnect to finish delete'
+          : 'Event deleted'
+      );
+    } catch {
+      showToast('Removed locally — could not delete on Google');
     }
-    showToast('Event deleted');
   };
 
   const connectGoogleCalendar = async (opts?: { forceConsent?: boolean }) => {

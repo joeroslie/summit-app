@@ -106,11 +106,17 @@ export function mergeGoogleCalendarEventsIntoLocal(
     knownAdjustmentGoogleIds?: Set<string>;
     /** When provided, pull is authoritative for Google-linked events in this range */
     pullWindow?: Pick<CalendarPullWindow, 'startDate' | 'endDateExclusive'>;
+    /**
+     * Google event ids just pushed from Summit — never delete-on-pull
+     * (list APIs can lag a moment after create/PATCH).
+     */
+    retainGoogleIds?: Set<string>;
   }
 ): MergeGooglePullResult {
   const localSafe = Array.isArray(local) ? local : [];
   const remoteSafe = Array.isArray(remote) ? remote : [];
   const adjIds = opts?.knownAdjustmentGoogleIds || new Set<string>();
+  const retainIds = opts?.retainGoogleIds || new Set<string>();
   const pullWindow = opts?.pullWindow;
 
   const byGoogle = new Map<string, SummitCalendarEvent>();
@@ -189,6 +195,12 @@ export function mergeGoogleCalendarEventsIntoLocal(
       continue;
     }
 
+    // Just pushed from Summit — Google list can lag; do not delete-on-pull
+    if (e.googleEventId && retainIds.has(e.googleEventId)) {
+      nextById.set(e.id, e);
+      continue;
+    }
+
     const inWindow =
       pullWindow != null && eventOverlapsPullWindow(e, pullWindow);
 
@@ -222,6 +234,7 @@ export function safeMergeGoogleCalendarEventsIntoLocal(
   opts?: {
     knownAdjustmentGoogleIds?: Set<string>;
     pullWindow?: Pick<CalendarPullWindow, 'startDate' | 'endDateExclusive'>;
+    retainGoogleIds?: Set<string>;
   }
 ): MergeGooglePullResult {
   try {
