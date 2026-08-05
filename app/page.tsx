@@ -37,11 +37,15 @@ import {
   type SummitTaskList,
 } from '@/lib/google-tasks';
 import {
+  safeMergeGoogleCalendarEventsIntoLocal,
+  pullWindowForMonthCursor,
+} from '@/lib/calendar-sync';
+import { CalendarErrorBoundary } from '@/components/CalendarErrorBoundary';
+import {
   SUMMIT_CALENDAR_EVENTS_KEY,
   newSummitCalendarEventId,
   normalizeStoredCalendarEvents,
   normalizeGoogleCalendarEventsList,
-  mergeGoogleCalendarEventsIntoLocal,
   eventOccursOnDay,
   formatEventTimeLabel,
   defaultEndTime,
@@ -9345,14 +9349,11 @@ export default function SummitApp() {
       setGcalConnected(true);
       setGoogleEventsLoading(true);
       const cursor = opts?.cursor || calendarCursor;
-      const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
-      monthStart.setHours(0, 0, 0, 0);
-      const gridStart = startOfWeekSunday(monthStart);
-      const gridEnd = addDays(gridStart, 42);
+      const pullWindow = pullWindowForMonthCursor(cursor);
       const pulled = await listUpcomingGoogleEvents(session.accessToken, {
         maxResults: 120,
-        timeMin: gridStart.toISOString(),
-        timeMax: gridEnd.toISOString(),
+        timeMin: pullWindow.timeMin,
+        timeMax: pullWindow.timeMax,
       });
       // Always store a normalized array — never bare object / missing start (crashes render)
       const items = normalizeGoogleCalendarEventsList(
@@ -9421,7 +9422,7 @@ export default function SummitApp() {
         /* ignore list helpers */
       }
 
-      // Merge Google → Summit event store (skip adjustment-synced events)
+      // Merge Google → Summit: pull is authoritative for google-linked events in window
       const adjIds = new Set(
         (Array.isArray(leads) ? leads : [])
           .map((l) => l.calendarEventId)
@@ -9435,8 +9436,12 @@ export default function SummitApp() {
           return Array.isArray(calendarEvents) ? calendarEvents : [];
         }
       })();
-      const merged = mergeGoogleCalendarEventsIntoLocal(localRaw, items, {
+      const merged = safeMergeGoogleCalendarEventsIntoLocal(localRaw, items, {
         knownAdjustmentGoogleIds: adjIds,
+        pullWindow: {
+          startDate: pullWindow.startDate,
+          endDateExclusive: pullWindow.endDateExclusive,
+        },
       });
       // Re-resolve calendar colors from fresh calendarList map on every pull
       const mergedEvents = Array.isArray(merged?.events) ? merged.events : [];
@@ -9463,6 +9468,7 @@ export default function SummitApp() {
             ? `${merged.imported} imported`
             : '',
           merged.updated ? `${merged.updated} updated` : '',
+          merged.removed ? `${merged.removed} removed` : '',
         ].filter(Boolean);
         showToast(
           parts.length ? `Calendar · ${parts.join(' · ')}` : 'No events this month'
@@ -17684,7 +17690,16 @@ export default function SummitApp() {
         )}
 
 
-        {activeTab === 'calendar' && (() => {
+        {activeTab === 'calendar' && (
+          <CalendarErrorBoundary
+            onRetry={() => {
+              void refreshFromGoogle({
+                silent: false,
+                cursor: calendarCursor,
+              });
+            }}
+          >
+            {(() => {
           try {
           const openJobs = (Array.isArray(leads) ? leads : []).filter(
             (l) => normalizePipelineStage(l.category) !== 'Closed'
@@ -18940,6 +18955,8 @@ export default function SummitApp() {
             );
           }
         })()}
+          </CalendarErrorBoundary>
+        )}
 
         {activeTab === 'tasks' && (() => {
           try {
