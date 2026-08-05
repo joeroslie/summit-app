@@ -2529,6 +2529,13 @@ export default function SummitApp() {
   /** Estimate picker opens estimate vs internal workspace after lead pick */
   const [estimatePickerMode, setEstimatePickerMode] =
     useState<EstimateWorkspace>('estimate');
+  /** In-app leave guard (replaces window.confirm for unsaved estimate) */
+  const [pendingLeave, setPendingLeave] = useState<null | {
+    kind: 'estimator' | 'nav';
+    returnToLead?: boolean;
+    targetTab?: AppTab;
+    newTab?: AppTab;
+  }>(null);
   const headerSearchRef = useRef<HTMLDivElement>(null);
 
   // Pricing region from open lead address (or form fields / manual override)
@@ -5898,14 +5905,8 @@ export default function SummitApp() {
       profileTab === 'estimator' &&
       !(newTab === 'leads' && isEditingLead)
     ) {
-      const leaveWithoutSaving = confirm(
-        'You have unsaved estimate changes.\n\nOK = leave without saving\nCancel = stay here'
-      );
-      if (!leaveWithoutSaving) return;
-      const keepContact = estimatorSourceLeadId != null || currentLeadId != null;
-      resetEstimatorFields(keepContact);
-      setHasUnsavedChanges(false);
-      if (!keepContact) setCurrentLeadId(null);
+      setPendingLeave({ kind: 'nav', newTab });
+      return;
     }
 
     // Draft-save open lead when navigating away from profile
@@ -8153,26 +8154,14 @@ showToast(
   };
 
   /** Leave estimator; keep unsaved estimate guard. Optionally return to source lead. */
-  const leaveEstimator = (opts?: {
+  const completeLeaveEstimator = (opts?: {
     returnToLead?: boolean;
     targetTab?: AppTab;
   }) => {
-    if (hasUnsavedChanges) {
-      const leaveWithoutSaving = confirm(
-        'You have unsaved estimate changes.\n\nOK = leave without saving\nCancel = stay here'
-      );
-      if (!leaveWithoutSaving) return false;
-      const keepContact =
-        (opts?.returnToLead && estimatorSourceLeadId != null) ||
-        currentLeadId != null;
-      resetEstimatorFields(!!keepContact);
-      setHasUnsavedChanges(false);
-    }
-
     setShowProfessionalEstimate(false);
     setShowUserMenu(false);
-
     setEstimateWorkspace('estimate');
+    setEditingEstimateId(null);
 
     if (opts?.returnToLead) {
       const id = estimatorSourceLeadId ?? currentLeadId;
@@ -8199,6 +8188,91 @@ showToast(
     }
     setActiveTab(tab);
     return true;
+  };
+
+  const leaveEstimator = (opts?: {
+    returnToLead?: boolean;
+    targetTab?: AppTab;
+  }) => {
+    if (hasUnsavedChanges) {
+      setPendingLeave({
+        kind: 'estimator',
+        returnToLead: opts?.returnToLead,
+        targetTab: opts?.targetTab,
+      });
+      return false;
+    }
+    return completeLeaveEstimator(opts);
+  };
+
+  const confirmPendingLeaveDiscard = () => {
+    if (!pendingLeave) return;
+    const keepContact =
+      pendingLeave.kind === 'estimator'
+        ? (pendingLeave.returnToLead && estimatorSourceLeadId != null) ||
+          currentLeadId != null
+        : estimatorSourceLeadId != null || currentLeadId != null;
+    resetEstimatorFields(!!keepContact);
+    setHasUnsavedChanges(false);
+    const leave = pendingLeave;
+    setPendingLeave(null);
+    if (leave.kind === 'estimator') {
+      completeLeaveEstimator({
+        returnToLead: leave.returnToLead,
+        targetTab: leave.targetTab,
+      });
+      return;
+    }
+    if (leave.kind === 'nav' && leave.newTab) {
+      if (!keepContact) setCurrentLeadId(null);
+      // Proceed with nav after discard
+      setShowProfessionalEstimate(false);
+      setShowUserMenu(false);
+      setHeaderSearch('');
+      const newTab = leave.newTab;
+      if (newTab !== 'leads') {
+        setIsEditingLead(false);
+        setProfileTab('overview');
+        setEstimateWorkspace('estimate');
+        setEstimatorSourceLeadId(null);
+      }
+      setActiveTab(newTab);
+    }
+  };
+
+  const confirmPendingLeaveSave = async () => {
+    if (!pendingLeave) return;
+    const leave = pendingLeave;
+    await saveCurrentEstimate();
+    setPendingLeave(null);
+    if (leave.kind === 'estimator') {
+      completeLeaveEstimator({
+        returnToLead: leave.returnToLead,
+        targetTab: leave.targetTab,
+      });
+      return;
+    }
+    if (leave.kind === 'nav' && leave.newTab) {
+      setShowProfessionalEstimate(false);
+      setShowUserMenu(false);
+      setHeaderSearch('');
+      const newTab = leave.newTab;
+      if (
+        isEditingLead &&
+        currentLeadId != null &&
+        activeTab === 'leads' &&
+        newTab !== 'leads'
+      ) {
+        saveLeadDraft({ silent: true });
+      }
+      if (newTab !== 'leads') {
+        setIsEditingLead(false);
+        setProfileTab('overview');
+        setEstimateWorkspace('estimate');
+        setEstimatorSourceLeadId(null);
+      }
+      setActiveTab(newTab);
+    }
   };
 
   const applyNegotiatedPrice = () => {
@@ -9656,32 +9730,23 @@ showToast(
         systemDocWorkspace === 'mitigation_company') && (
         <div className={documentWorkspaceClass}>
           <div className="page-shell !py-8 sm:!py-10">
-            {/* Header */}
-            <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div>
-                <button
-                  type="button"
-                  className="text-sm text-zinc-500 hover:text-zinc-800 mb-4"
-                  onClick={() => exitLeadDocumentWorkspace()}
-                >
-                  ← Back to lead
-                </button>
-                <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
-                  Mitigation invoice
-                </h1>
-                <p className="text-sm text-zinc-500 mt-1">
-                  {mitigationWorkspace === 'internal'
-                    ? 'Internal financials & buffer'
-                    : 'Customer quote · mitigation'}
-                </p>
-              </div>
+            {/* Header — single exit */}
+            <div className="mb-6">
               <button
                 type="button"
+                className="text-sm text-zinc-500 hover:text-zinc-800 mb-4"
                 onClick={() => exitLeadDocumentWorkspace()}
-                className="self-start sm:self-center px-4 py-2 rounded-full border border-zinc-200 bg-white text-sm font-medium text-zinc-700 hover:border-zinc-300 shrink-0"
               >
-                Close
+                ← Back to lead
               </button>
+              <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
+                Mitigation invoice
+              </h1>
+              <p className="text-sm text-zinc-500 mt-1">
+                {mitigationWorkspace === 'internal'
+                  ? 'Internal financials & buffer'
+                  : 'Customer quote · mitigation'}
+              </p>
             </div>
 
             {mitigationDraft && !showMitigationPreview && (
@@ -10606,6 +10671,52 @@ showToast(
           {toastMessage}
         </div>
       )}
+      {pendingLeave && (
+        <div className="fixed inset-0 z-[95] bg-black/40 flex items-end sm:items-center justify-center p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="leave-estimate-title"
+            className="bg-white rounded-3xl w-full max-w-md shadow-lg border border-zinc-200 overflow-hidden"
+          >
+            <div className="p-5 sm:p-6">
+              <h2
+                id="leave-estimate-title"
+                className="text-lg font-semibold text-zinc-900"
+              >
+                Unsaved estimate changes
+              </h2>
+              <p className="text-sm text-zinc-500 mt-2">
+                Save to the lead before leaving, discard changes, or stay and
+                keep editing.
+              </p>
+            </div>
+            <div className="px-5 sm:px-6 pb-5 sm:pb-6 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => void confirmPendingLeaveSave()}
+                className="btn-primary w-full py-3 rounded-2xl font-semibold text-sm"
+              >
+                Save & leave
+              </button>
+              <button
+                type="button"
+                onClick={confirmPendingLeaveDiscard}
+                className="w-full py-3 rounded-2xl font-semibold text-sm border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+              >
+                Discard changes
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingLeave(null)}
+                className="w-full py-3 rounded-2xl font-medium text-sm text-zinc-500 hover:text-zinc-800"
+              >
+                Keep editing
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {renderAppSidebar()}
       {/* Main column offset for fixed desktop sidebar */}
       <div
@@ -11134,16 +11245,16 @@ showToast(
           <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-20">
             <div className="flex items-center justify-between gap-3 mb-4 sticky top-0 bg-zinc-50/95 backdrop-blur py-3 z-10">
               <div>
+                <button
+                  type="button"
+                  onClick={() => exitLeadDocumentWorkspace()}
+                  className="text-sm text-zinc-500 hover:text-zinc-800 mb-2 inline-flex items-center gap-1"
+                >
+                  ← Back to lead
+                </button>
                 <h1 className="text-xl font-semibold text-zinc-900">Company pricing</h1>
                 <p className="text-xs text-zinc-500">Cost · Sell PHX · Sell Tuc/North</p>
               </div>
-              <button
-                type="button"
-                onClick={() => exitLeadDocumentWorkspace()}
-                className="text-sm font-medium text-emerald-700 shrink-0"
-              >
-                Close
-              </button>
             </div>
             <div className="grid grid-cols-1 gap-4">
               {PRICING_GUIDE.map((section) => (
@@ -11234,27 +11345,17 @@ showToast(
 {systemDocWorkspace === 'takeoff' && (
           <div className={documentWorkspaceClass}>
             <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-20">
-              <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => exitLeadDocumentWorkspace()}
-                    className="text-sm text-zinc-500 hover:text-zinc-800 mb-2 inline-flex items-center gap-1"
-                  >
-                    ← Back to lead
-                  </button>
-                  <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
-                    Take off sheet
-                  </h1>
-                  
-                </div>
+              <div className="mb-8">
                 <button
                   type="button"
                   onClick={() => exitLeadDocumentWorkspace()}
-                  className="text-sm text-zinc-600 hover:text-zinc-900 px-3 py-1.5 rounded-xl border border-zinc-200 bg-white"
+                  className="text-sm text-zinc-500 hover:text-zinc-800 mb-2 inline-flex items-center gap-1"
                 >
-                  Close
+                  ← Back to lead
                 </button>
+                <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
+                  Take off sheet
+                </h1>
               </div>
 
               <div className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm mb-6">
@@ -13227,37 +13328,39 @@ showToast(
           currentLeadId != null &&
           profileTab === 'estimator' && (
           <div className="page-shell !pt-4 w-full">
-            {/* Lead context + Estimate / Internal toggle */}
+            {/* Lead identity — same job shell language as profile */}
             <div className="mb-4 rounded-2xl border border-zinc-200 bg-white px-4 py-3 space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-zinc-900 truncate">
-                    {estimatorClient.fullName !== 'N/A'
-                      ? estimatorClient.fullName
-                      : 'Lead estimate'}
+                <div className="min-w-0 flex items-start gap-3">
+                  <button
+                    type="button"
+                    onClick={() => leaveEstimator({ returnToLead: true })}
+                    className="shrink-0 px-3 py-2 rounded-xl text-sm font-medium text-zinc-600 hover:bg-zinc-100 border border-zinc-200 transition-colors"
+                  >
+                    ← Lead
+                  </button>
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-zinc-900 truncate">
+                      {estimatorClient.fullName !== 'N/A'
+                        ? estimatorClient.fullName
+                        : 'Lead estimate'}
+                    </div>
+                    <p className="text-xs text-zinc-500 mt-0.5 truncate">
+                      {estimateFlow === 'pick'
+                        ? 'Choose roof system'
+                        : estimateWorkspace === 'estimate'
+                          ? `Customer quote · ${roofSystem}`
+                          : 'Internal financials & buffer'}
+                      {estimatorClient.jobNumber
+                        ? ` · Job #${estimatorClient.jobNumber}`
+                        : ''}
+                      {estimatorClient.fullAddress !== 'N/A'
+                        ? ` · ${estimatorClient.fullAddress}`
+                        : ''}
+                      {hasUnsavedChanges ? ' · unsaved changes' : ''}
+                    </p>
                   </div>
-                  <p className="text-xs text-zinc-500 mt-0.5 truncate">
-                    {estimateFlow === 'pick'
-                      ? 'Choose roof system'
-                      : estimateWorkspace === 'estimate'
-                        ? `Customer quote · ${roofSystem}`
-                        : 'Internal financials & buffer'}
-                    {estimatorClient.jobNumber
-                      ? ` · Job #${estimatorClient.jobNumber}`
-                      : ''}
-                    {estimatorClient.fullAddress !== 'N/A'
-                      ? ` · ${estimatorClient.fullAddress}`
-                      : ''}
-                    {hasUnsavedChanges ? ' · unsaved changes' : ''}
-                  </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => leaveEstimator({ returnToLead: true })}
-                  className="btn-primary shrink-0 px-8 py-3 rounded-full text-sm font-semibold"
-                >
-                  ← Back to lead
-                </button>
               </div>
               {estimateFlow === 'estimate' && (
                 <div className="inline-flex p-1 rounded-full bg-zinc-100">
