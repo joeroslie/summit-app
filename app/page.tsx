@@ -9136,8 +9136,8 @@ showToast(
     ? SIDEBAR_WIDTH_COLLAPSED
     : SIDEBAR_WIDTH_EXPANDED;
 
-  /** Document workspaces sit beside the sidebar (same shell), not over it. */
-  const documentWorkspaceClass = `fixed inset-y-0 right-0 z-[35] bg-zinc-50 overflow-y-auto transition-[left] duration-200 ease-out left-0 ${
+  /** Document workspaces sit beside the sidebar and below the app header. */
+  const documentWorkspaceClass = `fixed top-14 sm:top-16 bottom-0 right-0 z-[35] bg-zinc-50 overflow-y-auto transition-[left] duration-200 ease-out left-0 ${
     sidebarCollapsed ? 'lg:left-[4.25rem]' : 'lg:left-[15.5rem]'
   }`;
 
@@ -9497,7 +9497,7 @@ showToast(
         <div className={documentWorkspaceClass}>
           <div className="page-shell !py-8 sm:!py-10">
             {/* Header */}
-            <div className="mb-6 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+            <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div>
                 <button
                   type="button"
@@ -9546,7 +9546,7 @@ showToast(
                     setActiveTab('leads');
                   }
                 }}
-                className="px-4 py-2 rounded-full border border-zinc-200 bg-white text-sm font-medium text-zinc-700 hover:border-zinc-300"
+                className="self-start sm:self-center px-4 py-2 rounded-full border border-zinc-200 bg-white text-sm font-medium text-zinc-700 hover:border-zinc-300 shrink-0"
               >
                 Close
               </button>
