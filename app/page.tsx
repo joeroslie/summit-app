@@ -2368,6 +2368,7 @@ export default function SummitApp() {
   const [draftSections, setDraftSections] = useState<RoofSection[]>([]);
   const [selectedMeasurementId, setSelectedMeasurementId] = useState<string | null>(null);
   const [showTracer, setShowTracer] = useState(false);
+  const [solarMeasuring, setSolarMeasuring] = useState(false);
   const [activeMeasurementId, setActiveMeasurementId] = useState<string | null>(null);
   const [mapCenter, setMapCenter] = useState<LatLngPoint | null>(null);
   const [showMeasureAddressModal, setShowMeasureAddressModal] = useState(false);
@@ -2536,6 +2537,18 @@ export default function SummitApp() {
     targetTab?: AppTab;
     newTab?: AppTab;
   }>(null);
+  /** Apply saved roof measurement when starting a new estimate */
+  const [pendingApplyMeasurement, setPendingApplyMeasurement] = useState<null | {
+    leadId: number;
+    name: string;
+    workspace: EstimateWorkspace;
+    measurement: RoofMeasurement;
+    resolvedLead: Lead;
+  }>(null);
+  /** Soft-delete photo confirm (in-app) */
+  const [pendingTrashPhotoId, setPendingTrashPhotoId] = useState<string | null>(
+    null
+  );
   const headerSearchRef = useRef<HTMLDivElement>(null);
 
   // Pricing region from open lead address (or form fields / manual override)
@@ -5593,6 +5606,124 @@ export default function SummitApp() {
   };
 
   /**
+   * Google Solar auto-measure → saves a measurement on the lead (field-verify).
+   * Requires GOOGLE_SOLAR_API_KEY (or Maps key with Solar enabled).
+   */
+  const runSolarAutoMeasure = async () => {
+    if (!currentLeadId) {
+      showToast('Open a lead first');
+      return;
+    }
+    const street = clientAddress.trim();
+    const city = clientCity.trim();
+    const state = clientState.trim();
+    const zip = clientZip.trim();
+    if (!street && !city && !zip) {
+      showToast('Add a property address under Overview first');
+      setProfileTab('overview');
+      return;
+    }
+
+    setSolarMeasuring(true);
+    try {
+      let center = mapCenter;
+      if (!center) {
+        center = await geocodeStructuredAddress({
+          street: street || city,
+          city,
+          state,
+          zip,
+        });
+      }
+      if (!center) {
+        showToast('Could not locate address for auto-measure');
+        return;
+      }
+
+      const res = await fetch(
+        `/api/solar/measure?lat=${encodeURIComponent(String(center.lat))}&lng=${encodeURIComponent(String(center.lng))}`,
+        { headers: { Accept: 'application/json' }, cache: 'no-store' }
+      );
+      const data = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        message?: string;
+        pitch?: string;
+        squares?: number;
+        footprintSqFt?: number;
+        surfaceSqFt?: number;
+        center?: { lat: number; lng: number };
+        note?: string;
+      };
+
+      if (!res.ok || !data.ok) {
+        showToast(
+          data.message ||
+            (data.error === 'solar_not_configured'
+              ? 'Add GOOGLE_SOLAR_API_KEY to enable auto-measure'
+              : 'Auto-measure failed')
+        );
+        return;
+      }
+
+      const squares = Number(data.squares) || 0;
+      if (squares <= 0) {
+        showToast('Solar found no roof area — try tracing manually');
+        return;
+      }
+
+      const pitch = data.pitch || '6/12';
+      const isFlat = pitch === 'Flat' || pitch === '1/12' || pitch === '2/12';
+      const measurement = normalizeMeasurement({
+        id: `solar-${Date.now()}`,
+        createdAt: new Date().toLocaleString(),
+        label: `${street || 'Roof'} · Solar auto`,
+        points: [],
+        roofType: isFlat ? 'flat-modified-bitumen' : 'pitched-shingles',
+        pitch,
+        pitchAuto: true,
+        waste: 0.1,
+        wasteAuto: true,
+        footprintSqFt: Number(data.footprintSqFt) || squares * 100,
+        surfaceSqFt: Number(data.surfaceSqFt) || squares * 100,
+        squares: isFlat ? 0 : squares,
+        flatSquares: isFlat ? squares : 0,
+        perimeterLF: 0,
+        edgeLengthsLF: [],
+        ridgeLF: 0,
+        hipLF: 0,
+        eaveLF: 0,
+        rakeLF: 0,
+        center: data.center || center,
+      });
+      if (!measurement) {
+        showToast('Could not build measurement from Solar data');
+        return;
+      }
+
+      const updated = leads.map((lead) =>
+        lead.id === currentLeadId
+          ? {
+              ...lead,
+              measurements: [...(lead.measurements || []), measurement],
+            }
+          : lead
+      );
+      persistLeads(updated);
+      setSelectedMeasurementId(measurement.id);
+      setMapCenter(data.center || center);
+      showToast(
+        `Auto-measure · ${squares} sq · ${pitch} — field-verify before ordering`
+      );
+    } catch (err) {
+      console.error('solar auto-measure', err);
+      showToast('Auto-measure failed');
+    } finally {
+      setSolarMeasuring(false);
+    }
+  };
+
+  /**
    * Single Save: combines all draft sections + optional in-progress outline
    * into one report (pitched + flat squares on the same measurement).
    */
@@ -5860,40 +5991,79 @@ export default function SummitApp() {
     };
 
     const measurements = resolvedLead.measurements || [];
-    let appliedMeasurement = false;
     if (measurements.length > 0 && workspace === 'estimate') {
-      const useIt = confirm(
-        'This lead has a roof measurement. Apply it to the new estimate?\n\nOK = apply · Cancel = blank estimate (keep lead contact)'
-      );
-      if (useIt) {
-        resetEstimatorFields(true);
-        fillLeadContact();
-        const latest = measurements[measurements.length - 1];
-        applyMeasurementToEstimator(latest, resolvedLead);
-        appliedMeasurement = true;
-        const pitched = Number(latest.squares) || 0;
-        const flat = Number(latest.flatSquares) || 0;
-        showToast(
-          flat > 0 && pitched > 0
-            ? `Estimate for ${name} · ${pitched} pitched + ${flat} flat sq`
-            : flat > 0
-              ? `Estimate for ${name} · ${flat} flat squares`
-              : `Estimate for ${name} · ${pitched || 0} pitched squares`
-        );
-      }
+      const latest = measurements[measurements.length - 1];
+      setPendingApplyMeasurement({
+        leadId: fromId,
+        name,
+        workspace,
+        measurement: latest,
+        resolvedLead,
+      });
+      return;
     }
 
-    if (!appliedMeasurement) {
-      resetEstimatorFields(true);
-      fillLeadContact();
-      showToast(
-        workspace === 'internal'
-          ? `Internal for ${name}`
-          : `New estimate for ${name}`
-      );
-    }
-
+    resetEstimatorFields(true);
+    fillLeadContact();
+    showToast(
+      workspace === 'internal'
+        ? `Internal for ${name}`
+        : `New estimate for ${name}`
+    );
     enterLeadEstimator(fromId, workspace);
+    setEditingEstimateId(null);
+  };
+
+  const finishStartEstimateBlank = () => {
+    const pending = pendingApplyMeasurement;
+    if (!pending) return;
+    const { leadId, name, workspace, resolvedLead } = pending;
+    setPendingApplyMeasurement(null);
+    resetEstimatorFields(true);
+    setClientFirstName(resolvedLead.clientFirstName || '');
+    setClientLastName(resolvedLead.clientLastName || '');
+    setClientAddress(resolvedLead.clientAddress || '');
+    setClientCity(resolvedLead.clientCity || '');
+    setClientState(resolvedLead.clientState || '');
+    setClientZip(resolvedLead.clientZip || '');
+    setClientPhone(displayPhoneUS(resolvedLead.clientPhone || ''));
+    setClientEmail(resolvedLead.clientEmail || '');
+    setClientJobNumber(resolvedLead.jobNumber || '');
+    showToast(
+      workspace === 'internal'
+        ? `Internal for ${name}`
+        : `New estimate for ${name}`
+    );
+    enterLeadEstimator(leadId, workspace);
+    setEditingEstimateId(null);
+  };
+
+  const finishStartEstimateWithMeasurement = () => {
+    const pending = pendingApplyMeasurement;
+    if (!pending) return;
+    const { leadId, name, workspace, measurement, resolvedLead } = pending;
+    setPendingApplyMeasurement(null);
+    resetEstimatorFields(true);
+    setClientFirstName(resolvedLead.clientFirstName || '');
+    setClientLastName(resolvedLead.clientLastName || '');
+    setClientAddress(resolvedLead.clientAddress || '');
+    setClientCity(resolvedLead.clientCity || '');
+    setClientState(resolvedLead.clientState || '');
+    setClientZip(resolvedLead.clientZip || '');
+    setClientPhone(displayPhoneUS(resolvedLead.clientPhone || ''));
+    setClientEmail(resolvedLead.clientEmail || '');
+    setClientJobNumber(resolvedLead.jobNumber || '');
+    applyMeasurementToEstimator(measurement, resolvedLead);
+    const pitched = Number(measurement.squares) || 0;
+    const flat = Number(measurement.flatSquares) || 0;
+    showToast(
+      flat > 0 && pitched > 0
+        ? `Estimate for ${name} · ${pitched} pitched + ${flat} flat sq`
+        : flat > 0
+          ? `Estimate for ${name} · ${flat} flat squares`
+          : `Estimate for ${name} · ${pitched || 0} pitched squares`
+    );
+    enterLeadEstimator(leadId, workspace);
     setEditingEstimateId(null);
   };
 
@@ -7642,7 +7812,13 @@ export default function SummitApp() {
   /** Soft-delete photo → app trash (Storage kept until permanent purge). */
   const removeLeadPhoto = (photoId: string) => {
     if (!currentLeadId) return;
-    if (!confirm('Move this photo to trash?')) return;
+    setPendingTrashPhotoId(photoId);
+  };
+
+  const confirmTrashPhoto = () => {
+    const photoId = pendingTrashPhotoId;
+    setPendingTrashPhotoId(null);
+    if (!photoId || !currentLeadId) return;
     const lead = leads.find((l) => l.id === currentLeadId);
     const photo = lead?.photos?.find((p) => p.id === photoId);
     if (!photo || !lead) return;
@@ -10712,6 +10888,89 @@ showToast(
                 className="w-full py-3 rounded-2xl font-medium text-sm text-zinc-500 hover:text-zinc-800"
               >
                 Keep editing
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {pendingApplyMeasurement && (
+        <div className="fixed inset-0 z-[95] bg-black/40 flex items-end sm:items-center justify-center p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="bg-white rounded-3xl w-full max-w-md shadow-lg border border-zinc-200 overflow-hidden"
+          >
+            <div className="p-5 sm:p-6">
+              <h2 className="text-lg font-semibold text-zinc-900">
+                Apply roof measurement?
+              </h2>
+              <p className="text-sm text-zinc-500 mt-2">
+                {pendingApplyMeasurement.name} has a saved measurement
+                {pendingApplyMeasurement.measurement.squares
+                  ? ` · ${pendingApplyMeasurement.measurement.squares} sq`
+                  : ''}
+                {pendingApplyMeasurement.measurement.flatSquares
+                  ? ` · ${pendingApplyMeasurement.measurement.flatSquares} flat sq`
+                  : ''}
+                . Apply it to this estimate, or start blank (contact stays).
+              </p>
+            </div>
+            <div className="px-5 sm:px-6 pb-5 sm:pb-6 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={finishStartEstimateWithMeasurement}
+                className="btn-primary w-full py-3 rounded-2xl font-semibold text-sm"
+              >
+                Apply measurement
+              </button>
+              <button
+                type="button"
+                onClick={finishStartEstimateBlank}
+                className="w-full py-3 rounded-2xl font-semibold text-sm border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+              >
+                Start blank estimate
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingApplyMeasurement(null)}
+                className="w-full py-3 rounded-2xl font-medium text-sm text-zinc-500 hover:text-zinc-800"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {pendingTrashPhotoId && (
+        <div className="fixed inset-0 z-[95] bg-black/40 flex items-end sm:items-center justify-center p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="bg-white rounded-3xl w-full max-w-md shadow-lg border border-zinc-200 overflow-hidden"
+          >
+            <div className="p-5 sm:p-6">
+              <h2 className="text-lg font-semibold text-zinc-900">
+                Move photo to trash?
+              </h2>
+              <p className="text-sm text-zinc-500 mt-2">
+                You can restore it from Trash later. Storage file stays until
+                permanent delete.
+              </p>
+            </div>
+            <div className="px-5 sm:px-6 pb-5 sm:pb-6 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={confirmTrashPhoto}
+                className="w-full py-3 rounded-2xl font-semibold text-sm bg-zinc-900 text-white hover:bg-zinc-800"
+              >
+                Move to trash
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingTrashPhotoId(null)}
+                className="w-full py-3 rounded-2xl font-medium text-sm text-zinc-500 hover:text-zinc-800"
+              >
+                Cancel
               </button>
             </div>
           </div>
@@ -15816,6 +16075,15 @@ showToast(
                               >
                                 {hasProfileAddress ? 'Open map' : 'Add address first'}
                               </button>
+                            <button
+                              type="button"
+                              disabled={solarMeasuring || !hasProfileAddress}
+                              onClick={() => void runSolarAutoMeasure()}
+                              className="px-8 py-3 rounded-full text-sm font-semibold border border-zinc-200 bg-white text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
+                              title="Google Solar auto-measure (needs API key)"
+                            >
+                              {solarMeasuring ? 'Measuring…' : 'Auto-measure'}
+                            </button>
                             <button
                               type="button"
                               onClick={() => measurementFileRef.current?.click()}
