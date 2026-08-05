@@ -2315,6 +2315,13 @@ export default function SummitApp() {
   const [leadNoteDraft, setLeadNoteDraft] = useState('');
   const [isEditingLead, setIsEditingLead] = useState(false);
   const [profileTab, setProfileTab] = useState<ProfileTab>('overview');
+  /** Where to return after estimator / mitigation / takeoff / pricing */
+  const [leadToolReturnTab, setLeadToolReturnTab] =
+    useState<ProfileTab>('documents');
+  /** When set, Save updates this estimate instead of appending a new one */
+  const [editingEstimateId, setEditingEstimateId] = useState<number | null>(
+    null
+  );
   const [takeoffForm, setTakeoffForm] = useState<TakeoffSheet>(emptyTakeoff());
   const [photoDragOver, setPhotoDragOver] = useState(false);
   const [photosUploading, setPhotosUploading] = useState(false);
@@ -2683,10 +2690,16 @@ export default function SummitApp() {
       setShowMitigationInvoice(false);
     } catch (e) {}
     setMitigationDraft(null);
-    // Keep lead profile open — do not setIsEditingLead(false)
-    try {
-      setActiveTab('documents');
-    } catch (e) {}
+    // Stay in lead context — don't hijack sidebar to Documents hub
+    if (isEditingLead && profileTab !== 'estimator') {
+      setLeadToolReturnTab(profileTab);
+    } else {
+      setLeadToolReturnTab('documents');
+    }
+    if (currentLeadId != null) {
+      setIsEditingLead(true);
+      setActiveTab('leads');
+    }
     if (id === 'takeoff') {
       setTakeoffForm(emptyTakeoff());
       setTakeoffAssignOpen(false);
@@ -2694,6 +2707,31 @@ export default function SummitApp() {
     }
     setSystemDocPreview(null);
     setSystemDocWorkspace(id);
+  };
+
+  /** One exit contract for mitigation / takeoff / pricing → back on the lead */
+  const exitLeadDocumentWorkspace = (opts?: { returnTab?: ProfileTab }) => {
+    const raw = opts?.returnTab ?? leadToolReturnTab ?? 'documents';
+    const returnTab: ProfileTab =
+      raw === 'estimator' ? 'documents' : raw;
+    setSystemDocWorkspace(null);
+    setTakeoffAssignOpen(false);
+    setShowMitigationInvoice(false);
+    setShowMitigationPreview(false);
+    setMitigationDraft(null);
+    setMitigationWorkspace('invoice');
+    setShowMitigationCostBreakdown(false);
+    setActiveTarpGroupId(null);
+    try {
+      sessionStorage.removeItem('summitMitigationWorkspace');
+    } catch {
+      /* ignore */
+    }
+    if (currentLeadId != null) {
+      setIsEditingLead(true);
+      setActiveTab('leads');
+      setProfileTab(returnTab);
+    }
   };
 
   const openMitigationWorkspace = (
@@ -2736,6 +2774,14 @@ export default function SummitApp() {
       .filter(Boolean)
       .join(', ');
     setCurrentLeadId(leadId);
+    // Remember where we came from; keep lead chrome alive under the tool
+    if (isEditingLead && profileTab !== 'estimator') {
+      setLeadToolReturnTab(profileTab);
+    } else {
+      setLeadToolReturnTab('documents');
+    }
+    setActiveTab('leads');
+    setIsEditingLead(true);
     const draft: MitigationInvoiceDraft = {
       entity: 'roslie',
       rateMode: 'insurance',
@@ -2758,9 +2804,6 @@ export default function SummitApp() {
     setDocAddMenuOpen(false);
     setInvoicePickerMode(false);
     setShowEstimatePicker(false);
-    // Leave lead chrome so the full-page overlay is not gated off.
-    // Do not change activeTab — stay on Invoices/leads/etc. under the overlay.
-    setIsEditingLead(false);
   };
 
   // If workspace is set without a draft (e.g. stale state), re-init with lead
@@ -3581,18 +3624,7 @@ export default function SummitApp() {
           persistAppInvoices([inv, ...appInvoices]);
           showToast('Saved to lead Documents + Invoices');
 
-          setShowMitigationInvoice(false);
-          setSystemDocWorkspace(null);
-          setMitigationDraft(null);
-          setMitigationWorkspace('invoice');
-          try {
-            sessionStorage.removeItem('summitMitigationWorkspace');
-          } catch (e) {}
-          if (leadIdAtSave != null) {
-            setIsEditingLead(true);
-            setProfileTab('documents');
-            setActiveTab('leads');
-          }
+          exitLeadDocumentWorkspace({ returnTab: 'documents' });
         } catch (err) {
           console.error('Mitigation save error', err);
           showToast('Save failed — downloading PDF instead');
@@ -4949,12 +4981,16 @@ export default function SummitApp() {
     };
   };
 
-  const saveCurrentEstimate = () => {
+  const saveCurrentEstimate = async (opts?: {
+    /** Also upload PDF to lead Documents (preview Save) */
+    savePdf?: boolean;
+  }) => {
     const client = resolveEstimatorClient();
     const linkId = currentLeadId ?? estimatorSourceLeadId ?? client.lead?.id ?? null;
+    const estimateId = editingEstimateId ?? Date.now();
 
     const currentEstimate = {
-      id: Date.now(),
+      id: estimateId,
       date: new Date().toLocaleDateString(),
       clientFirstName: client.firstName,
       clientLastName: client.lastName,
@@ -4998,13 +5034,24 @@ export default function SummitApp() {
       measurementId: activeMeasurementId || undefined,
     };
 
-    let updatedLeads = [...leads];
-    if (linkId != null) {
-      updatedLeads = updatedLeads.map((lead) =>
-        lead.id === linkId
-          ? { ...lead, estimates: [...(lead.estimates || []), currentEstimate] }
-          : lead
+    const updatingExisting =
+      editingEstimateId != null &&
+      linkId != null &&
+      (leads.find((l) => l.id === linkId)?.estimates || []).some(
+        (e) => e.id === editingEstimateId
       );
+
+    let updatedLeads = [...leads];
+    let savedLeadId = linkId;
+    if (linkId != null) {
+      updatedLeads = updatedLeads.map((lead) => {
+        if (lead.id !== linkId) return lead;
+        const prev = lead.estimates || [];
+        const estimates = updatingExisting
+          ? prev.map((e) => (e.id === editingEstimateId ? currentEstimate : e))
+          : [...prev, currentEstimate];
+        return { ...lead, estimates };
+      });
       setCurrentLeadId(linkId);
       setEstimatorSourceLeadId(linkId);
     } else {
@@ -5022,12 +5069,27 @@ export default function SummitApp() {
         category: 'Lead',
       });
       updatedLeads.push(newLead);
+      savedLeadId = newLead.id;
       setCurrentLeadId(newLead.id);
       setEstimatorSourceLeadId(newLead.id);
     }
     persistLeads(updatedLeads);
+    setEditingEstimateId(estimateId);
     setHasUnsavedChanges(false);
-    showToast('Estimate saved to lead');
+
+    if (opts?.savePdf && savedLeadId != null) {
+      await generatePDF({
+        download: false,
+        save: true,
+        leadId: savedLeadId,
+        leadsSnapshot: updatedLeads,
+      });
+      return;
+    }
+
+    showToast(
+      updatingExisting ? 'Estimate updated on lead' : 'Estimate saved to lead'
+    );
   };
 
   const resetEstimatorFields = (keepLeadContact = false) => {
@@ -5716,6 +5778,12 @@ export default function SummitApp() {
     setShowProfessionalEstimate(false);
     setShowMeasureAddressModal(false);
     setHubReport(null);
+    // Remember lead tab to restore on Back (default Estimates)
+    if (isEditingLead && profileTab !== 'estimator') {
+      setLeadToolReturnTab(profileTab);
+    } else {
+      setLeadToolReturnTab('estimates');
+    }
     setEstimatorSourceLeadId(leadId);
     setCurrentLeadId(leadId);
     setIsEditingLead(true);
@@ -5819,6 +5887,7 @@ export default function SummitApp() {
     }
 
     enterLeadEstimator(fromId, workspace);
+    setEditingEstimateId(null);
   };
 
   const handleTabChange = (newTab: AppTab) => {
@@ -5959,6 +6028,7 @@ export default function SummitApp() {
     setEstimatorTotalPrice(estimate.negotiatedPrice || estimate.total || 0);
     setNegotiatedPrice(estimate.negotiatedPrice || estimate.total || 0);
     setOriginalTotalForBuffer(estimate.originalTotalForBuffer || estimate.total || 0);
+    setEditingEstimateId(estimate.id);
     setHasUnsavedChanges(false);
     setShowEstimatePicker(false);
     // Contact always from the live lead, never the estimate snapshot
@@ -6620,6 +6690,7 @@ export default function SummitApp() {
     setIsEditingLead(false);
     setLightboxPhoto(null);
     setProfileTab('overview');
+    setEditingEstimateId(null);
   };
 
   /** Next job number: PREFIX-YEAR#### e.g. S-20260001 (prefix from app_settings) */
@@ -8057,15 +8128,12 @@ showToast(
       lead.id === leadId ? { ...lead, takeoff: snapshot } : lead
     );
     persistLeads(updatedLeads);
-    setSystemDocWorkspace(null);
-    setTakeoffAssignOpen(false);
-    setTakeoffAssignSearch('');
+    setCurrentLeadId(leadId);
+    setLeadToolReturnTab('documents');
+    exitLeadDocumentWorkspace({ returnTab: 'documents' });
     const lead = updatedLeads.find((l) => l.id === leadId);
     if (lead) {
       applyLeadFields(lead);
-      setIsEditingLead(true);
-      setActiveTab('leads');
-      setProfileTab('takeoff');
     }
     showToast('Take-off assigned to lead');
   };
@@ -8077,13 +8145,10 @@ showToast(
       takeoff: { ...takeoffForm },
     });
     persistLeads([...leads, newLead]);
-    setSystemDocWorkspace(null);
-    setTakeoffAssignOpen(false);
-    setTakeoffAssignSearch('');
+    setCurrentLeadId(newLead.id);
+    setLeadToolReturnTab('overview');
+    exitLeadDocumentWorkspace({ returnTab: 'overview' });
     applyLeadFields(newLead);
-    setIsEditingLead(true);
-    setActiveTab('leads');
-    setProfileTab('overview');
     showToast('New lead created with take-off');
   };
 
@@ -8115,7 +8180,11 @@ showToast(
         setCurrentLeadId(id);
         setIsEditingLead(true);
         setActiveTab('leads');
-        setProfileTab('estimates');
+        const back =
+          leadToolReturnTab && leadToolReturnTab !== 'estimator'
+            ? leadToolReturnTab
+            : 'estimates';
+        setProfileTab(back);
         return true;
       }
       setIsEditingLead(false);
@@ -8486,8 +8555,20 @@ showToast(
   const brandCompany =
     userCompany.trim() || DEFAULT_USER_PROFILE.company;
 
-  const generatePDF = () => {
+  const generatePDF = async (opts?: {
+    download?: boolean;
+    save?: boolean;
+    leadId?: number;
+    /** Fresh leads array when called right after persist (avoids stale overwrite) */
+    leadsSnapshot?: Lead[];
+  }) => {
     // Print-friendly letter layout (twin of mitigation invoice)
+    const wantDownload = opts?.download !== false && opts?.save !== true
+      ? true
+      : opts?.download === true;
+    const wantSave = opts?.save === true;
+    // Legacy: generatePDF() with no opts = download only
+    const doDownload = opts == null ? true : wantDownload;
     const client = resolveEstimatorClient();
     const doc = new jsPDF({ unit: 'mm', format: 'letter' });
     const scopeItems = buildScopeOfWork();
@@ -8701,7 +8782,86 @@ showToast(
       [client.firstName, client.lastName].filter(Boolean).join('_') || 'Estimate';
     const safeBrand =
       brandCompany.replace(/[^\w]+/g, '_').replace(/^_|_$/g, '') || 'Estimate';
-    doc.save(`${safeBrand}_Estimate_${safeName}.pdf`);
+    const fileName = `${safeBrand}_Estimate_${safeName}.pdf`;
+    const blob = doc.output('blob');
+
+    if (doDownload) {
+      doc.save(fileName);
+    }
+
+    if (!wantSave) {
+      if (doDownload) showToast('Estimate PDF downloaded');
+      return;
+    }
+
+    const leadIdAtSave =
+      opts?.leadId ?? currentLeadId ?? estimatorSourceLeadId ?? null;
+    if (leadIdAtSave == null) {
+      showToast('Select a lead before saving the estimate');
+      doc.save(fileName);
+      return;
+    }
+    const sourceLeads = opts?.leadsSnapshot ?? leads;
+    const lead = sourceLeads.find((l) => l.id === leadIdAtSave);
+    if (!lead) {
+      showToast('Lead not found');
+      doc.save(fileName);
+      return;
+    }
+
+    try {
+      if (!supabaseEnabled || !supabase) {
+        showToast('Cloud offline — downloading PDF instead');
+        doc.save(fileName);
+        return;
+      }
+      const folderKey = lead.supabaseId?.trim() || String(leadIdAtSave);
+      const id = `est-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const storagePath = `${folderKey}/estimates/${id}-${fileName}`;
+      const { error: upErr } = await supabase.storage
+        .from('lead-docs')
+        .upload(storagePath, blob, {
+          cacheControl: '3600',
+          upsert: false,
+          contentType: 'application/pdf',
+        });
+      if (upErr) {
+        console.error('Estimate PDF upload error', upErr);
+        showToast('Cloud save failed — downloading PDF instead');
+        doc.save(fileName);
+        return;
+      }
+      const { data: pub } = supabase.storage
+        .from('lead-docs')
+        .getPublicUrl(storagePath);
+      const durableUrl = pub.publicUrl;
+      const stamp = new Date().toISOString();
+      const docEntry: LeadDocument = {
+        id,
+        name: fileName,
+        url: durableUrl,
+        size: blob.size,
+        mimeType: 'application/pdf',
+        createdAt: stamp,
+      };
+      const updated = sourceLeads.map((l) =>
+        l.id === leadIdAtSave
+          ? { ...l, documents: [...(l.documents || []), docEntry] }
+          : l
+      );
+      persistLeads(updated);
+      showToast('Estimate + PDF saved to lead Documents');
+      setShowProfessionalEstimate(false);
+      setHasUnsavedChanges(false);
+      setIsEditingLead(true);
+      setActiveTab('leads');
+      setProfileTab('documents');
+      setCurrentLeadId(leadIdAtSave);
+    } catch (err) {
+      console.error('Estimate save PDF error', err);
+      showToast('Save failed — downloading PDF instead');
+      doc.save(fileName);
+    }
   };
 
   const renderProfessionalEstimate = () => {
@@ -8719,7 +8879,7 @@ showToast(
               ← Back to Estimator
             </button>
             <button
-              onClick={generatePDF}
+              onClick={() => void generatePDF({ download: true })}
               className="btn-primary px-6 sm:px-8 py-3 rounded-3xl font-semibold"
             >
               Download PDF
@@ -8816,7 +8976,7 @@ showToast(
             </div>
 
             <button
-              onClick={saveCurrentEstimate}
+              onClick={() => void saveCurrentEstimate({ savePdf: true })}
               className="btn-primary mt-10 w-full py-4 rounded-3xl font-semibold text-lg"
             >
               Save This Estimate to Lead
@@ -9502,22 +9662,9 @@ showToast(
                 <button
                   type="button"
                   className="text-sm text-zinc-500 hover:text-zinc-800 mb-4"
-                  onClick={() => {
-                    setSystemDocWorkspace(null);
-                    setMitigationDraft(null);
-                    setMitigationWorkspace('invoice');
-                    setShowMitigationCostBreakdown(false);
-    try { sessionStorage.removeItem('summitMitigationWorkspace'); } catch (e) {}
-                    setShowMitigationInvoice(false);
-                    setShowMitigationPreview(false);
-                    if (currentLeadId != null) {
-                      setIsEditingLead(true);
-                      setProfileTab('documents');
-                      setActiveTab('leads');
-                    }
-                  }}
+                  onClick={() => exitLeadDocumentWorkspace()}
                 >
-                  ← Back to documents
+                  ← Back to lead
                 </button>
                 <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
                   Mitigation invoice
@@ -9530,22 +9677,7 @@ showToast(
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  setSystemDocWorkspace(null);
-                  setMitigationDraft(null);
-                  setMitigationWorkspace('invoice');
-                  setShowMitigationCostBreakdown(false);
-                  try {
-                    sessionStorage.removeItem('summitMitigationWorkspace');
-                  } catch (e) {}
-                  setShowMitigationInvoice(false);
-                  setShowMitigationPreview(false);
-                  if (currentLeadId != null) {
-                    setIsEditingLead(true);
-                    setProfileTab('documents');
-                    setActiveTab('leads');
-                  }
-                }}
+                onClick={() => exitLeadDocumentWorkspace()}
                 className="self-start sm:self-center px-4 py-2 rounded-full border border-zinc-200 bg-white text-sm font-medium text-zinc-700 hover:border-zinc-300 shrink-0"
               >
                 Close
@@ -11007,7 +11139,7 @@ showToast(
               </div>
               <button
                 type="button"
-                onClick={() => setSystemDocWorkspace(null)}
+                onClick={() => exitLeadDocumentWorkspace()}
                 className="text-sm font-medium text-emerald-700 shrink-0"
               >
                 Close
@@ -11106,18 +11238,10 @@ showToast(
                 <div>
                   <button
                     type="button"
-                    onClick={() => {
-                      setSystemDocWorkspace(null);
-                      setTakeoffAssignOpen(false);
-                      if (currentLeadId != null) {
-                        setIsEditingLead(true);
-                        setProfileTab('documents');
-                        setActiveTab('leads');
-                      }
-                    }}
+                    onClick={() => exitLeadDocumentWorkspace()}
                     className="text-sm text-zinc-500 hover:text-zinc-800 mb-2 inline-flex items-center gap-1"
                   >
-                    ← Back to documents
+                    ← Back to lead
                   </button>
                   <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
                     Take off sheet
@@ -11126,10 +11250,7 @@ showToast(
                 </div>
                 <button
                   type="button"
-                  onClick={() => {
-                    setSystemDocWorkspace(null);
-                    setTakeoffAssignOpen(false);
-                  }}
+                  onClick={() => exitLeadDocumentWorkspace()}
                   className="text-sm text-zinc-600 hover:text-zinc-900 px-3 py-1.5 rounded-xl border border-zinc-200 bg-white"
                 >
                   Close
@@ -11198,7 +11319,7 @@ showToast(
                     URL.revokeObjectURL(url);
                   }}
                 >
-                  Download PDF
+                  Download sheet
                 </button>
                 {currentLeadId != null ? (
                   <button
@@ -11206,10 +11327,7 @@ showToast(
                     className="btn-primary btn-primary-lg w-full rounded-full"
                     onClick={() => {
                       saveTakeoff(true);
-                      setSystemDocWorkspace(null);
-                      setIsEditingLead(true);
-                      setProfileTab('documents');
-                      setActiveTab('leads');
+                      exitLeadDocumentWorkspace({ returnTab: 'documents' });
                     }}
                   >
                     Save to lead
@@ -13191,15 +13309,41 @@ showToast(
                         -${officeCut.toLocaleString()}
                       </div>
                     </div>
+                    <div className="flex justify-between items-center text-zinc-900 px-2 -mx-2">
+                      <div>
+                        <div>Labor cost</div>
+                        <div className="text-xs text-zinc-500">
+                          Crew / production — not customer-facing
+                        </div>
+                      </div>
+                      <div className="font-semibold text-red-600 tabular-nums">
+                        -${realLabor.toFixed(2)}
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center text-zinc-900 px-2 -mx-2">
+                      <div>
+                        <div>Material cost</div>
+                        <div className="text-xs text-zinc-500">
+                          What you pay for product
+                        </div>
+                      </div>
+                      <div className="font-semibold text-red-600 tabular-nums">
+                        -${realMaterial.toFixed(2)}
+                      </div>
+                    </div>
                     <div
                       onClick={() => setShowCostBreakdown(!showCostBreakdown)}
                       className="flex justify-between items-center cursor-pointer hover:bg-zinc-100 p-2 rounded-2xl -mx-2 text-zinc-900"
                     >
-                      <div>Labor + material cost</div>
-                      <div className="font-semibold">
+                      <div className="font-semibold">Total job cost</div>
+                      <div className="font-semibold tabular-nums">
                         -${(realLabor + realMaterial).toFixed(2)}
                       </div>
                     </div>
+                    <p className="text-xs text-zinc-500 px-2 -mx-2">
+                      Sell price is customer-facing. Labor + materials stay
+                      internal — never on the estimate PDF.
+                    </p>
                   </div>
                   {showCostBreakdown && (
                     <div className="mt-6 bg-zinc-100 rounded-3xl p-6 text-sm text-zinc-900">
@@ -14735,7 +14879,18 @@ showToast(
                       Select a product to view pricing
                     </div>
                   ) : (
-                    <div className="text-5xl font-semibold text-emerald-700 tabular-nums">${estimatorTotalPrice.toLocaleString()}</div>
+                    <>
+                      <div className="text-5xl font-semibold text-emerald-700 tabular-nums">
+                        ${estimatorTotalPrice.toLocaleString()}
+                      </div>
+                      {bufferUsed > 0 && (
+                        <div className="text-xs text-amber-700 mt-0.5">
+                          List $
+                          {originalTotalForBuffer.toLocaleString()} · discount $
+                          {bufferUsed.toLocaleString()}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
                 <button
@@ -14847,7 +15002,7 @@ showToast(
                             onClick={closeLeadProfile}
                             className="shrink-0 px-3 py-2 rounded-xl text-sm font-medium text-zinc-600 hover:bg-zinc-100 border border-zinc-200 transition-colors"
                           >
-                            ← Back
+                            ← Pipeline
                           </button>
                           <h1 className="text-lg sm:text-xl font-semibold text-zinc-900 truncate">
                             {displayName}
