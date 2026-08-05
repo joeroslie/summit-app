@@ -3,7 +3,7 @@
  *
  * Pull is authoritative for Google-linked locals in the loaded time window:
  * if a local event has googleEventId (or source === 'google') and overlaps the
- * pull range but is missing from the pull results, it is removed.
+ * pull range but is missing from the pull results (or cancelled), it is removed.
  * Summit-only events (no google link) are never deleted by a pull.
  */
 
@@ -29,8 +29,10 @@ export type MergeGooglePullResult = {
   events: SummitCalendarEvent[];
   imported: number;
   updated: number;
-  /** Google-linked locals removed because missing from pull (in window) */
+  /** Google-linked locals removed because missing/cancelled from pull (in window) */
   removed: number;
+  /** googleEventIds removed this merge (for purging parallel UI stores) */
+  removedGoogleIds: string[];
 };
 
 /** Local YYYY-MM-DD from a Date (no UTC shift). */
@@ -92,12 +94,38 @@ export function isGoogleLinkedCalendarEvent(ev: SummitCalendarEvent): boolean {
 }
 
 /**
+ * True when a local googleEventId is still represented in the pull.
+ * Handles recurring: master id matches any instance `{master}_{timestamp}`.
+ */
+export function googleIdPresentInPull(
+  localGoogleId: string,
+  remoteIds: Set<string>,
+  remoteRecurringMasters: Set<string>
+): boolean {
+  const id = (localGoogleId || '').trim();
+  if (!id) return false;
+  if (remoteIds.has(id)) return true;
+  if (remoteRecurringMasters.has(id)) return true;
+  // Local stored master; pull has expanded instances
+  for (const rid of remoteIds) {
+    if (rid.startsWith(`${id}_`)) return true;
+  }
+  // Local stored instance; extract master prefix before last `_` + digit/timestamp
+  const m = id.match(/^(.*)_\d{8}T\d{6}Z$/);
+  if (m?.[1] && (remoteIds.has(m[1]) || remoteRecurringMasters.has(m[1]))) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Merge Google Calendar events into local Summit events:
  * - Skip Summit adjustment-synced events (live on leads) — still count as present
  * - Update locals that map by googleEventId or summitEventId
  * - Import Google-only events
  * - Leave Summit-only locals alone (caller should push those)
  * - When pullWindow is set: delete Google-linked locals in-range missing from pull
+ * - Always delete locals whose googleEventId is in cancelledIds
  */
 export function mergeGoogleCalendarEventsIntoLocal(
   local: SummitCalendarEvent[],
@@ -111,12 +139,15 @@ export function mergeGoogleCalendarEventsIntoLocal(
      * (list APIs can lag a moment after create/PATCH).
      */
     retainGoogleIds?: Set<string>;
+    /** Explicit cancelled ids from showDeleted pull */
+    cancelledGoogleIds?: Set<string>;
   }
 ): MergeGooglePullResult {
   const localSafe = Array.isArray(local) ? local : [];
   const remoteSafe = Array.isArray(remote) ? remote : [];
   const adjIds = opts?.knownAdjustmentGoogleIds || new Set<string>();
   const retainIds = opts?.retainGoogleIds || new Set<string>();
+  const cancelledIds = new Set(opts?.cancelledGoogleIds || []);
   const pullWindow = opts?.pullWindow;
 
   const byGoogle = new Map<string, SummitCalendarEvent>();
@@ -129,7 +160,9 @@ export function mergeGoogleCalendarEventsIntoLocal(
   let imported = 0;
   let updated = 0;
   let removed = 0;
+  const removedGoogleIds: string[] = [];
   const remoteIds = new Set<string>();
+  const remoteRecurringMasters = new Set<string>();
   const nextById = new Map<string, SummitCalendarEvent>();
 
   // Keep Summit-only (no google link) always
@@ -139,7 +172,15 @@ export function mergeGoogleCalendarEventsIntoLocal(
 
   for (const ge of remoteSafe) {
     if (!ge?.id) continue;
+    const status = (ge.status || '').toLowerCase();
+    if (status === 'cancelled') {
+      cancelledIds.add(ge.id);
+      if (ge.recurringEventId) cancelledIds.add(ge.recurringEventId);
+      continue;
+    }
     remoteIds.add(ge.id);
+    if (ge.recurringEventId) remoteRecurringMasters.add(ge.recurringEventId);
+
     const meta = parseGoogleEventSummitMeta(ge);
     // Still present on Google — do not delete-on-pull even if we skip import
     if (meta.summitKind === 'adjustment' || adjIds.has(ge.id)) {
@@ -168,8 +209,9 @@ export function mergeGoogleCalendarEventsIntoLocal(
         googleHtmlLink: mapped.googleHtmlLink || existing.googleHtmlLink,
         calendarId: mapped.calendarId || existing.calendarId,
         colorId: mapped.colorId,
-        calendarColorBg: mapped.calendarColorBg || existing.calendarColorBg,
-        calendarColorFg: mapped.calendarColorFg || existing.calendarColorFg,
+        // Prefer fresh pull colors; do not keep stale Cobalt when pull has calendar hex
+        calendarColorBg: mapped.calendarColorBg ?? existing.calendarColorBg,
+        calendarColorFg: mapped.calendarColorFg ?? existing.calendarColorFg,
         updatedAt: mapped.updatedAt,
         source: existing.source || mapped.source,
       };
@@ -186,9 +228,23 @@ export function mergeGoogleCalendarEventsIntoLocal(
     if (!isGoogleLinkedCalendarEvent(e)) continue;
     if (nextById.has(e.id)) continue;
 
-    const stillOnGoogle = Boolean(
-      e.googleEventId && remoteIds.has(e.googleEventId)
-    );
+    const gid = (e.googleEventId || '').trim();
+
+    // Explicit cancel from Google (instance or series) — always purge
+    if (
+      gid &&
+      (cancelledIds.has(gid) ||
+        (gid.match(/^(.*)_\d{8}T\d{6}Z$/) &&
+          cancelledIds.has(gid.replace(/_\d{8}T\d{6}Z$/, ''))))
+    ) {
+      removed += 1;
+      removedGoogleIds.push(gid);
+      continue;
+    }
+
+    const stillOnGoogle =
+      Boolean(gid) &&
+      googleIdPresentInPull(gid, remoteIds, remoteRecurringMasters);
     if (stillOnGoogle) {
       // e.g. adjustment skip — preserve local link if any
       nextById.set(e.id, e);
@@ -196,7 +252,7 @@ export function mergeGoogleCalendarEventsIntoLocal(
     }
 
     // Just pushed from Summit — Google list can lag; do not delete-on-pull
-    if (e.googleEventId && retainIds.has(e.googleEventId)) {
+    if (gid && retainIds.has(gid)) {
       nextById.set(e.id, e);
       continue;
     }
@@ -206,7 +262,9 @@ export function mergeGoogleCalendarEventsIntoLocal(
 
     if (pullWindow != null && inWindow) {
       // Authoritative pull: gone from Google in this window → remove local
+      // (includes source===google orphans with no googleEventId)
       removed += 1;
+      if (gid) removedGoogleIds.push(gid);
       continue;
     }
 
@@ -222,7 +280,7 @@ export function mergeGoogleCalendarEventsIntoLocal(
     return a.title.localeCompare(b.title);
   });
 
-  return { events, imported, updated, removed };
+  return { events, imported, updated, removed, removedGoogleIds };
 }
 
 /**
@@ -235,6 +293,7 @@ export function safeMergeGoogleCalendarEventsIntoLocal(
     knownAdjustmentGoogleIds?: Set<string>;
     pullWindow?: Pick<CalendarPullWindow, 'startDate' | 'endDateExclusive'>;
     retainGoogleIds?: Set<string>;
+    cancelledGoogleIds?: Set<string>;
   }
 ): MergeGooglePullResult {
   try {
@@ -242,6 +301,12 @@ export function safeMergeGoogleCalendarEventsIntoLocal(
   } catch (err) {
     console.error('Google calendar merge failed (soft):', err);
     const localSafe = Array.isArray(local) ? local : [];
-    return { events: localSafe, imported: 0, updated: 0, removed: 0 };
+    return {
+      events: localSafe,
+      imported: 0,
+      updated: 0,
+      removed: 0,
+      removedGoogleIds: [],
+    };
   }
 }

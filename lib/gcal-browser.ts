@@ -650,6 +650,8 @@ export type GoogleCalendarListItem = {
   calendarForeground?: string;
   start: { dateTime?: string; date?: string };
   end: { dateTime?: string; date?: string };
+  status?: string;
+  recurringEventId?: string;
   updated?: string;
   extendedProperties?: {
     private?: Record<string, string>;
@@ -701,39 +703,68 @@ export async function listGoogleCalendarList(
   return data.items || [];
 }
 
-/** Events from one calendar id (primary or email). */
+/** Events from one calendar id (primary or email). Paginates fully. */
 export async function listGoogleEventsForCalendar(
   accessToken: string,
   calendarId: string,
-  opts?: { maxResults?: number; timeMin?: string; timeMax?: string }
-): Promise<GoogleCalendarListItem[]> {
-  const qs = new URLSearchParams({
-    singleEvents: 'true',
-    orderBy: 'startTime',
-    maxResults: String(opts?.maxResults ?? 100),
-    timeMin: opts?.timeMin || new Date().toISOString(),
-  });
-  if (opts?.timeMax) qs.set('timeMax', opts.timeMax);
-
-  const res = await fetch(
-    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${qs.toString()}`,
-    { headers: gcalAuthHeaders(accessToken) }
-  );
-  if (!res.ok) {
-    const err = await res.text();
-    throwGcalListError(res.status, err);
+  opts?: {
+    maxResults?: number;
+    timeMin?: string;
+    timeMax?: string;
+    /** Include cancelled so delete-on-pull can purge instances */
+    showDeleted?: boolean;
   }
-  const data = (await res.json()) as { items?: GoogleCalendarListItem[] };
-  return (data.items || []).map((item) => ({
-    ...item,
-    calendarId,
-  }));
+): Promise<GoogleCalendarListItem[]> {
+  const pageSize = Math.min(250, Math.max(25, opts?.maxResults ?? 100));
+  const out: GoogleCalendarListItem[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const qs = new URLSearchParams({
+      singleEvents: 'true',
+      // orderBy startTime is incompatible with showDeleted; use updated when deleting
+      maxResults: String(pageSize),
+      timeMin: opts?.timeMin || new Date().toISOString(),
+    });
+    if (opts?.timeMax) qs.set('timeMax', opts.timeMax);
+    if (opts?.showDeleted) {
+      qs.set('showDeleted', 'true');
+    } else {
+      qs.set('orderBy', 'startTime');
+    }
+    if (pageToken) qs.set('pageToken', pageToken);
+
+    const res = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${qs.toString()}`,
+      { headers: gcalAuthHeaders(accessToken) }
+    );
+    if (!res.ok) {
+      const err = await res.text();
+      throwGcalListError(res.status, err);
+    }
+    const data = (await res.json()) as {
+      items?: GoogleCalendarListItem[];
+      nextPageToken?: string;
+    };
+    for (const item of data.items || []) {
+      out.push({ ...item, calendarId });
+    }
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+
+  return out;
 }
 
 export type GoogleEventsPullResult = {
   events: GoogleCalendarListItem[];
   /** calendarList id → hex colors */
   colorMap: Record<string, { bg: string; fg: string }>;
+  /** Cancelled event / instance ids from showDeleted pull */
+  cancelledIds: string[];
+  /** How many calendarList entries were loaded (0 = list failed / fallback) */
+  calendarsLoaded: number;
+  /** How many calendars were actually fetched for events */
+  calendarsFetched: number;
 };
 
 function colorMapFromCalendarList(
@@ -754,15 +785,38 @@ function colorMapFromCalendarList(
   return map;
 }
 
+function resolveCalColors(
+  cal: GoogleCalendarListEntry,
+  colorMap: Record<string, { bg: string; fg: string }>
+): { bg: string; fg: string } | undefined {
+  const fromMap = colorMap[cal.id];
+  if (fromMap?.bg) return fromMap;
+  if (cal.primary && colorMap.primary?.bg) return colorMap.primary;
+  const resolved = resolveCalendarListEntryColor(cal);
+  if (resolved?.bg) {
+    return { bg: resolved.bg, fg: resolved.text || '#ffffff' };
+  }
+  const bg = normalizeCssHex(cal.backgroundColor);
+  if (bg) {
+    return {
+      bg,
+      fg: normalizeCssHex(cal.foregroundColor) || '#ffffff',
+    };
+  }
+  // No invented Cobalt — caller paints Cobalt only when nothing resolves
+  return undefined;
+}
+
 /**
  * Pull events from selected calendars, tagged with calendarId + list colors.
  * Falls back to primary-only when calendarList scope is missing.
+ * Uses showDeleted so cancelled instances are returned for delete-on-pull.
  */
 export async function listUpcomingGoogleEvents(
   accessToken: string,
   opts?: { maxResults?: number; timeMin?: string; timeMax?: string }
 ): Promise<GoogleEventsPullResult> {
-  const perCal = Math.max(25, opts?.maxResults ?? 100);
+  const perCal = Math.max(50, opts?.maxResults ?? 250);
   let calendars: GoogleCalendarListEntry[] = [];
   try {
     calendars = await listGoogleCalendarList(accessToken);
@@ -774,9 +828,10 @@ export async function listUpcomingGoogleEvents(
   }
 
   const colorMap = colorMapFromCalendarList(calendars);
+  const cancelledIds = new Set<string>();
 
   const selected = calendars.filter((c) => c.selected !== false && c.id);
-  const toFetch =
+  const toFetch: GoogleCalendarListEntry[] =
     selected.length > 0
       ? selected
       : calendars.length > 0
@@ -786,8 +841,7 @@ export async function listUpcomingGoogleEvents(
               id: 'primary',
               primary: true,
               selected: true,
-              backgroundColor: '#4285f4',
-              foregroundColor: '#ffffff',
+              // Do not hardcode Cobalt as a real calendar color — leave unset
               colorId: '15',
             } satisfies GoogleCalendarListEntry,
           ];
@@ -798,31 +852,34 @@ export async function listUpcomingGoogleEvents(
         maxResults: perCal,
         timeMin: opts?.timeMin,
         timeMax: opts?.timeMax,
+        showDeleted: true,
       })
     )
   );
 
   const out: GoogleCalendarListItem[] = [];
+  let calendarsFetched = 0;
   for (let i = 0; i < settled.length; i++) {
     const result = settled[i]!;
     const cal = toFetch[i]!;
     if (result.status !== 'fulfilled') continue;
     if (!Array.isArray(result.value)) continue;
-    const resolved =
-      colorMap[cal.id] ||
-      (() => {
-        const r = resolveCalendarListEntryColor(cal);
-        return r
-          ? { bg: r.bg, fg: r.text || '#ffffff' }
-          : {
-              bg: normalizeCssHex(cal.backgroundColor) || '#4285f4',
-              fg: normalizeCssHex(cal.foregroundColor) || '#ffffff',
-            };
-      })();
+    calendarsFetched += 1;
+    const resolved = resolveCalColors(cal, colorMap);
     for (const item of result.value) {
       if (!item || typeof item !== 'object') continue;
       const id = typeof item.id === 'string' ? item.id.trim() : '';
       if (!id) continue;
+      const status = (item.status || '').toLowerCase();
+      if (status === 'cancelled') {
+        cancelledIds.add(id);
+        const master =
+          typeof item.recurringEventId === 'string'
+            ? item.recurringEventId.trim()
+            : '';
+        if (master) cancelledIds.add(master);
+        continue;
+      }
       const start = item.start;
       if (
         !start ||
@@ -835,44 +892,45 @@ export async function listUpcomingGoogleEvents(
         ...item,
         id,
         calendarId: cal.id,
-        calendarBackground: resolved.bg,
-        calendarForeground: resolved.fg,
+        calendarBackground: resolved?.bg,
+        calendarForeground: resolved?.fg,
+        status: item.status,
+        recurringEventId: item.recurringEventId,
       });
     }
   }
 
   // If every multi-cal fetch failed, last-resort primary
-  if (out.length === 0 && toFetch[0]?.id !== 'primary') {
+  if (out.length === 0 && cancelledIds.size === 0 && toFetch[0]?.id !== 'primary') {
     try {
-      const primary = await listGoogleEventsForCalendar(
-        accessToken,
-        'primary',
-        opts
-      );
-      const primaryColors = colorMap.primary || {
-        bg: '#4285f4',
-        fg: '#ffffff',
-      };
-      return {
-        events: (Array.isArray(primary) ? primary : [])
-          .filter(
-            (item) =>
-              item &&
-              typeof item === 'object' &&
-              typeof item.id === 'string' &&
-              item.id.trim() &&
-              item.start &&
-              typeof item.start === 'object' &&
-              (item.start.date || item.start.dateTime)
-          )
-          .map((item) => ({
-            ...item,
-            calendarId: 'primary',
-            calendarBackground: primaryColors.bg,
-            calendarForeground: primaryColors.fg,
-          })),
-        colorMap,
-      };
+      const primary = await listGoogleEventsForCalendar(accessToken, 'primary', {
+        ...opts,
+        showDeleted: true,
+      });
+      const primaryColors = colorMap.primary;
+      calendarsFetched = Math.max(calendarsFetched, 1);
+      for (const item of Array.isArray(primary) ? primary : []) {
+        if (!item || typeof item !== 'object') continue;
+        const id = typeof item.id === 'string' ? item.id.trim() : '';
+        if (!id) continue;
+        if ((item.status || '').toLowerCase() === 'cancelled') {
+          cancelledIds.add(id);
+          continue;
+        }
+        if (
+          !item.start ||
+          typeof item.start !== 'object' ||
+          (!item.start.date && !item.start.dateTime)
+        ) {
+          continue;
+        }
+        out.push({
+          ...item,
+          calendarId: 'primary',
+          calendarBackground: primaryColors?.bg,
+          calendarForeground: primaryColors?.fg,
+        });
+      }
     } catch {
       /* keep empty */
     }
@@ -881,6 +939,9 @@ export async function listUpcomingGoogleEvents(
   return {
     events: Array.isArray(out) ? out : [],
     colorMap: colorMap && typeof colorMap === 'object' ? colorMap : {},
+    cancelledIds: Array.from(cancelledIds),
+    calendarsLoaded: calendars.length,
+    calendarsFetched,
   };
 }
 

@@ -3104,6 +3104,9 @@ export default function SummitApp() {
    * delete-on-pull until Google list APIs catch up (~2 min).
    */
   const retainGoogleIdsRef = useRef<Map<string, number>>(new Map());
+  /** Monotonic pull generation — cloud hydrate must not resurrect post-pull deletes */
+  const calendarGooglePullGenRef = useRef(0);
+  const calendarCloudHydrateGenRef = useRef(0);
   const rememberRetainedGoogleId = (googleEventId?: string | null) => {
     const id = (googleEventId || '').trim();
     if (!id) return;
@@ -3116,6 +3119,13 @@ export default function SummitApp() {
       if (until <= now) map.delete(id);
     }
     return new Set(map.keys());
+  };
+  const isGcalDebug = (): boolean => {
+    try {
+      return localStorage.getItem('summitGcalDebug') === '1';
+    } catch {
+      return false;
+    }
   };
   /** Live events pulled from connected Google Calendar */
   const [googleCalendarEvents, setGoogleCalendarEvents] = useState<
@@ -5888,12 +5898,64 @@ export default function SummitApp() {
               if (cloudEvents && cloudEvents.length) {
                 const normalized = normalizeStoredCalendarEvents(cloudEvents);
                 if (normalized.length) {
-                  setCalendarEvents(normalized);
+                  calendarCloudHydrateGenRef.current += 1;
+                  const pullGen = calendarGooglePullGenRef.current;
+                  // If Google pull already ran this session, never resurrect
+                  // google-linked events the pull already deleted.
+                  if (pullGen > 0) {
+                    setCalendarEvents((prev) => {
+                      const prevSafe = Array.isArray(prev) ? prev : [];
+                      const prevGoogleIds = new Set(
+                        prevSafe
+                          .map((e) => e.googleEventId)
+                          .filter((id): id is string => Boolean(id))
+                      );
+                      const prevIds = new Set(prevSafe.map((e) => e.id));
+                      const merged = [...prevSafe];
+                      for (const ev of normalized) {
+                        if (prevIds.has(ev.id)) continue;
+                        // Skip cloud google-linked ghosts not in post-pull local
+                        if (
+                          ev.googleEventId &&
+                          !prevGoogleIds.has(ev.googleEventId)
+                        ) {
+                          continue;
+                        }
+                        if (ev.source === 'google' && !ev.googleEventId) {
+                          continue;
+                        }
+                        merged.push(ev);
+                        prevIds.add(ev.id);
+                      }
+                      try {
+                        localStorage.setItem(
+                          SUMMIT_CALENDAR_EVENTS_KEY,
+                          JSON.stringify(merged)
+                        );
+                      } catch {
+                        /* ignore */
+                      }
+                      return merged;
+                    });
+                  } else {
+                    setCalendarEvents(normalized);
+                    try {
+                      localStorage.setItem(
+                        SUMMIT_CALENDAR_EVENTS_KEY,
+                        JSON.stringify(normalized)
+                      );
+                    } catch {
+                      /* ignore */
+                    }
+                  }
+                  // After cloud hydrate, re-pull so Google delete-on-pull wins
                   try {
-                    localStorage.setItem(
-                      SUMMIT_CALENDAR_EVENTS_KEY,
-                      JSON.stringify(normalized)
+                    const { hasBrowserGcalToken } = await import(
+                      '@/lib/gcal-browser'
                     );
+                    if (hasBrowserGcalToken()) {
+                      void refreshFromGoogle({ silent: true });
+                    }
                   } catch {
                     /* ignore */
                   }
@@ -9313,6 +9375,18 @@ export default function SummitApp() {
     calendarId?: string | null,
     stored?: { bg?: string; fg?: string } | null
   ): CalendarListColor | undefined => {
+    const id = String(calendarId || '').trim();
+    // Live calendarList map wins over stored (re-resolve every pull; kill stale Cobalt)
+    if (id) {
+      const fromMap = safeGoogleColorMap[id];
+      if (fromMap?.bg) {
+        const bg = normalizeCssHex(fromMap.bg) || fromMap.bg;
+        return {
+          bg,
+          text: normalizeCssHex(fromMap.fg) || fromMap.fg,
+        };
+      }
+    }
     const storedBg = normalizeCssHex(stored?.bg);
     if (storedBg) {
       return {
@@ -9320,22 +9394,15 @@ export default function SummitApp() {
         text: normalizeCssHex(stored?.fg) || undefined,
       };
     }
-    const id = String(calendarId || 'primary').trim();
-    const fromMap = safeGoogleColorMap[id];
-    if (fromMap?.bg) {
-      const bg = normalizeCssHex(fromMap.bg) || fromMap.bg;
-      return { bg, text: normalizeCssHex(fromMap.fg) || fromMap.fg };
-    }
-    if (id !== 'primary' && safeGoogleColorMap.primary?.bg) {
-      const bg =
-        normalizeCssHex(safeGoogleColorMap.primary.bg) ||
-        safeGoogleColorMap.primary.bg;
-      return {
-        bg,
-        text:
-          normalizeCssHex(safeGoogleColorMap.primary.fg) ||
-          safeGoogleColorMap.primary.fg,
-      };
+    // Only fall back to primary map when this event is on primary / unknown
+    if (!id || id === 'primary') {
+      const primary = safeGoogleColorMap.primary;
+      if (primary?.bg) {
+        return {
+          bg: normalizeCssHex(primary.bg) || primary.bg,
+          text: normalizeCssHex(primary.fg) || primary.fg,
+        };
+      }
     }
     return undefined;
   };
@@ -9369,7 +9436,7 @@ export default function SummitApp() {
       const cursor = opts?.cursor || calendarCursor;
       const pullWindow = pullWindowForMonthCursor(cursor);
       const pulled = await listUpcomingGoogleEvents(session.accessToken, {
-        maxResults: 120,
+        maxResults: 250,
         timeMin: pullWindow.timeMin,
         timeMax: pullWindow.timeMax,
       });
@@ -9390,13 +9457,23 @@ export default function SummitApp() {
         !Array.isArray(pulled.colorMap)
           ? pulled.colorMap
           : {};
-      setGoogleEventsSafe(items);
-      // Always replace color map from this pull (empty when calendarList unavailable)
-      setGoogleCalendarColorMap(
-        colorMap && typeof colorMap === 'object' && !Array.isArray(colorMap)
-          ? colorMap
-          : {}
+      const cancelledGoogleIds = new Set(
+        Array.isArray(pulled?.cancelledIds) ? pulled.cancelledIds : []
       );
+      const calendarsLoaded =
+        typeof pulled?.calendarsLoaded === 'number' ? pulled.calendarsLoaded : 0;
+      const calendarsFetched =
+        typeof pulled?.calendarsFetched === 'number'
+          ? pulled.calendarsFetched
+          : 0;
+
+      // Live color map for this pull (avoid stale React state in recolor)
+      let effectiveColorMap: Record<string, { bg: string; fg: string }> = {
+        ...(colorMap && typeof colorMap === 'object' && !Array.isArray(colorMap)
+          ? colorMap
+          : {}),
+      };
+
       // Refresh writable calendar list for create picker + color accuracy
       try {
         const {
@@ -9428,6 +9505,30 @@ export default function SummitApp() {
               };
             });
           setGoogleCalendarList(writable);
+          for (const c of writable) {
+            const bg = normalizeCssHex(c.backgroundColor);
+            if (!c.id || !bg) continue;
+            effectiveColorMap[c.id] = {
+              bg,
+              fg: normalizeCssHex(c.foregroundColor) || '#ffffff',
+            };
+            if (c.primary) effectiveColorMap.primary = effectiveColorMap[c.id]!;
+          }
+          // Also fold every calendarList entry (selected or not) into color map
+          for (const c of Array.isArray(list) ? list : []) {
+            if (!c?.id) continue;
+            const resolved = resolveCalendarListEntryColor(c);
+            const bg = resolved?.bg || normalizeCssHex(c.backgroundColor);
+            if (!bg) continue;
+            effectiveColorMap[c.id] = {
+              bg,
+              fg:
+                resolved?.text ||
+                normalizeCssHex(c.foregroundColor) ||
+                '#ffffff',
+            };
+            if (c.primary) effectiveColorMap.primary = effectiveColorMap[c.id]!;
+          }
           setGcalCalendarListNeedsReconnect(false);
         } catch (listErr) {
           const msg =
@@ -9439,6 +9540,23 @@ export default function SummitApp() {
       } catch {
         /* ignore list helpers */
       }
+
+      setGoogleCalendarColorMap(effectiveColorMap);
+
+      // Stamp calendarList hex onto every pulled event before merge (kill Cobalt leftovers)
+      const coloredItems = items.map((ev) => {
+        const calId = (ev.calendarId || '').trim();
+        const colors = calId
+          ? effectiveColorMap[calId] ||
+            (calId === 'primary' ? effectiveColorMap.primary : undefined)
+          : effectiveColorMap.primary;
+        if (!colors?.bg) return ev;
+        return {
+          ...ev,
+          calendarBackground: colors.bg,
+          calendarForeground: colors.fg || ev.calendarForeground,
+        };
+      });
 
       // Merge Google → Summit: pull is authoritative for google-linked events in window
       const adjIds = new Set(
@@ -9454,21 +9572,35 @@ export default function SummitApp() {
           return Array.isArray(calendarEvents) ? calendarEvents : [];
         }
       })();
-      const merged = safeMergeGoogleCalendarEventsIntoLocal(localRaw, items, {
+      const merged = safeMergeGoogleCalendarEventsIntoLocal(localRaw, coloredItems, {
         knownAdjustmentGoogleIds: adjIds,
         pullWindow: {
           startDate: pullWindow.startDate,
           endDateExclusive: pullWindow.endDateExclusive,
         },
         retainGoogleIds: activeRetainGoogleIds(),
+        cancelledGoogleIds,
       });
-      // Re-resolve calendar colors from fresh calendarList map on every pull
+      // Re-resolve calendar colors from fresh calendarList map on every pull.
+      // Never paint a secondary calendar with primary/Cobalt just because lookup missed.
       const mergedEvents = Array.isArray(merged?.events) ? merged.events : [];
       const recolored = mergedEvents.map((ev) => {
-        const calId = (ev.calendarId || 'primary').trim();
-        const colors = colorMap[calId] || colorMap.primary;
+        const calId = (ev.calendarId || '').trim();
+        const colors = calId
+          ? effectiveColorMap[calId] ||
+            (calId === 'primary' ? effectiveColorMap.primary : undefined)
+          : effectiveColorMap.primary;
         const bg = normalizeCssHex(colors?.bg) || colors?.bg;
-        if (!bg) return ev;
+        if (!bg) {
+          // Keep prior only if it isn't the invented Cobalt fallback
+          const prev = normalizeCssHex(ev.calendarColorBg);
+          if (prev && prev !== '#4285f4') return ev;
+          return {
+            ...ev,
+            calendarColorBg: undefined,
+            calendarColorFg: undefined,
+          };
+        }
         return {
           ...ev,
           calendarColorBg: bg,
@@ -9476,22 +9608,61 @@ export default function SummitApp() {
             normalizeCssHex(colors?.fg) || colors?.fg || ev.calendarColorFg,
         };
       });
+      calendarGooglePullGenRef.current += 1;
       persistCalendarEvents(recolored);
 
+      // One authoritative Google list for UI — pull items only (no stale dual-store ghosts)
+      setGoogleEventsSafe(coloredItems);
+
+      const breakfastSample = coloredItems.find((e) =>
+        /breakfast/i.test(e.summary || '')
+      );
+      const debugPayload = {
+        pulled: coloredItems.length,
+        imported: merged.imported,
+        updated: merged.updated,
+        removed: merged.removed,
+        cancelled: cancelledGoogleIds.size,
+        calendarsLoaded,
+        calendarsFetched,
+        colorMapSize: Object.keys(effectiveColorMap || {}).length,
+        window: `${pullWindow.startDate}→${pullWindow.endDateExclusive}`,
+        breakfast: breakfastSample
+          ? {
+              id: breakfastSample.id,
+              colorId: breakfastSample.colorId,
+              calendarId: breakfastSample.calendarId,
+              calendarColorBg: breakfastSample.calendarBackground,
+            }
+          : null,
+      };
+      console.info('[summit-gcal] pull', debugPayload);
+      if (isGcalDebug()) {
+        console.info('[summit-gcal] debug detail', {
+          ...debugPayload,
+          sampleColors: Object.entries(effectiveColorMap || {}).slice(0, 8),
+          removedGoogleIds: merged.removedGoogleIds,
+        });
+      }
+
+      // Verification toast (manual refresh) — removed N · calendars M
       if (!opts?.silent) {
         const parts = [
-          items.length
-            ? `${items.length} Google event${items.length === 1 ? '' : 's'}`
+          coloredItems.length
+            ? `${coloredItems.length} Google event${coloredItems.length === 1 ? '' : 's'}`
             : '',
           merged.imported
             ? `${merged.imported} imported`
             : '',
           merged.updated ? `${merged.updated} updated` : '',
-          merged.removed ? `${merged.removed} removed` : '',
+          `${merged.removed} removed`,
+          `${calendarsLoaded} calendars`,
         ].filter(Boolean);
         showToast(
           parts.length ? `Calendar · ${parts.join(' · ')}` : 'No events this month'
         );
+      } else if (merged.removed > 0 || calendarsLoaded > 0) {
+        // Quiet sync: still surface delete/color evidence once in console (above)
       }
     } catch (e) {
       const { formatGoogleConnectError } = await import('@/lib/gcal-browser');
@@ -9533,7 +9704,10 @@ export default function SummitApp() {
           }
         })()
     );
-    const unsynced = source.filter((e) => !e.googleEventId);
+    // Never re-push orphaned Google imports (would resurrect deletes)
+    const unsynced = source.filter(
+      (e) => !e.googleEventId && e.source !== 'google'
+    );
     if (unsynced.length === 0) return;
     let next = [...source];
     let pushed = 0;
@@ -9849,6 +10023,15 @@ export default function SummitApp() {
     setCalEventModal(null);
 
     const googleId = (target.googleEventId || '').trim();
+    // Purge parallel googleCalendarEvents store so UI can't resurrect the chip
+    if (googleId) {
+      const gPrev = Array.isArray(googleCalendarEvents)
+        ? googleCalendarEvents
+        : [];
+      setGoogleEventsSafe(gPrev.filter((e) => e?.id !== googleId));
+      retainGoogleIdsRef.current.delete(googleId);
+    }
+
     if (!googleId) {
       showToast('Event deleted');
       return;
@@ -9868,8 +10051,6 @@ export default function SummitApp() {
       const session = await ensureBrowserGcalSession();
       if (session?.accessToken) {
         setGcalConnected(true);
-        // Drop retain so a later pull won't resurrect this id
-        retainGoogleIdsRef.current.delete(googleId);
         await deleteGoogleEventWithBrowserToken(
           session.accessToken,
           googleId,

@@ -372,6 +372,10 @@ export type GoogleEventForMerge = {
   calendarForeground?: string;
   start?: { dateTime?: string; date?: string };
   end?: { dateTime?: string; date?: string };
+  /** confirmed | tentative | cancelled */
+  status?: string;
+  /** Present on expanded recurring instances */
+  recurringEventId?: string;
   extendedProperties?: {
     private?: Record<string, string>;
   };
@@ -433,6 +437,11 @@ export function normalizeGoogleCalendarEventsList(
           : undefined,
       start,
       end,
+      status: typeof e.status === 'string' ? e.status : undefined,
+      recurringEventId:
+        typeof e.recurringEventId === 'string'
+          ? e.recurringEventId
+          : undefined,
       extendedProperties: e.extendedProperties,
       updated: typeof e.updated === 'string' ? e.updated : undefined,
     });
