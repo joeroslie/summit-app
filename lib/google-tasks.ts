@@ -337,9 +337,11 @@ export function mergeGoogleTasksIntoLocal(
   remote: GoogleTaskItem[],
   listId: string
 ): { tasks: SummitTask[]; imported: number; updated: number } {
+  const localSafe = Array.isArray(local) ? local : [];
+  const remoteSafe = Array.isArray(remote) ? remote : [];
   const byGoogle = new Map<string, SummitTask>();
-  for (const t of local) {
-    if (t.googleTaskId && t.listId === listId) byGoogle.set(t.googleTaskId, t);
+  for (const t of localSafe) {
+    if (t?.googleTaskId && t.listId === listId) byGoogle.set(t.googleTaskId, t);
   }
 
   let imported = 0;
@@ -348,7 +350,8 @@ export function mergeGoogleTasksIntoLocal(
   const next: SummitTask[] = [];
 
   // Keep tasks from other lists + Summit-only on this list
-  for (const t of local) {
+  for (const t of localSafe) {
+    if (!t) continue;
     if (t.listId !== listId) {
       next.push(t);
       continue;
@@ -356,7 +359,8 @@ export function mergeGoogleTasksIntoLocal(
     if (!t.googleTaskId) next.push(t);
   }
 
-  for (const gt of remote) {
+  for (const gt of remoteSafe) {
+    if (!gt?.id) continue;
     touchedGoogleIds.add(gt.id);
     const existing = byGoogle.get(gt.id);
     const mapped = googleTaskToSummit(gt, listId);
@@ -381,8 +385,9 @@ export function mergeGoogleTasksIntoLocal(
   }
 
   // Locals on this list that pointed at Google ids no longer present stay local
-  for (const t of local) {
+  for (const t of localSafe) {
     if (
+      t &&
       t.listId === listId &&
       t.googleTaskId &&
       !touchedGoogleIds.has(t.googleTaskId)
@@ -411,9 +416,11 @@ export function mergeGoogleListsIntoLocal(
   local: SummitTaskList[],
   remote: GoogleTaskList[]
 ): { lists: SummitTaskList[]; imported: number; updated: number } {
+  const localSafe = Array.isArray(local) ? local : [];
+  const remoteSafe = Array.isArray(remote) ? remote : [];
   const byGoogle = new Map<string, SummitTaskList>();
-  for (const l of local) {
-    if (l.googleListId) byGoogle.set(l.googleListId, l);
+  for (const l of localSafe) {
+    if (l?.googleListId) byGoogle.set(l.googleListId, l);
   }
 
   let imported = 0;
@@ -421,11 +428,12 @@ export function mergeGoogleListsIntoLocal(
   const touched = new Set<string>();
   const next: SummitTaskList[] = [];
 
-  for (const l of local) {
-    if (!l.googleListId) next.push(l);
+  for (const l of localSafe) {
+    if (l && !l.googleListId) next.push(l);
   }
 
-  for (const gl of remote) {
+  for (const gl of remoteSafe) {
+    if (!gl?.id) continue;
     touched.add(gl.id);
     const existing = byGoogle.get(gl.id);
     const title = (gl.title || '').trim() || 'Untitled list';
@@ -443,7 +451,7 @@ export function mergeGoogleListsIntoLocal(
       const isDefault =
         gl.id === '@default' ||
         /^my tasks$/i.test(title);
-      const defaultSlot = local.find((l) => l.id === DEFAULT_TASK_LIST_ID);
+      const defaultSlot = localSafe.find((l) => l.id === DEFAULT_TASK_LIST_ID);
       if (isDefault && defaultSlot && !touched.has(defaultSlot.googleListId || '')) {
         const already = next.find((l) => l.id === DEFAULT_TASK_LIST_ID);
         if (!already) {
@@ -468,8 +476,8 @@ export function mergeGoogleListsIntoLocal(
     }
   }
 
-  for (const l of local) {
-    if (l.googleListId && !touched.has(l.googleListId)) {
+  for (const l of localSafe) {
+    if (l?.googleListId && !touched.has(l.googleListId)) {
       // Keep local list; drop stale google link if remote list vanished
       if (!next.some((x) => x.id === l.id)) {
         next.push({ ...l, googleListId: undefined });

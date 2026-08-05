@@ -16,6 +16,10 @@ import {
   type SyncLeadResult,
 } from '@/lib/google-calendar';
 import { GOOGLE_TASKS_SCOPE } from '@/lib/google-tasks';
+import {
+  normalizeCssHex,
+  resolveCalendarListEntryColor,
+} from '@/lib/summit-calendar';
 
 /**
  * Calendar events + calendarList (colors / multi-cal) + Tasks.
@@ -147,6 +151,28 @@ export function readBrowserGcalSession(): BrowserGcalSession | null {
   if (!session) return null;
   if (session.expiresAt < Date.now() + 30_000) return null;
   return session;
+}
+
+/**
+ * True when a browser GIS token exists (fresh or expired).
+ * Profile settings + Calendar tab must share this as the connected-state source of truth.
+ */
+export function hasBrowserGcalToken(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return Boolean(storageGet(TOKEN_KEY));
+  } catch {
+    return false;
+  }
+}
+
+/** Email from last successful connect (survives expired access token). */
+export function readBrowserGcalEmail(): string | null {
+  try {
+    return storageGet(EMAIL_KEY);
+  } catch {
+    return null;
+  }
 }
 
 export function writeBrowserGcalSession(session: BrowserGcalSession) {
@@ -558,7 +584,8 @@ export async function connectGoogleCalendarBrowser(opts?: {
 
 /**
  * Return a usable access token: reuse if fresh, else silent GIS refresh.
- * Clears storage if refresh fails (user must reconnect).
+ * On silent refresh failure, keeps the stored token so UI still shows Connected
+ * (Profile + Calendar share hasBrowserGcalToken). User can Reconnect.
  */
 export async function ensureBrowserGcalSession(): Promise<BrowserGcalSession | null> {
   const fresh = readBrowserGcalSession();
@@ -566,14 +593,17 @@ export async function ensureBrowserGcalSession(): Promise<BrowserGcalSession | n
 
   const raw = readRawBrowserGcalSession();
   // Only attempt silent refresh if we previously connected on this device
-  if (!raw && !storageGet(EMAIL_KEY) && !storageGet(SCOPES_KEY)) {
+  if (!raw && !hasBrowserGcalToken() && !storageGet(EMAIL_KEY) && !storageGet(SCOPES_KEY)) {
     return null;
   }
 
   try {
     return await connectGoogleCalendarBrowser({ silent: true });
   } catch {
-    clearBrowserGcalSession();
+    // Do not clearBrowserGcalSession — that made Profile say "not connected"
+    // while Calendar still showed pulled Google events.
+    // Return null so callers don't hit APIs with a dead token; UI uses
+    // hasBrowserGcalToken() for Connected state.
     return null;
   }
 }
@@ -710,11 +740,13 @@ function colorMapFromCalendarList(
   calendars: GoogleCalendarListEntry[]
 ): Record<string, { bg: string; fg: string }> {
   const map: Record<string, { bg: string; fg: string }> = {};
-  for (const c of calendars) {
-    if (!c.id || !c.backgroundColor) continue;
+  for (const c of Array.isArray(calendars) ? calendars : []) {
+    if (!c?.id) continue;
+    const resolved = resolveCalendarListEntryColor(c);
+    if (!resolved?.bg) continue;
     const entry = {
-      bg: c.backgroundColor,
-      fg: c.foregroundColor || '#ffffff',
+      bg: resolved.bg,
+      fg: resolved.text || '#ffffff',
     };
     map[c.id] = entry;
     if (c.primary) map.primary = entry;
@@ -734,6 +766,7 @@ export async function listUpcomingGoogleEvents(
   let calendars: GoogleCalendarListEntry[] = [];
   try {
     calendars = await listGoogleCalendarList(accessToken);
+    if (!Array.isArray(calendars)) calendars = [];
   } catch (e) {
     const msg = e instanceof Error ? e.message : '';
     if (!/calendarList_forbidden|403/i.test(msg)) throw e;
@@ -755,6 +788,7 @@ export async function listUpcomingGoogleEvents(
               selected: true,
               backgroundColor: '#4285f4',
               foregroundColor: '#ffffff',
+              colorId: '15',
             } satisfies GoogleCalendarListEntry,
           ];
 
@@ -773,16 +807,36 @@ export async function listUpcomingGoogleEvents(
     const result = settled[i]!;
     const cal = toFetch[i]!;
     if (result.status !== 'fulfilled') continue;
-    const colors = colorMap[cal.id] || {
-      bg: cal.backgroundColor || '#4285f4',
-      fg: cal.foregroundColor || '#ffffff',
-    };
+    if (!Array.isArray(result.value)) continue;
+    const resolved =
+      colorMap[cal.id] ||
+      (() => {
+        const r = resolveCalendarListEntryColor(cal);
+        return r
+          ? { bg: r.bg, fg: r.text || '#ffffff' }
+          : {
+              bg: normalizeCssHex(cal.backgroundColor) || '#4285f4',
+              fg: normalizeCssHex(cal.foregroundColor) || '#ffffff',
+            };
+      })();
     for (const item of result.value) {
+      if (!item || typeof item !== 'object') continue;
+      const id = typeof item.id === 'string' ? item.id.trim() : '';
+      if (!id) continue;
+      const start = item.start;
+      if (
+        !start ||
+        typeof start !== 'object' ||
+        (!start.date && !start.dateTime)
+      ) {
+        continue;
+      }
       out.push({
         ...item,
+        id,
         calendarId: cal.id,
-        calendarBackground: colors.bg,
-        calendarForeground: colors.fg,
+        calendarBackground: resolved.bg,
+        calendarForeground: resolved.fg,
       });
     }
   }
@@ -800,12 +854,23 @@ export async function listUpcomingGoogleEvents(
         fg: '#ffffff',
       };
       return {
-        events: primary.map((item) => ({
-          ...item,
-          calendarId: 'primary',
-          calendarBackground: primaryColors.bg,
-          calendarForeground: primaryColors.fg,
-        })),
+        events: (Array.isArray(primary) ? primary : [])
+          .filter(
+            (item) =>
+              item &&
+              typeof item === 'object' &&
+              typeof item.id === 'string' &&
+              item.id.trim() &&
+              item.start &&
+              typeof item.start === 'object' &&
+              (item.start.date || item.start.dateTime)
+          )
+          .map((item) => ({
+            ...item,
+            calendarId: 'primary',
+            calendarBackground: primaryColors.bg,
+            calendarForeground: primaryColors.fg,
+          })),
         colorMap,
       };
     } catch {

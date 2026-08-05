@@ -40,6 +40,7 @@ import {
   SUMMIT_CALENDAR_EVENTS_KEY,
   newSummitCalendarEventId,
   normalizeStoredCalendarEvents,
+  normalizeGoogleCalendarEventsList,
   mergeGoogleCalendarEventsIntoLocal,
   eventOccursOnDay,
   formatEventTimeLabel,
@@ -59,6 +60,10 @@ import {
   eventBlockColorStyle,
   normalizeGoogleEventColorId,
   layoutOverlappingTimedEvents,
+  nextNonOverlappingStartMin,
+  timedBlockPaintHeightPx,
+  normalizeCssHex,
+  resolveCalendarListEntryColor,
   timedEventMinutesOnDay,
   type GoogleEventColorId,
   type SummitCalendarEvent,
@@ -3123,6 +3128,7 @@ export default function SummitApp() {
       primary?: boolean;
       backgroundColor?: string;
       foregroundColor?: string;
+      colorId?: string;
     }>
   >([]);
   const [gcalCalendarListNeedsReconnect, setGcalCalendarListNeedsReconnect] =
@@ -3293,14 +3299,43 @@ export default function SummitApp() {
   };
 
   const persistTaskLists = (next: SummitTaskList[]) => {
-    const safe = next.length > 0 ? next : [createDefaultTaskList()];
+    const safe =
+      Array.isArray(next) && next.length > 0
+        ? next
+        : [createDefaultTaskList()];
     setTaskLists(safe);
     try {
       localStorage.setItem(SUMMIT_TASK_LISTS_KEY, JSON.stringify(safe));
     } catch {
       /* ignore */
     }
-    scheduleCloudTasksSave(tasks, safe, activeTaskListId);
+    scheduleCloudTasksSave(
+      Array.isArray(tasks) ? tasks : [],
+      safe,
+      activeTaskListId
+    );
+  };
+
+  /** Never let Google events state become a non-array (crashes Calendar render). */
+  const setGoogleEventsSafe = (
+    next:
+      | unknown
+      | ((prev: typeof googleCalendarEvents) => unknown)
+  ) => {
+    if (typeof next === 'function') {
+      setGoogleCalendarEvents((prev) => {
+        const safePrev = normalizeGoogleCalendarEventsList(
+          Array.isArray(prev) ? prev : []
+        ) as typeof googleCalendarEvents;
+        return normalizeGoogleCalendarEventsList(
+          next(safePrev)
+        ) as typeof googleCalendarEvents;
+      });
+      return;
+    }
+    setGoogleCalendarEvents(
+      normalizeGoogleCalendarEventsList(next) as typeof googleCalendarEvents
+    );
   };
 
   const persistActiveTaskListId = (listId: string) => {
@@ -3312,8 +3347,25 @@ export default function SummitApp() {
     }
   };
 
+  const safeTaskLists =
+    Array.isArray(taskLists) && taskLists.length > 0
+      ? taskLists
+      : [createDefaultTaskList()];
+  const safeTasksState = Array.isArray(tasks) ? tasks : [];
+  const safeCalendarEventsState = Array.isArray(calendarEvents)
+    ? calendarEvents
+    : [];
+  const safeGoogleCalendarList = Array.isArray(googleCalendarList)
+    ? googleCalendarList
+    : [];
+  const safeGoogleColorMap =
+    googleCalendarColorMap &&
+    typeof googleCalendarColorMap === 'object' &&
+    !Array.isArray(googleCalendarColorMap)
+      ? googleCalendarColorMap
+      : {};
   const activeTaskList =
-    taskLists.find((l) => l.id === activeTaskListId) || taskLists[0];
+    safeTaskLists.find((l) => l.id === activeTaskListId) || safeTaskLists[0];
   const googleListIdFor = (list: SummitTaskList | undefined) =>
     list?.googleListId || (list?.id === DEFAULT_TASK_LIST_ID ? '@default' : '');
 
@@ -6652,6 +6704,32 @@ export default function SummitApp() {
     document.title = name || 'Summit';
   }, [sessionReady, companySettings.company]);
 
+  // Self-heal corrupted calendar/tasks state (HMR / bad cloud payloads)
+  useEffect(() => {
+    if (!Array.isArray(googleCalendarEvents)) setGoogleEventsSafe([]);
+    if (!Array.isArray(calendarEvents)) setCalendarEvents([]);
+    if (!Array.isArray(tasks)) setTasks([]);
+    if (!Array.isArray(taskLists) || taskLists.length === 0) {
+      setTaskLists([createDefaultTaskList()]);
+    }
+    if (!Array.isArray(googleCalendarList)) setGoogleCalendarList([]);
+    if (
+      !googleCalendarColorMap ||
+      typeof googleCalendarColorMap !== 'object' ||
+      Array.isArray(googleCalendarColorMap)
+    ) {
+      setGoogleCalendarColorMap({});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- heal only when shape is wrong
+  }, [
+    googleCalendarEvents,
+    calendarEvents,
+    tasks,
+    taskLists,
+    googleCalendarList,
+    googleCalendarColorMap,
+  ]);
+
   // Appearance: persist preference + apply day/night (auto rechecks while open)
   useEffect(() => {
     if (!sessionReady) return;
@@ -6717,6 +6795,13 @@ export default function SummitApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot after hydrate
   }, [sessionReady]);
 
+  // Re-probe token when opening Profile settings so Connected matches Calendar
+  useEffect(() => {
+    if (!sessionReady || activeTab !== 'settings') return;
+    void refreshGcalStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- status probe on settings open
+  }, [sessionReady, activeTab]);
+
   // Quiet Google sync: app open / Calendar tab / month change / focus (debounced)
   useEffect(() => {
     if (!sessionReady || !gcalConnected) return;
@@ -6725,13 +6810,19 @@ export default function SummitApp() {
       void refreshFromGoogle({
         silent: true,
         cursor: opts?.cursor ?? calendarCursor,
+      }).catch((err) => {
+        console.error('Quiet Google calendar sync failed:', err);
       });
     };
 
     if (activeTab === 'calendar') {
       runQuietSync({ cursor: calendarCursor });
     } else if (activeTab === 'tasks') {
-      void syncTasksWithGoogle({ silent: true, pullOnly: true });
+      void syncTasksWithGoogle({ silent: true, pullOnly: true }).catch(
+        (err) => {
+          console.error('Quiet Google tasks sync failed:', err);
+        }
+      );
     }
 
     let focusTimer: number | undefined;
@@ -6765,7 +6856,11 @@ export default function SummitApp() {
   // One quiet sync when Google first connects / app hydrates (any tab)
   useEffect(() => {
     if (!sessionReady || !gcalConnected) return;
-    void refreshFromGoogle({ silent: true, cursor: calendarCursor });
+    void refreshFromGoogle({ silent: true, cursor: calendarCursor }).catch(
+      (err) => {
+        console.error('Initial Google sync failed:', err);
+      }
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per connect/hydrate
   }, [sessionReady, gcalConnected]);
 
@@ -9121,6 +9216,8 @@ export default function SummitApp() {
       const {
         isBrowserGcalConfigured,
         readBrowserGcalSession,
+        readBrowserGcalEmail,
+        hasBrowserGcalToken,
         ensureBrowserGcalSession,
         loadGoogleIdentityScript,
         browserSessionHasTasksScope,
@@ -9129,30 +9226,36 @@ export default function SummitApp() {
       setGcalConfigured(isBrowserGcalConfigured());
       void loadGoogleIdentityScript().catch(() => undefined);
       let session = readBrowserGcalSession();
-      if (!session) {
+      if (!session && hasBrowserGcalToken()) {
         // Survives browser restart: silent-refresh expired localStorage token
         session = await ensureBrowserGcalSession();
       }
-      if (session) {
+      // Connected = token present (fresh or expired). Profile + Calendar share this.
+      const tokenPresent = hasBrowserGcalToken() || Boolean(session?.accessToken);
+      if (tokenPresent) {
         setGcalConnected(true);
-        setGcalEmail(session.email ?? null);
+        setGcalEmail(
+          session?.email ?? readBrowserGcalEmail() ?? null
+        );
         setGcalName(null);
-        if (!browserSessionHasTasksScope(session)) {
-          setGtasksNeedsReconnect(true);
-          setGtasksErrorKind('scope');
-          setGtasksLastError(
-            'Google Tasks permission missing — tap Reconnect for Tasks and allow Tasks on the consent screen.'
-          );
-        } else {
-          // Scope claims Tasks — verify live (catches API-disabled / stale scope)
-          const probe = await probeGoogleTasksAccess(session.accessToken);
-          setGtasksNeedsReconnect(!probe.ok);
-          if (probe.ok) {
-            setGtasksLastError(null);
-            setGtasksErrorKind(null);
+        if (session) {
+          if (!browserSessionHasTasksScope(session)) {
+            setGtasksNeedsReconnect(true);
+            setGtasksErrorKind('scope');
+            setGtasksLastError(
+              'Google Tasks permission missing — tap Reconnect for Tasks and allow Tasks on the consent screen.'
+            );
           } else {
-            setGtasksLastError(probe.error);
-            setGtasksErrorKind(probe.kind);
+            // Scope claims Tasks — verify live (catches API-disabled / stale scope)
+            const probe = await probeGoogleTasksAccess(session.accessToken);
+            setGtasksNeedsReconnect(!probe.ok);
+            if (probe.ok) {
+              setGtasksLastError(null);
+              setGtasksErrorKind(null);
+            } else {
+              setGtasksLastError(probe.error);
+              setGtasksErrorKind(probe.kind);
+            }
           }
         }
         return;
@@ -9188,16 +9291,28 @@ export default function SummitApp() {
     calendarId?: string | null,
     stored?: { bg?: string; fg?: string } | null
   ): CalendarListColor | undefined => {
-    if (stored?.bg) {
-      return { bg: stored.bg, text: stored.fg };
-    }
-    const id = (calendarId || 'primary').trim();
-    const fromMap = googleCalendarColorMap[id];
-    if (fromMap?.bg) return { bg: fromMap.bg, text: fromMap.fg };
-    if (id !== 'primary' && googleCalendarColorMap.primary?.bg) {
+    const storedBg = normalizeCssHex(stored?.bg);
+    if (storedBg) {
       return {
-        bg: googleCalendarColorMap.primary.bg,
-        text: googleCalendarColorMap.primary.fg,
+        bg: storedBg,
+        text: normalizeCssHex(stored?.fg) || undefined,
+      };
+    }
+    const id = String(calendarId || 'primary').trim();
+    const fromMap = safeGoogleColorMap[id];
+    if (fromMap?.bg) {
+      const bg = normalizeCssHex(fromMap.bg) || fromMap.bg;
+      return { bg, text: normalizeCssHex(fromMap.fg) || fromMap.fg };
+    }
+    if (id !== 'primary' && safeGoogleColorMap.primary?.bg) {
+      const bg =
+        normalizeCssHex(safeGoogleColorMap.primary.bg) ||
+        safeGoogleColorMap.primary.bg;
+      return {
+        bg,
+        text:
+          normalizeCssHex(safeGoogleColorMap.primary.fg) ||
+          safeGoogleColorMap.primary.fg,
       };
     }
     return undefined;
@@ -9209,14 +9324,22 @@ export default function SummitApp() {
     cursor?: Date;
   }) => {
     try {
-      const { ensureBrowserGcalSession, listUpcomingGoogleEvents } =
-        await import('@/lib/gcal-browser');
+      const {
+        ensureBrowserGcalSession,
+        listUpcomingGoogleEvents,
+        hasBrowserGcalToken,
+      } = await import('@/lib/gcal-browser');
       const session = await ensureBrowserGcalSession();
       if (!session?.accessToken) {
         if (!opts?.silent) {
-          showToast('Connect Google Calendar first');
+          showToast(
+            hasBrowserGcalToken()
+              ? 'Google session expired — tap Reconnect'
+              : 'Connect Google Calendar first'
+          );
         }
-        setGcalConnected(false);
+        // Token present → still Connected in Profile/Calendar; needs Reconnect
+        setGcalConnected(hasBrowserGcalToken());
         return;
       }
       setGcalConnected(true);
@@ -9231,24 +9354,30 @@ export default function SummitApp() {
         timeMin: gridStart.toISOString(),
         timeMax: gridEnd.toISOString(),
       });
-      // Always store an array — never set a bare object / undefined (crashes render)
-      const items = Array.isArray(pulled?.events)
-        ? pulled.events
-        : Array.isArray(pulled)
-          ? pulled
-          : [];
+      // Always store a normalized array — never bare object / missing start (crashes render)
+      const items = normalizeGoogleCalendarEventsList(
+        Array.isArray(pulled?.events)
+          ? pulled.events
+          : Array.isArray(pulled)
+            ? pulled
+            : []
+      );
       const colorMap =
         pulled &&
         typeof pulled === 'object' &&
         !Array.isArray(pulled) &&
         pulled.colorMap &&
-        typeof pulled.colorMap === 'object'
+        typeof pulled.colorMap === 'object' &&
+        !Array.isArray(pulled.colorMap)
           ? pulled.colorMap
           : {};
-      setGoogleCalendarEvents(items);
-      if (Object.keys(colorMap).length) {
-        setGoogleCalendarColorMap(colorMap);
-      }
+      setGoogleEventsSafe(items);
+      // Always replace color map from this pull (empty when calendarList unavailable)
+      setGoogleCalendarColorMap(
+        colorMap && typeof colorMap === 'object' && !Array.isArray(colorMap)
+          ? colorMap
+          : {}
+      );
       // Refresh writable calendar list for create picker + color accuracy
       try {
         const {
@@ -9268,13 +9397,17 @@ export default function SummitApp() {
                   c.accessRole === 'owner' ||
                   c.accessRole === 'writer')
             )
-            .map((c) => ({
-              id: c.id,
-              summary: c.summary || c.id,
-              primary: c.primary,
-              backgroundColor: c.backgroundColor,
-              foregroundColor: c.foregroundColor,
-            }));
+            .map((c) => {
+              const resolved = resolveCalendarListEntryColor(c);
+              return {
+                id: c.id,
+                summary: c.summary || c.id,
+                primary: c.primary,
+                backgroundColor: resolved?.bg || c.backgroundColor,
+                foregroundColor: resolved?.text || c.foregroundColor,
+                colorId: c.colorId,
+              };
+            });
           setGoogleCalendarList(writable);
           setGcalCalendarListNeedsReconnect(false);
         } catch (listErr) {
@@ -9290,7 +9423,7 @@ export default function SummitApp() {
 
       // Merge Google → Summit event store (skip adjustment-synced events)
       const adjIds = new Set(
-        leads
+        (Array.isArray(leads) ? leads : [])
           .map((l) => l.calendarEventId)
           .filter((id): id is string => Boolean(id))
       );
@@ -9299,21 +9432,24 @@ export default function SummitApp() {
           const raw = localStorage.getItem(SUMMIT_CALENDAR_EVENTS_KEY);
           return normalizeStoredCalendarEvents(raw ? JSON.parse(raw) : []);
         } catch {
-          return calendarEvents;
+          return Array.isArray(calendarEvents) ? calendarEvents : [];
         }
       })();
       const merged = mergeGoogleCalendarEventsIntoLocal(localRaw, items, {
         knownAdjustmentGoogleIds: adjIds,
       });
-      // Re-resolve calendar colors from fresh calendarList map
-      const recolored = merged.events.map((ev) => {
-        const calId = ev.calendarId || 'primary';
+      // Re-resolve calendar colors from fresh calendarList map on every pull
+      const mergedEvents = Array.isArray(merged?.events) ? merged.events : [];
+      const recolored = mergedEvents.map((ev) => {
+        const calId = (ev.calendarId || 'primary').trim();
         const colors = colorMap[calId] || colorMap.primary;
-        if (!colors?.bg) return ev;
+        const bg = normalizeCssHex(colors?.bg) || colors?.bg;
+        if (!bg) return ev;
         return {
           ...ev,
-          calendarColorBg: colors.bg,
-          calendarColorFg: colors.fg,
+          calendarColorBg: bg,
+          calendarColorFg:
+            normalizeCssHex(colors?.fg) || colors?.fg || ev.calendarColorFg,
         };
       });
       persistCalendarEvents(recolored);
@@ -9341,8 +9477,9 @@ export default function SummitApp() {
         e instanceof Error &&
         /expired|401|reconnect/i.test(e.message)
       ) {
-        setGcalConnected(false);
-        setGoogleCalendarEvents([]);
+        const { hasBrowserGcalToken } = await import('@/lib/gcal-browser');
+        setGcalConnected(hasBrowserGcalToken());
+        if (!hasBrowserGcalToken()) setGoogleEventsSafe([]);
       }
     } finally {
       setGoogleEventsLoading(false);
@@ -9360,16 +9497,17 @@ export default function SummitApp() {
     } = await import('@/lib/gcal-browser');
     const session = await ensureBrowserGcalSession();
     if (!session?.accessToken) return;
-    const source =
+    const source = normalizeStoredCalendarEvents(
       opts?.eventsOverride ||
-      (() => {
-        try {
-          const raw = localStorage.getItem(SUMMIT_CALENDAR_EVENTS_KEY);
-          return normalizeStoredCalendarEvents(raw ? JSON.parse(raw) : []);
-        } catch {
-          return calendarEvents;
-        }
-      })();
+        (() => {
+          try {
+            const raw = localStorage.getItem(SUMMIT_CALENDAR_EVENTS_KEY);
+            return raw ? JSON.parse(raw) : [];
+          } catch {
+            return Array.isArray(calendarEvents) ? calendarEvents : [];
+          }
+        })()
+    );
     const unsynced = source.filter((e) => !e.googleEventId);
     if (unsynced.length === 0) return;
     let next = [...source];
@@ -9417,23 +9555,45 @@ export default function SummitApp() {
     }
   };
 
-  /** Pull Calendar + Tasks from Google and push unsynced Summit events. */
+  /** Pull Calendar + Tasks from Google and push unsynced Summit events. Soft-fail always. */
   const refreshFromGoogle = async (opts?: { silent?: boolean; cursor?: Date }) => {
-    await loadGoogleEvents({ silent: opts?.silent, cursor: opts?.cursor });
-    // Push Summit-only events after pull so bi-directional stays accurate
-    await pushUnsyncedCalendarEvents({ silent: true });
-    // Don't gate on React state — loadGoogleEvents may have just refreshed the token
-    await syncTasksWithGoogle({
-      silent: true,
-      pullOnly: true,
-      assumeConnected: true,
-    });
-    const syncedAt = new Date().toISOString();
-    setGcalLastSync(syncedAt);
     try {
-      localStorage.setItem('summitGcalLastSync', syncedAt);
-    } catch {
-      /* ignore */
+      await loadGoogleEvents({ silent: opts?.silent, cursor: opts?.cursor });
+      // Push Summit-only events after pull so bi-directional stays accurate
+      try {
+        await pushUnsyncedCalendarEvents({ silent: true });
+      } catch (err) {
+        console.error('Push unsynced calendar events failed:', err);
+      }
+      // Don't gate on React state — loadGoogleEvents may have just refreshed the token
+      try {
+        await syncTasksWithGoogle({
+          silent: true,
+          pullOnly: true,
+          assumeConnected: true,
+        });
+      } catch (err) {
+        console.error('Tasks sync during calendar refresh failed:', err);
+      }
+      const syncedAt = new Date().toISOString();
+      setGcalLastSync(syncedAt);
+      try {
+        localStorage.setItem('summitGcalLastSync', syncedAt);
+      } catch {
+        /* ignore */
+      }
+    } catch (err) {
+      console.error('Google calendar refresh failed:', err);
+      if (!opts?.silent) {
+        try {
+          const { formatGoogleConnectError } = await import(
+            '@/lib/gcal-browser'
+          );
+          showToast(formatGoogleConnectError(err));
+        } catch {
+          showToast('Google Calendar sync failed');
+        }
+      }
     }
   };
 
@@ -9445,7 +9605,8 @@ export default function SummitApp() {
     const endTime = opts?.endTime || defaultEndTime(startTime);
     const allDay = Boolean(opts?.allDay);
     const primaryCal =
-      googleCalendarList.find((c) => c.primary) || googleCalendarList[0];
+      safeGoogleCalendarList.find((c) => c.primary) ||
+      safeGoogleCalendarList[0];
     setCalEventDraft({
       title: '',
       notes: '',
@@ -9507,8 +9668,8 @@ export default function SummitApp() {
     const calendarId =
       (calEventDraft.calendarId || '').trim() || 'primary';
     const mapColors =
-      googleCalendarColorMap[calendarId] || googleCalendarColorMap.primary;
-    const listColors = googleCalendarList.find((c) => c.id === calendarId);
+      safeGoogleColorMap[calendarId] || safeGoogleColorMap.primary;
+    const listColors = safeGoogleCalendarList.find((c) => c.id === calendarId);
     const calendarColorBg =
       mapColors?.bg || listColors?.backgroundColor || undefined;
     const calendarColorFg =
@@ -9781,8 +9942,9 @@ export default function SummitApp() {
       setGcalConnected(false);
       setGcalEmail(null);
       setGcalName(null);
-      setGoogleCalendarEvents([]);
+      setGoogleEventsSafe([]);
       setGoogleCalendarColorMap({});
+      setGoogleCalendarList([]);
       setGtasksNeedsReconnect(false);
       setGtasksLastError(null);
       setGtasksErrorKind(null);
@@ -9882,7 +10044,9 @@ export default function SummitApp() {
       } = await import('@/lib/google-tasks');
       const session = await ensureBrowserGcalSession();
       if (!session?.accessToken) {
-        setGcalConnected(false);
+        setGcalConnected(
+          (await import('@/lib/gcal-browser')).hasBrowserGcalToken()
+        );
         if (!opts?.silent) showToast('Connect Google first');
         return;
       }
@@ -9902,14 +10066,19 @@ export default function SummitApp() {
       setGtasksNeedsReconnect(false);
       setGtasksLastError(null);
       setGtasksErrorKind(null);
-      const listsMerged = mergeGoogleListsIntoLocal(taskLists, remoteLists);
-      let nextLists = listsMerged.lists;
+      const listsMerged = mergeGoogleListsIntoLocal(
+        Array.isArray(taskLists) ? taskLists : [],
+        Array.isArray(remoteLists) ? remoteLists : []
+      );
+      let nextLists = Array.isArray(listsMerged.lists)
+        ? listsMerged.lists
+        : [createDefaultTaskList()];
       persistTaskLists(nextLists);
       if (!nextLists.some((l) => l.id === activeTaskListId)) {
         persistActiveTaskListId(nextLists[0]?.id || DEFAULT_TASK_LIST_ID);
       }
 
-      let nextTasks = tasks;
+      let nextTasks = Array.isArray(tasks) ? tasks : [];
       let imported = 0;
       let updated = 0;
       for (const list of nextLists) {
@@ -14950,7 +15119,7 @@ export default function SummitApp() {
                     className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-300 resize-none"
                   />
                 </label>
-                {googleCalendarList.length > 0 ? (
+                {safeGoogleCalendarList.length > 0 ? (
                   <label className="block space-y-1.5">
                     <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">
                       Calendar
@@ -14965,7 +15134,7 @@ export default function SummitApp() {
                       }
                       className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300 bg-white"
                     >
-                      {googleCalendarList.map((c) => (
+                      {safeGoogleCalendarList.map((c) => (
                         <option key={c.id} value={c.id}>
                           {c.summary}
                           {c.primary ? ' (primary)' : ''}
@@ -15001,7 +15170,7 @@ export default function SummitApp() {
                             googleCalendarColorMap[id] ||
                             googleCalendarColorMap.primary;
                           if (fromMap?.bg) return fromMap.bg;
-                          const fromList = googleCalendarList.find(
+                          const fromList = safeGoogleCalendarList.find(
                             (c) => c.id === id
                           );
                           return (
@@ -17516,7 +17685,8 @@ export default function SummitApp() {
 
 
         {activeTab === 'calendar' && (() => {
-          const openJobs = leads.filter(
+          try {
+          const openJobs = (Array.isArray(leads) ? leads : []).filter(
             (l) => normalizePipelineStage(l.category) !== 'Closed'
           );
           const todayIso = toLocalIsoDate(new Date());
@@ -17612,13 +17782,15 @@ export default function SummitApp() {
             return keys.length ? keys : [toLocalIsoDate(startD)];
           };
 
-          const safeGoogleEvents = Array.isArray(googleCalendarEvents)
-            ? googleCalendarEvents
-            : [];
+          const safeGoogleEvents = normalizeGoogleCalendarEventsList(
+            googleCalendarEvents
+          );
           const safeCalendarEvents = Array.isArray(calendarEvents)
-            ? calendarEvents
+            ? calendarEvents.filter((e) => e && e.startDate)
             : [];
-          const safeTasks = Array.isArray(tasks) ? tasks : [];
+          const safeTasks = Array.isArray(tasks)
+            ? tasks.filter((t) => t && typeof t.title === 'string')
+            : [];
 
           const googleByDate = new Map<
             string,
@@ -17856,10 +18028,28 @@ export default function SummitApp() {
                 endMin: b.endMin,
               }))
             );
+            const layoutItems = blocks.map((b) => ({
+              key: b.key,
+              startMin: b.startMin,
+              endMin: b.endMin,
+            }));
             return blocks.map((b) => {
               const place = layout.get(b.key);
+              const nextStart = nextNonOverlappingStartMin(
+                { key: b.key, startMin: b.startMin, endMin: b.endMin },
+                layoutItems
+              );
+              // Full-width adjacent: clip paint so TRT doesn't sit under Breakfast.
+              // Side-by-side overlaps keep natural height (columns separate them).
+              const fullWidth = (place?.widthPct ?? 100) >= 99.5;
+              const height = fullWidth
+                ? timedBlockPaintHeightPx(b.startMin, b.endMin, {
+                    nextStartMin: nextStart,
+                  })
+                : b.height;
               return {
                 ...b,
+                height,
                 leftPct: place?.leftPct ?? 0,
                 widthPct: place?.widthPct ?? 100,
                 zIndex: place?.zIndex ?? 10,
@@ -18333,7 +18523,7 @@ export default function SummitApp() {
                             !adjustmentGoogleIds.has(ev.id)
                         );
                         const dayTaskList = tasksByDate.get(iso) || [];
-                        const dayEvts = calendarEvents.filter((ev) =>
+                        const dayEvts = safeCalendarEvents.filter((ev) =>
                           eventOccursOnDay(ev, iso)
                         );
                         type DayChip = {
@@ -18711,11 +18901,50 @@ export default function SummitApp() {
               </div>
             </div>
           );
+          } catch (calErr) {
+            console.error('Calendar render failed:', calErr);
+            return (
+              <div className="page-shell page-fade space-y-4">
+                <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
+                  {appDisplayName()} Calendar
+                </h1>
+                <p className="text-sm text-zinc-600">
+                  Calendar hit a bad event payload and recovered. Sync again or
+                  reconnect Google — the rest of Summit stays usable.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={() => {
+                      void refreshFromGoogle({
+                        silent: false,
+                        cursor: calendarCursor,
+                      });
+                    }}
+                  >
+                    Retry sync
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      setGoogleEventsSafe([]);
+                      setCalendarViewMode('month');
+                    }}
+                  >
+                    Clear Google events
+                  </button>
+                </div>
+              </div>
+            );
+          }
         })()}
 
         {activeTab === 'tasks' && (() => {
+          try {
           const listId = activeTaskList?.id || DEFAULT_TASK_LIST_ID;
-          const listTasks = tasks.filter((t) => t.listId === listId);
+          const listTasks = safeTasksState.filter((t) => t.listId === listId);
           const openTasks = listTasks.filter((t) => !t.completed);
           const doneTasks = listTasks.filter((t) => t.completed);
           return (
@@ -18804,8 +19033,8 @@ export default function SummitApp() {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {taskLists.map((list) => {
-                    const count = tasks.filter(
+                  {safeTaskLists.map((list) => {
+                    const count = safeTasksState.filter(
                       (t) => t.listId === list.id && !t.completed
                     ).length;
                     const active = list.id === listId;
@@ -19064,6 +19293,34 @@ export default function SummitApp() {
               ) : null}
             </div>
           );
+          } catch (tasksErr) {
+            console.error('Tasks render failed:', tasksErr);
+            return (
+              <div className="page-shell page-fade space-y-4">
+                <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
+                  Tasks
+                </h1>
+                <p className="text-sm text-zinc-600">
+                  Tasks hit a bad payload and recovered. Retry sync or clear
+                  local tasks — the rest of Summit stays usable.
+                </p>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => {
+                    void syncTasksWithGoogle({
+                      silent: false,
+                      pullOnly: true,
+                    }).catch((err) =>
+                      console.error('Tasks retry failed:', err)
+                    );
+                  }}
+                >
+                  Retry sync
+                </button>
+              </div>
+            );
+          }
         })()}
 
         {activeTab === 'performance' && (() => {
@@ -19323,6 +19580,19 @@ export default function SummitApp() {
                         >
                           Reconnect for Tasks
                         </button>
+                      ) : gcalCalendarListNeedsReconnect ? (
+                        <button
+                          type="button"
+                          disabled={gcalBusy}
+                          onClick={() =>
+                            void connectGoogleCalendar({
+                              forceConsent: true,
+                            })
+                          }
+                          className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold disabled:opacity-50"
+                        >
+                          Reconnect for colors
+                        </button>
                       ) : (
                         <button
                           type="button"
@@ -19344,6 +19614,12 @@ export default function SummitApp() {
                         Disconnect
                       </button>
                     </div>
+                    {gcalCalendarListNeedsReconnect ? (
+                      <p className="text-xs text-amber-800/90">
+                        Calendar colors (Eucalyptus, Mango, …) need calendar list
+                        permission — tap Reconnect for colors and allow access.
+                      </p>
+                    ) : null}
                   </div>
                 ) : (
                   <div className="space-y-3">

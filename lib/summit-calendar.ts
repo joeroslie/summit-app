@@ -151,14 +151,50 @@ export const GOOGLE_EVENT_COLORS: GoogleEventColorSwatch[] = [
 /**
  * Fallback when an event has no colorId and no calendarList color.
  * Cobalt modern (#4285f4) — typical Google primary-calendar blue.
+ * Prefer calendarList.backgroundColor (Eucalyptus/Mango/etc.) whenever available.
  */
 export const GOOGLE_CALENDAR_DEFAULT_COLOR = {
-  name: 'Calendar default',
+  name: 'Cobalt',
   bg: '#4285f4',
   text: '#ffffff',
   solid: '#4285f4',
   solidText: '#ffffff',
 } as const;
+
+/**
+ * Google calendarList colorId 1–24 (classic API palette).
+ * Prefer calendarList.backgroundColor hex from the API; use this when only colorId is present.
+ * Names match Google Calendar UI (Eucalyptus, Mango, Cobalt, …).
+ */
+export const GOOGLE_CALENDAR_LIST_COLORS: Record<
+  string,
+  { name: string; bg: string; fg: string }
+> = {
+  '1': { name: 'Cocoa', bg: '#ac725e', fg: '#1d1d1d' },
+  '2': { name: 'Flamingo', bg: '#d06b64', fg: '#1d1d1d' },
+  '3': { name: 'Tomato', bg: '#f83a22', fg: '#1d1d1d' },
+  '4': { name: 'Tangerine', bg: '#fa573c', fg: '#1d1d1d' },
+  '5': { name: 'Pumpkin', bg: '#ff7537', fg: '#1d1d1d' },
+  '6': { name: 'Mango', bg: '#ffad46', fg: '#1d1d1d' },
+  '7': { name: 'Eucalyptus', bg: '#42d692', fg: '#1d1d1d' },
+  '8': { name: 'Basil', bg: '#16a765', fg: '#ffffff' },
+  '9': { name: 'Pistachio', bg: '#7bd148', fg: '#1d1d1d' },
+  '10': { name: 'Avocado', bg: '#b3dc6c', fg: '#1d1d1d' },
+  '11': { name: 'Citron', bg: '#fbe983', fg: '#1d1d1d' },
+  '12': { name: 'Banana', bg: '#fad165', fg: '#1d1d1d' },
+  '13': { name: 'Sage', bg: '#92e1c0', fg: '#1d1d1d' },
+  '14': { name: 'Peacock', bg: '#9fe1e7', fg: '#1d1d1d' },
+  '15': { name: 'Cobalt', bg: '#9fc6e7', fg: '#1d1d1d' },
+  '16': { name: 'Blueberry', bg: '#4986e7', fg: '#ffffff' },
+  '17': { name: 'Lavender', bg: '#9a9cff', fg: '#1d1d1d' },
+  '18': { name: 'Wisteria', bg: '#b99aff', fg: '#1d1d1d' },
+  '19': { name: 'Graphite', bg: '#c2c2c2', fg: '#1d1d1d' },
+  '20': { name: 'Birch', bg: '#cabdbf', fg: '#1d1d1d' },
+  '21': { name: 'Radicchio', bg: '#cca6ac', fg: '#1d1d1d' },
+  '22': { name: 'Cherry Blossom', bg: '#f691b2', fg: '#1d1d1d' },
+  '23': { name: 'Grape', bg: '#cd74e6', fg: '#ffffff' },
+  '24': { name: 'Amethyst', bg: '#a47ae2', fg: '#ffffff' },
+};
 
 /** Optional calendar-list color (from calendarList.backgroundColor). */
 export type CalendarListColor = {
@@ -166,9 +202,55 @@ export type CalendarListColor = {
   text?: string;
 };
 
+/** Normalize #RGB / #RRGGBB (with or without #) → #rrggbb, or undefined. */
+export function normalizeCssHex(raw?: string | null): string | undefined {
+  if (raw == null) return undefined;
+  let s = String(raw).trim();
+  if (!s) return undefined;
+  if (s.startsWith('#')) s = s.slice(1);
+  if (/^[0-9a-fA-F]{3}$/.test(s)) {
+    s = s
+      .split('')
+      .map((c) => c + c)
+      .join('');
+  }
+  if (!/^[0-9a-fA-F]{6}$/.test(s)) return undefined;
+  return `#${s.toLowerCase()}`;
+}
+
+/** Resolve calendarList colorId → classic palette hex. */
+export function googleCalendarListColorFromId(
+  colorId?: string | null
+): CalendarListColor | undefined {
+  if (colorId == null) return undefined;
+  const id = String(colorId).trim();
+  const sw = GOOGLE_CALENDAR_LIST_COLORS[id];
+  if (!sw) return undefined;
+  return { bg: sw.bg, text: sw.fg };
+}
+
+/**
+ * Prefer API backgroundColor hex; else calendar colorId palette; else undefined.
+ * Never invent Cobalt here — callers fall back only when nothing resolves.
+ */
+export function resolveCalendarListEntryColor(entry: {
+  backgroundColor?: string | null;
+  foregroundColor?: string | null;
+  colorId?: string | null;
+}): CalendarListColor | undefined {
+  const bg = normalizeCssHex(entry.backgroundColor);
+  if (bg) {
+    const fg =
+      normalizeCssHex(entry.foregroundColor) || contrastTextOnBg(bg);
+    return { bg, text: fg };
+  }
+  return googleCalendarListColorFromId(entry.colorId);
+}
+
 /** Pick readable text for a calendar background hex. */
 export function contrastTextOnBg(bg: string): string {
-  const hex = bg.trim().replace(/^#/, '');
+  const normalized = normalizeCssHex(bg);
+  const hex = (normalized || bg).trim().replace(/^#/, '');
   if (!/^[0-9a-fA-F]{6}$/.test(hex)) return '#ffffff';
   const r = parseInt(hex.slice(0, 2), 16);
   const g = parseInt(hex.slice(2, 4), 16);
@@ -200,11 +282,14 @@ export function googleEventColorSwatch(
 function resolveCalendarFallback(
   calendarColor?: CalendarListColor | null
 ): { backgroundColor: string; color: string } {
-  const bg = calendarColor?.bg?.trim();
+  const bg = normalizeCssHex(calendarColor?.bg) || calendarColor?.bg?.trim();
   if (bg) {
     return {
       backgroundColor: bg,
-      color: calendarColor?.text?.trim() || contrastTextOnBg(bg),
+      color:
+        normalizeCssHex(calendarColor?.text) ||
+        calendarColor?.text?.trim() ||
+        contrastTextOnBg(bg),
     };
   }
   return {
@@ -292,6 +377,68 @@ export type GoogleEventForMerge = {
   };
   updated?: string;
 };
+
+/**
+ * Never let Google event state become a non-array or include events without
+ * id/start — those shapes crash Calendar month/week/day render.
+ */
+export function normalizeGoogleCalendarEventsList(
+  raw: unknown
+): GoogleEventForMerge[] {
+  if (!Array.isArray(raw)) return [];
+  const out: GoogleEventForMerge[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const e = item as Partial<GoogleEventForMerge>;
+    const id = typeof e.id === 'string' ? e.id.trim() : '';
+    if (!id) continue;
+    const start =
+      e.start && typeof e.start === 'object'
+        ? {
+            date:
+              typeof e.start.date === 'string' ? e.start.date : undefined,
+            dateTime:
+              typeof e.start.dateTime === 'string'
+                ? e.start.dateTime
+                : undefined,
+          }
+        : undefined;
+    if (!start?.date && !start?.dateTime) continue;
+    const end =
+      e.end && typeof e.end === 'object'
+        ? {
+            date: typeof e.end.date === 'string' ? e.end.date : undefined,
+            dateTime:
+              typeof e.end.dateTime === 'string' ? e.end.dateTime : undefined,
+          }
+        : undefined;
+    out.push({
+      id,
+      summary: typeof e.summary === 'string' ? e.summary : undefined,
+      description:
+        typeof e.description === 'string' ? e.description : undefined,
+      htmlLink: typeof e.htmlLink === 'string' ? e.htmlLink : undefined,
+      location: typeof e.location === 'string' ? e.location : undefined,
+      colorId: typeof e.colorId === 'string' ? e.colorId : undefined,
+      calendarId:
+        typeof e.calendarId === 'string' ? e.calendarId : undefined,
+      organizer: e.organizer,
+      calendarBackground:
+        typeof e.calendarBackground === 'string'
+          ? e.calendarBackground
+          : undefined,
+      calendarForeground:
+        typeof e.calendarForeground === 'string'
+          ? e.calendarForeground
+          : undefined,
+      start,
+      end,
+      extendedProperties: e.extendedProperties,
+      updated: typeof e.updated === 'string' ? e.updated : undefined,
+    });
+  }
+  return out;
+}
 
 export function newSummitCalendarEventId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -604,6 +751,9 @@ export function layoutOverlappingTimedEvents(
       }
       const leftPct = (a.column / columnCount) * 100;
       const widthPct = (colSpan / columnCount) * 100;
+      // Later-starting events sit above earlier ones; higher columns above lower.
+      // Adjacent (non-overlapping) still full-width — paint height is clipped by caller.
+      const zIndex = 10 + a.column * 2 + Math.floor(item.startMin / 30);
       out.set(a.key, {
         key: a.key,
         column: a.column,
@@ -611,11 +761,59 @@ export function layoutOverlappingTimedEvents(
         colSpan,
         leftPct,
         widthPct,
-        zIndex: 10 + a.column,
+        zIndex,
       });
     }
   }
   return out;
+}
+
+/**
+ * Paint height for a timed block. Visual min-height must not invade the next
+ * non-overlapping event (Google: neighbors stay full-width, no pile-under).
+ * `nextStartMin` = start of the next event that does not time-overlap this one.
+ */
+export function timedBlockPaintHeightPx(
+  startMin: number,
+  endMin: number,
+  opts?: {
+    nextStartMin?: number | null;
+    hourPx?: number;
+    minPx?: number;
+  }
+): number {
+  const hourPx = opts?.hourPx ?? WEEK_VIEW_HOUR_PX;
+  const minPx = opts?.minPx ?? WEEK_VIEW_MIN_EVENT_PX;
+  const start = Math.max(0, Math.min(24 * 60, startMin));
+  const end = timedCollisionEndMin(start, endMin);
+  const naturalPx = Math.max(minPx, ((end - start) / 60) * hourPx);
+  const next = opts?.nextStartMin;
+  if (next == null || !(next > start)) return naturalPx;
+  // Half-open: may paint up to next start, leave 1px gap so titles stay readable
+  const maxPx = ((next - start) / 60) * hourPx - 1;
+  if (maxPx <= 0) return Math.max(2, Math.min(naturalPx, 4));
+  return Math.max(2, Math.min(naturalPx, maxPx));
+}
+
+/**
+ * Next event start (minutes) that does not time-overlap `item`.
+ * Used to clip paint so adjacent events don't pile (TRT under Breakfast).
+ */
+export function nextNonOverlappingStartMin(
+  item: TimedLayoutItem,
+  all: TimedLayoutItem[]
+): number | undefined {
+  const end = timedCollisionEndMin(item.startMin, item.endMin);
+  let best: number | undefined;
+  for (const other of all) {
+    if (!other || other.key === item.key) continue;
+    const oStart = Math.max(0, Math.min(24 * 60, Number(other.startMin) || 0));
+    const oEnd = timedCollisionEndMin(oStart, Number(other.endMin) || 0);
+    if (intervalsOverlap(item.startMin, end, oStart, oEnd)) continue;
+    if (oStart < end) continue; // earlier neighbor
+    if (best == null || oStart < best) best = oStart;
+  }
+  return best;
 }
 
 export function leadDisplayFromParts(
@@ -670,15 +868,9 @@ export function normalizeStoredCalendarEvents(raw: unknown): SummitCalendarEvent
         ? e.calendarId.trim()
         : undefined;
     const calendarColorBg =
-      typeof e.calendarColorBg === 'string' &&
-      /^#[0-9a-fA-F]{6}$/.test(e.calendarColorBg.trim())
-        ? e.calendarColorBg.trim()
-        : undefined;
+      normalizeCssHex(e.calendarColorBg) || undefined;
     const calendarColorFg =
-      typeof e.calendarColorFg === 'string' &&
-      /^#[0-9a-fA-F]{6}$/.test(e.calendarColorFg.trim())
-        ? e.calendarColorFg.trim()
-        : undefined;
+      normalizeCssHex(e.calendarColorFg) || undefined;
     out.push({
       id:
         typeof e.id === 'string' && e.id.trim()
@@ -817,15 +1009,10 @@ export function googleEventToSummitEvent(
   const calendarId =
     (event.calendarId || event.organizer?.email || '').trim() || 'primary';
   const calendarColorBg =
-    typeof event.calendarBackground === 'string' &&
-    /^#[0-9a-fA-F]{6}$/i.test(event.calendarBackground.trim())
-      ? event.calendarBackground.trim()
-      : undefined;
+    normalizeCssHex(event.calendarBackground) || undefined;
   const calendarColorFg =
-    typeof event.calendarForeground === 'string' &&
-    /^#[0-9a-fA-F]{6}$/i.test(event.calendarForeground.trim())
-      ? event.calendarForeground.trim()
-      : undefined;
+    normalizeCssHex(event.calendarForeground) ||
+    (calendarColorBg ? contrastTextOnBg(calendarColorBg) : undefined);
 
   return {
     id: meta.summitEventId || newSummitCalendarEventId(),
@@ -861,10 +1048,12 @@ export function mergeGoogleCalendarEventsIntoLocal(
   remote: GoogleEventForMerge[],
   opts?: { knownAdjustmentGoogleIds?: Set<string> }
 ): { events: SummitCalendarEvent[]; imported: number; updated: number } {
+  const localSafe = Array.isArray(local) ? local : [];
+  const remoteSafe = Array.isArray(remote) ? remote : [];
   const adjIds = opts?.knownAdjustmentGoogleIds || new Set<string>();
   const byGoogle = new Map<string, SummitCalendarEvent>();
   const byId = new Map<string, SummitCalendarEvent>();
-  for (const e of local) {
+  for (const e of localSafe) {
     byId.set(e.id, e);
     if (e.googleEventId) byGoogle.set(e.googleEventId, e);
   }
@@ -875,11 +1064,12 @@ export function mergeGoogleCalendarEventsIntoLocal(
   const nextById = new Map<string, SummitCalendarEvent>();
 
   // Keep Summit-only (no google id) for now
-  for (const e of local) {
+  for (const e of localSafe) {
     if (!e.googleEventId) nextById.set(e.id, e);
   }
 
-  for (const ge of remote) {
+  for (const ge of remoteSafe) {
+    if (!ge?.id) continue;
     const meta = parseGoogleEventSummitMeta(ge);
     if (meta.summitKind === 'adjustment' || adjIds.has(ge.id)) {
       continue;
@@ -909,6 +1099,7 @@ export function mergeGoogleCalendarEventsIntoLocal(
         calendarId: mapped.calendarId || existing.calendarId,
         // Prefer Google's event color (undefined = calendar default)
         colorId: mapped.colorId,
+        // Always take fresh pull colors when present (re-resolve every sync)
         calendarColorBg: mapped.calendarColorBg || existing.calendarColorBg,
         calendarColorFg: mapped.calendarColorFg || existing.calendarColorFg,
         updatedAt: mapped.updatedAt,
@@ -924,7 +1115,7 @@ export function mergeGoogleCalendarEventsIntoLocal(
 
   // Locals that pointed at Google ids no longer in this window keep local link
   // (don't strip — month window may not include them)
-  for (const e of local) {
+  for (const e of localSafe) {
     if (e.googleEventId && !touchedGoogle.has(e.googleEventId)) {
       if (!nextById.has(e.id)) nextById.set(e.id, e);
     }
