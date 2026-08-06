@@ -25,6 +25,16 @@ const eslintConfig = defineConfig([
       "react-hooks/refs": "off",
       "react-hooks/purity": "off",
       "react-hooks/immutability": "off",
+      // Monolith intentionally omits unstable callbacks from effect deps.
+      "react-hooks/exhaustive-deps": "off",
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+        },
+      ],
     },
   },
   {

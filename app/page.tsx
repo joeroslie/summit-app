@@ -63,7 +63,6 @@ import {
   formatEventTimeLabel,
   defaultEndTime,
   leadDisplayFromParts,
-  minutesFromMidnight,
   minutesToHhmm,
   snapMinutes,
   formatHourLabel,
@@ -1198,8 +1197,6 @@ const MITIGATION_LINE_GROUPS: {
 ];
 
 
-type MitigationCatalogItem = { itemKey: string; label: string };
-
 /** Fascia wrap edge — not a qty; eave+rake bills 2× rate, labeled clearly. */
 type FasciaEdge = 'eave' | 'rake' | 'eave_rake';
 
@@ -1887,17 +1884,6 @@ function normalizeJobFinancialSections(raw: unknown): JobFinancialSection[] {
   });
 }
 
-/** balanceDue = approvedJobValue − collected */
-function jobBalanceDue(lead: {
-  financialWorksheet?: unknown;
-  approvedJobValue?: number;
-  collected?: number;
-  sections?: unknown;
-}): number {
-  const fw = resolveFinancialWorksheet(lead);
-  return Math.max(0, (fw.approvedJobValue || 0) - (fw.collected || 0));
-}
-
 /** Sum of all section line amounts (optional cross-check vs approvedJobValue). */
 function jobSectionsTotal(sections?: JobFinancialSection[]): number {
   if (!sections?.length) return 0;
@@ -2406,7 +2392,7 @@ function parseStoredLeads(raw: string | null): Lead[] | null {
 
 function normalizeLeadNotes(raw: unknown): LeadNote[] {
   if (!Array.isArray(raw)) return [];
-  return raw.map((n, i) => {
+  return raw.map((n) => {
     if (typeof n === 'string') {
       return {
         id: newClientId('note'),
@@ -2915,7 +2901,7 @@ export default function SummitApp() {
   const [photosUploading, setPhotosUploading] = useState(false);
   const [docsUploading, setDocsUploading] = useState(false);
   const [docAddMenuOpen, setDocAddMenuOpen] = useState(false);
-  const [systemDocPreview, setSystemDocPreview] = useState<string | null>(null);
+  const [, setSystemDocPreview] = useState<string | null>(null);
   const [systemDocWorkspace, setSystemDocWorkspace] = useState<
     | null
     | 'takeoff'
@@ -3079,13 +3065,13 @@ export default function SummitApp() {
   const [mitigationPrices, setMitigationPrices] = useState<MitigationPriceRow[]>(
     []
   );
-  const [mitigationPricesReady, setMitigationPricesReady] = useState(false);
+  const [, setMitigationPricesReady] = useState(false);
   /** Mitigation cost sheet (internal calc twin of sell rates) */
   const [mitigationCosts, setMitigationCosts] = useState<MitigationCostRow[]>(
     []
   );
-  const [mitigationCostsReady, setMitigationCostsReady] = useState(false);
-  const [showMitigationInvoice, setShowMitigationInvoice] = useState(false);
+  const [, setMitigationCostsReady] = useState(false);
+  const [, setShowMitigationInvoice] = useState(false);
   /** Preview twin of estimate “See Estimate” */
   const [showMitigationPreview, setShowMitigationPreview] = useState(false);
   const [mitigationWorkspace, setMitigationWorkspace] =
@@ -3100,8 +3086,7 @@ export default function SummitApp() {
   );
   const [appInvoices, setAppInvoices] = useState<AppInvoice[]>([]);
   /** Manual override for pricing region (null = derive from job address) */
-  const [pricingRegionOverride, setPricingRegionOverride] =
-    useState<PricingRegion | null>(null);
+  const [pricingRegionOverride] = useState<PricingRegion | null>(null);
   /** When set, Jobs board shows only this pipeline stage (shared with Home cards). */
   const [pipelineFilter, setPipelineFilter] = useState<PipelineStage | null>(
     null
@@ -3131,7 +3116,7 @@ export default function SummitApp() {
   /** Company logo flattened onto white for PDFs (jsPDF often paints PNG alpha as black). */
   const companyLogoPdfRef = useRef('');
   const [themePref, setThemePref] = useState<ThemePreference>('auto');
-  const [themeMode, setThemeMode] = useState<ThemeMode>('day');
+  const [, setThemeMode] = useState<ThemeMode>('day');
   /** Google Calendar connection (from /api/google/calendar/status) */
   const [, setGcalConfigured] = useState(false);
   const [gcalConnected, setGcalConnected] = useState(false);
@@ -3223,7 +3208,7 @@ export default function SummitApp() {
   >([]);
   const [gcalCalendarListNeedsReconnect, setGcalCalendarListNeedsReconnect] =
     useState(false);
-  const [googleEventsLoading, setGoogleEventsLoading] = useState(false);
+  const [, setGoogleEventsLoading] = useState(false);
   const calendarCloudSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
@@ -3260,10 +3245,10 @@ export default function SummitApp() {
     createDefaultTaskList(),
   ]);
   const [activeTaskListId, setActiveTaskListId] = useState(DEFAULT_TASK_LIST_ID);
-  const [tasksBusy, setTasksBusy] = useState(false);
+  const [, setTasksBusy] = useState(false);
   const [gtasksNeedsReconnect, setGtasksNeedsReconnect] = useState(false);
-  const [gtasksLastError, setGtasksLastError] = useState<string | null>(null);
-  const [gtasksErrorKind, setGtasksErrorKind] = useState<
+  const [, setGtasksLastError] = useState<string | null>(null);
+  const [, setGtasksErrorKind] = useState<
     'scope' | 'api' | 'auth' | 'other' | null
   >(null);
   const [newTaskTitle, setNewTaskTitle] = useState('');
@@ -3318,16 +3303,6 @@ export default function SummitApp() {
   );
   const activePricingRegion: PricingRegion =
     pricingRegionOverride || addressPricingRegion;
-
-  const getMitigationRate = (
-    itemKey: string,
-    mode: 'insurance' | 'cash' = 'insurance'
-  ): number => {
-    const row = mitigationPrices.find((r) => r.item_key === itemKey);
-    if (!row) return 0;
-    const v = mode === 'cash' ? row.cash_retail : row.insurance_rate;
-    return typeof v === 'number' && !Number.isNaN(v) ? v : 0;
-  };
 
   const persistAppInvoices = (next: AppInvoice[]) => {
     setAppInvoices(next);
@@ -3446,9 +3421,6 @@ export default function SummitApp() {
       ? taskLists
       : [createDefaultTaskList()];
   const safeTasksState = Array.isArray(tasks) ? tasks : [];
-  const safeCalendarEventsState = Array.isArray(calendarEvents)
-    ? calendarEvents
-    : [];
   const safeGoogleCalendarList = Array.isArray(googleCalendarList)
     ? googleCalendarList
     : [];
@@ -3867,7 +3839,9 @@ export default function SummitApp() {
         setSystemDocWorkspace('mitigation');
         setMitigationDraft(parsed.draft);
       }
-    } catch (e) {}
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   // Poll Instant Roofer human orders while on Measurements (field notification path)
@@ -3892,7 +3866,9 @@ export default function SummitApp() {
           JSON.stringify({ workspace: 'mitigation', draft: mitigationDraft })
         );
       }
-    } catch (e) {}
+    } catch {
+      /* ignore */
+    }
   }, [systemDocWorkspace, mitigationDraft]);
 
   useEffect(() => {
@@ -3907,7 +3883,9 @@ export default function SummitApp() {
           sessionStorage.removeItem('summitMitigationWorkspace');
         }
       }
-    } catch (e) {}
+    } catch {
+      /* ignore */
+    }
   }, [systemDocWorkspace, mitigationDraft]);
 
 
@@ -3915,7 +3893,9 @@ export default function SummitApp() {
     setDocAddMenuOpen(false);
     try {
       setShowMitigationInvoice(false);
-    } catch (e) {}
+    } catch {
+      /* ignore */
+    }
     setMitigationDraft(null);
     // Stay in lead context — don't hijack sidebar to Documents hub
     if (isEditingLead && profileTab !== 'estimator') {
@@ -3977,7 +3957,7 @@ export default function SummitApp() {
     if (leadId == null) {
       setSystemDocWorkspace(null);
       setMitigationDraft(null);
-    try { sessionStorage.removeItem('summitMitigationWorkspace'); } catch (e) {}
+    try { sessionStorage.removeItem('summitMitigationWorkspace'); } catch { /* ignore */ }
       setInvoicePickerMode(true);
       setEstimatePickerQuery('');
       setShowEstimatePicker(true);
@@ -4626,58 +4606,8 @@ export default function SummitApp() {
         setShowEstimatePicker(true);
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- init draft once when workspace opens empty
+     
   }, [systemDocWorkspace]);
-
-  const openMitigationInvoice = (
-    kind: 'personal' | 'company',
-    opts?: { blank?: boolean }
-  ) => {
-    const lead =
-      currentLeadId != null
-        ? leads.find((l) => l.id === currentLeadId)
-        : null;
-    const name = lead
-      ? [lead.clientFirstName, lead.clientLastName].filter(Boolean).join(' ')
-      : '';
-    const addr = lead
-      ? [lead.clientAddress, lead.clientCity, lead.clientState, lead.clientZip]
-          .filter(Boolean)
-          .join(', ')
-      : '';
-    const entity: MitigationEntity =
-      kind === 'company' ? 'prowest' : 'roslie';
-    const draft: MitigationInvoiceDraft = {
-      entity,
-      rateMode: 'insurance',
-      invoiceFor: name,
-      location: addr,
-      job: lead?.jobNumber || '',
-      claimNumber: '',
-      date: new Date().toLocaleDateString(),
-      lines: [],
-      notes:
-        'Work performed to mitigate any further damages.\nLabor is included — price covers materials, labor, and roof access / set up.\nPlease forward to Insurance Company for reimbursement.',
-    };
-    setMitigationDraft(draft);
-    setActiveTarpGroupId(null);
-    if (opts?.blank) {
-      // blank PDF only (company library / quick download)
-      setTimeout(() => generateMitigationPdf({ blank: true, entity }), 0);
-      return;
-    }
-    // Full-page workspace (not popup)
-    setSystemDocWorkspace('mitigation');
-    setShowMitigationInvoice(false);
-  };
-
-  /** Alias used by phase-1 entry points */
-  const startMitigationInvoice = (leadId?: number | null) => {
-    if (leadId != null && leadId !== currentLeadId) {
-      setCurrentLeadId(leadId);
-    }
-    openMitigationWorkspace('personal');
-  };
 
   const repriceMitigationLines = (
     draft: MitigationInvoiceDraft,
@@ -4929,33 +4859,6 @@ export default function SummitApp() {
         };
       }
       return { ...prev, lines: [...prev.lines, line] };
-    });
-  };
-
-  const addMitigationLine = (itemKey: string) => {
-    if (!mitigationDraft) return;
-    const row = mitigationPriceForKey(itemKey);
-    if (!row) return;
-    const unit =
-      mitigationDraft.rateMode === 'cash'
-        ? Number(row.cash_retail) || 0
-        : Number(row.insurance_rate) || 0;
-    const line: MitigationLineItem = {
-      id: `${Date.now()}-${itemKey}`,
-      itemKey,
-      label: formatMitigationLineDescription({
-        itemKey,
-        label: row.label,
-        qty: 1,
-      }),
-      qty: 1,
-      unitPrice: unit,
-      amount: unit,
-      groupId: null,
-    };
-    setMitigationDraft({
-      ...mitigationDraft,
-      lines: [...mitigationDraft.lines, line],
     });
   };
 
@@ -5540,7 +5443,6 @@ export default function SummitApp() {
   useEffect(() => {
     if (process.env.NODE_ENV !== 'development' || !pricesReady) return;
     const r = activePricingRegion || 'central';
-    // eslint-disable-next-line no-console
     console.log('[Summit price debug]', {
       region: r,
       city: liveLeadForRegion?.clientCity || clientCity || '',
@@ -5582,7 +5484,6 @@ export default function SummitApp() {
     const ws = parseFloat(waste) || 0;
     const pt = pitch || '4/12';
     const flf = parseFloat(fasciaLF) || 0;
-    const dsh = parseFloat(deckingSheets) || 0;
     const panels = parseFloat(solarPanels) || 0;
     const hvac = parseFloat(hvacUnits) || 0;
     const sky = parseFloat(skylights) || 0;
@@ -6918,7 +6819,7 @@ export default function SummitApp() {
     ) {
       setGoogleCalendarColorMap({});
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- heal only when shape is wrong
+     
   }, [
     googleCalendarEvents,
     calendarEvents,
@@ -6990,14 +6891,14 @@ export default function SummitApp() {
     } catch {
       /* ignore */
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot after hydrate
+     
   }, [sessionReady]);
 
   // Re-probe token when opening Profile settings so Connected matches Calendar
   useEffect(() => {
     if (!sessionReady || activeTab !== 'settings') return;
     void refreshGcalStatus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- status probe on settings open
+     
   }, [sessionReady, activeTab]);
 
   // Quiet Google sync: app open / Calendar tab / month change / focus (debounced)
@@ -7042,7 +6943,7 @@ export default function SummitApp() {
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVis);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- quiet sync on tab/month/connect/focus
+     
   }, [
     sessionReady,
     gcalConnected,
@@ -7059,7 +6960,7 @@ export default function SummitApp() {
         console.error('Initial Google sync failed:', err);
       }
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per connect/hydrate
+     
   }, [sessionReady, gcalConnected]);
 
   // Remember Month | Week preference
@@ -13165,20 +13066,6 @@ export default function SummitApp() {
       applyLeadFields(lead);
     }
     showToast('Take-off assigned to lead');
-  };
-
-  const assignTakeoffToNewLead = async () => {
-    const jobNumber = await generateJobNumber();
-    const newLead = createEmptyLead({
-      jobNumber,
-      takeoff: { ...takeoffForm },
-    });
-    persistLeads([...leads, newLead]);
-    setCurrentLeadId(newLead.id);
-    setLeadToolReturnTab('overview');
-    exitLeadDocumentWorkspace({ returnTab: 'overview' });
-    applyLeadFields(newLead);
-    showToast('New lead created with take-off');
   };
 
   /** Leave estimator; keep unsaved estimate guard. Optionally return to source lead. */
