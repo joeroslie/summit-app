@@ -9,8 +9,17 @@
   "editor.codeActionsOnSave": {
     "source.fixAll.eslint": "explicit"
   },
+  "files.exclude": {
+    "**/.checkpoints": true,
+    "**/*.backup": true
+  },
+  "search.exclude": {
+    "**/.checkpoints": true,
+    "**/*.backup": true
+  },
   "files.watcherExclude": {
     "**/.next/**": true,
-    "**/node_modules/**": true
+    "**/node_modules/**": true,
+    "**/.checkpoints/**": true
   }
 }

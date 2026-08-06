@@ -8,9 +8,9 @@
  * Server:   lib/supabase/server.ts
  */
 
-import { NextResponse, type NextRequest } from 'next/server';
+import { NextResponse } from 'next/server';
 
-export async function middleware(_req: NextRequest) {
+export async function middleware() {
   // Pass-through only — no Supabase session work while disabled
   return NextResponse.next();
 }
