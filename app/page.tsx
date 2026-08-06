@@ -3122,6 +3122,11 @@ export default function SummitApp() {
   /** Monotonic pull generation — cloud hydrate must not resurrect post-pull deletes */
   const calendarGooglePullGenRef = useRef(0);
   const calendarCloudHydrateGenRef = useRef(0);
+  /**
+   * Mirrors lib/gcal-browser auth epoch after Disconnect so in-flight
+   * loadGoogleEvents / refreshGcalStatus cannot flip UI back to Connected.
+   */
+  const gcalAuthEpochRef = useRef(0);
   const rememberRetainedGoogleId = (googleEventId?: string | null) => {
     const id = (googleEventId || '').trim();
     if (!id) return;
@@ -5934,25 +5939,33 @@ export default function SummitApp() {
                         .filter((id): id is string => Boolean(id))
                     );
                     const prevIds = new Set(prevSafe.map((e) => e.id));
-                    // Cold start, no Google: cloud is fine as seed
+                    // Cold start, no Google: cloud is fine as seed — but never
+                    // rehydrate Google-imported events while disconnected.
                     if (
                       pullGen === 0 &&
                       !googleLinked &&
                       prevSafe.length === 0
                     ) {
+                      const seed = normalized.filter(
+                        (e) => e?.source !== 'google'
+                      );
                       try {
                         localStorage.setItem(
                           SUMMIT_CALENDAR_EVENTS_KEY,
-                          JSON.stringify(normalized)
+                          JSON.stringify(seed)
                         );
                       } catch {
                         /* ignore */
                       }
-                      return normalized;
+                      return seed;
                     }
                     const merged = [...prevSafe];
                     for (const ev of normalized) {
                       if (prevIds.has(ev.id)) continue;
+                      // Disconnected: never rehydrate Google-imported events from cloud
+                      if (!googleLinked && ev.source === 'google') {
+                        continue;
+                      }
                       // Skip cloud google-linked ghosts not in current local
                       // (especially after delete-on-pull)
                       if (
@@ -9325,6 +9338,7 @@ export default function SummitApp() {
   };
 
   const refreshGcalStatus = async () => {
+    const epochAtStart = gcalAuthEpochRef.current;
     // Prefer browser GIS session (Client ID only — no secret required)
     try {
       const {
@@ -9337,6 +9351,7 @@ export default function SummitApp() {
         loadGoogleIdentityScript,
         browserSessionHasTasksScope,
         probeGoogleTasksAccess,
+        getBrowserGcalAuthEpoch,
       } = await import('@/lib/gcal-browser');
       setGcalConfigured(isBrowserGcalConfigured());
       void loadGoogleIdentityScript().catch(() => undefined);
@@ -9344,6 +9359,16 @@ export default function SummitApp() {
       if (!session && isBrowserGcalLinked()) {
         // Survives browser restart: silent-refresh expired localStorage token
         session = await ensureBrowserGcalSession();
+      }
+      if (
+        epochAtStart !== gcalAuthEpochRef.current ||
+        epochAtStart !== getBrowserGcalAuthEpoch()
+      ) {
+        // Disconnect won the race — do not resurrect Connected
+        setGcalConnected(false);
+        setGcalEmail(null);
+        setGcalName(null);
+        return;
       }
       // Connected = linked on this device (token and/or prior email/scopes).
       // Profile + Calendar must share this — do not drop to "Connect" on expiry.
@@ -9367,6 +9392,15 @@ export default function SummitApp() {
           } else {
             // Scope claims Tasks — verify live (catches API-disabled / stale scope)
             const probe = await probeGoogleTasksAccess(session.accessToken);
+            if (
+              epochAtStart !== gcalAuthEpochRef.current ||
+              epochAtStart !== getBrowserGcalAuthEpoch()
+            ) {
+              setGcalConnected(false);
+              setGcalEmail(null);
+              setGcalName(null);
+              return;
+            }
             setGtasksNeedsReconnect(!probe.ok);
             if (probe.ok) {
               setGtasksLastError(null);
@@ -9386,12 +9420,56 @@ export default function SummitApp() {
         }
         return;
       }
+
+      // Browser GIS configured but not linked → disconnected (don't lie via cookie)
+      if (isBrowserGcalConfigured()) {
+        setGcalConnected(false);
+        setGcalEmail(null);
+        setGcalName(null);
+        // Drop Google-imported locals so cloud hydrate / prior pulls can't look linked
+        setCalendarEvents((prev) => {
+          const safe = Array.isArray(prev) ? prev : [];
+          if (!safe.some((e) => e?.source === 'google')) return prev;
+          const next = safe.filter((e) => e?.source !== 'google');
+          try {
+            localStorage.setItem(
+              SUMMIT_CALENDAR_EVENTS_KEY,
+              JSON.stringify(next)
+            );
+          } catch {
+            /* ignore */
+          }
+          return next;
+        });
+        setGoogleEventsSafe([]);
+      }
     } catch {
       /* ignore */
     }
 
-    // Fallback: server OAuth cookie session
+    // Fallback: server OAuth cookie session (legacy — only when browser GIS unused)
     try {
+      const {
+        isBrowserGcalConfigured,
+        isBrowserGcalLinked,
+        getBrowserGcalAuthEpoch,
+      } = await import('@/lib/gcal-browser');
+      if (
+        epochAtStart !== gcalAuthEpochRef.current ||
+        epochAtStart !== getBrowserGcalAuthEpoch()
+      ) {
+        setGcalConnected(false);
+        setGcalEmail(null);
+        setGcalName(null);
+        return;
+      }
+      // Browser GIS is source of truth when configured — never resurrect from cookie
+      if (isBrowserGcalConfigured() || isBrowserGcalLinked()) {
+        if (isBrowserGcalLinked()) {
+          setGcalConnected(true);
+        }
+        return;
+      }
       const res = await fetch('/api/google/calendar/status', {
         cache: 'no-store',
       });
@@ -9403,12 +9481,11 @@ export default function SummitApp() {
         name?: string | null;
       };
       setGcalConfigured((c) => c || Boolean(data.configured));
-      // Never let a negative server cookie overwrite a browser-linked session
-      const {
-        isBrowserGcalLinked,
-      } = await import('@/lib/gcal-browser');
-      if (isBrowserGcalLinked()) {
-        setGcalConnected(true);
+      if (
+        epochAtStart !== gcalAuthEpochRef.current ||
+        epochAtStart !== getBrowserGcalAuthEpoch()
+      ) {
+        setGcalConnected(false);
         return;
       }
       setGcalConnected(Boolean(data.connected));
@@ -9463,13 +9540,24 @@ export default function SummitApp() {
     /** Inclusive month cursor — loads that month’s grid window */
     cursor?: Date;
   }) => {
+    const epochAtStart = gcalAuthEpochRef.current;
     try {
       const {
         ensureBrowserGcalSession,
         listUpcomingGoogleEvents,
         hasBrowserGcalToken,
+        isBrowserGcalLinked,
+        getBrowserGcalAuthEpoch,
       } = await import('@/lib/gcal-browser');
       const session = await ensureBrowserGcalSession();
+      if (
+        epochAtStart !== gcalAuthEpochRef.current ||
+        epochAtStart !== getBrowserGcalAuthEpoch()
+      ) {
+        setGcalConnected(false);
+        setGoogleEventsSafe([]);
+        return;
+      }
       if (!session?.accessToken) {
         if (!opts?.silent) {
           showToast(
@@ -9479,7 +9567,11 @@ export default function SummitApp() {
           );
         }
         // Token present → still Connected in Profile/Calendar; needs Reconnect
-        setGcalConnected(hasBrowserGcalToken());
+        setGcalConnected(hasBrowserGcalToken() || isBrowserGcalLinked());
+        return;
+      }
+      if (!hasBrowserGcalToken() && !isBrowserGcalLinked()) {
+        setGcalConnected(false);
         return;
       }
       setGcalConnected(true);
@@ -9670,6 +9762,16 @@ export default function SummitApp() {
             normalizeCssHex(colors?.fg) || colors?.fg || ev.calendarColorFg,
         };
       });
+      // Disconnect mid-pull: never persist Google events or flip Connected
+      if (
+        epochAtStart !== gcalAuthEpochRef.current ||
+        epochAtStart !== getBrowserGcalAuthEpoch() ||
+        (!hasBrowserGcalToken() && !isBrowserGcalLinked())
+      ) {
+        setGcalConnected(false);
+        setGoogleEventsSafe([]);
+        return;
+      }
       calendarGooglePullGenRef.current += 1;
       // Authoritative Summit store — single render path for all Google + local events
       persistCalendarEvents(recolored);
@@ -9823,13 +9925,39 @@ export default function SummitApp() {
 
   /** Pull Calendar + Tasks from Google and push unsynced Summit events. Soft-fail always. */
   const refreshFromGoogle = async (opts?: { silent?: boolean; cursor?: Date }) => {
+    const epochAtStart = gcalAuthEpochRef.current;
     try {
+      const {
+        hasBrowserGcalToken,
+        isBrowserGcalLinked,
+        getBrowserGcalAuthEpoch,
+      } = await import('@/lib/gcal-browser');
+      if (
+        !gcalConnected &&
+        !hasBrowserGcalToken() &&
+        !isBrowserGcalLinked()
+      ) {
+        return;
+      }
       await loadGoogleEvents({ silent: opts?.silent, cursor: opts?.cursor });
+      if (
+        epochAtStart !== gcalAuthEpochRef.current ||
+        epochAtStart !== getBrowserGcalAuthEpoch() ||
+        (!hasBrowserGcalToken() && !isBrowserGcalLinked())
+      ) {
+        return;
+      }
       // Push Summit-only events after pull so bi-directional stays accurate
       try {
         await pushUnsyncedCalendarEvents({ silent: true });
       } catch (err) {
         console.error('Push unsynced calendar events failed:', err);
+      }
+      if (
+        epochAtStart !== gcalAuthEpochRef.current ||
+        epochAtStart !== getBrowserGcalAuthEpoch()
+      ) {
+        return;
       }
       // Don't gate on React state — loadGoogleEvents may have just refreshed the token
       try {
@@ -9840,6 +9968,12 @@ export default function SummitApp() {
         });
       } catch (err) {
         console.error('Tasks sync during calendar refresh failed:', err);
+      }
+      if (
+        epochAtStart !== gcalAuthEpochRef.current ||
+        epochAtStart !== getBrowserGcalAuthEpoch()
+      ) {
+        return;
       }
       const syncedAt = new Date().toISOString();
       setGcalLastSync(syncedAt);
@@ -10017,7 +10151,7 @@ export default function SummitApp() {
         hasBrowserGcalToken,
       } = await import('@/lib/gcal-browser');
       const session = await ensureBrowserGcalSession();
-      if (session?.accessToken) {
+      if (session?.accessToken && hasBrowserGcalToken()) {
         setGcalConnected(true);
         const out = await syncManualEventWithBrowserToken(
           session.accessToken,
@@ -10115,7 +10249,7 @@ export default function SummitApp() {
         return;
       }
       const session = await ensureBrowserGcalSession();
-      if (session?.accessToken) {
+      if (session?.accessToken && hasBrowserGcalToken()) {
         setGcalConnected(true);
         await deleteGoogleEventWithBrowserToken(
           session.accessToken,
@@ -10153,6 +10287,8 @@ export default function SummitApp() {
       const session = await connectGoogleCalendarBrowser({
         forceConsent: opts?.forceConsent ?? true,
       });
+      const { getBrowserGcalAuthEpoch } = await import('@/lib/gcal-browser');
+      gcalAuthEpochRef.current = getBrowserGcalAuthEpoch();
       setGcalConfigured(true);
       setGcalConnected(true);
       setGcalEmail(session.email ?? null);
@@ -10254,25 +10390,83 @@ export default function SummitApp() {
   const disconnectGoogleCalendar = async () => {
     setGcalBusy(true);
     try {
-      const { disconnectGoogleCalendarBrowser } = await import(
-        '@/lib/gcal-browser'
-      );
+      const {
+        disconnectGoogleCalendarBrowser,
+        getBrowserGcalAuthEpoch,
+        clearBrowserGcalSession,
+        hasBrowserGcalToken,
+        isBrowserGcalLinked,
+      } = await import('@/lib/gcal-browser');
+      // Epoch first — invalidates in-flight silent refresh / pull / status probe
       disconnectGoogleCalendarBrowser();
+      clearBrowserGcalSession(); // belt-and-suspenders
+      gcalAuthEpochRef.current = getBrowserGcalAuthEpoch();
       await fetch('/api/google/calendar/disconnect', { method: 'POST' }).catch(
         () => undefined
       );
+
+      // UI truth immediately — Profile + Calendar share gcalConnected
       setGcalConnected(false);
       setGcalEmail(null);
       setGcalName(null);
       setGoogleEventsSafe([]);
       setGoogleCalendarColorMap({});
       setGoogleCalendarList([]);
+      setGcalCalendarListNeedsReconnect(false);
       setGtasksNeedsReconnect(false);
       setGtasksLastError(null);
       setGtasksErrorKind(null);
+      setGcalLastSync(null);
+      try {
+        localStorage.removeItem('summitGcalLastSync');
+      } catch {
+        /* ignore */
+      }
+      retainGoogleIdsRef.current.clear();
+
+      // Purge Google-imported events so the grid doesn't look still connected.
+      // Keep Summit-created events (even if they had a googleEventId when linked).
+      setCalendarEvents((prev) => {
+        const safe = Array.isArray(prev) ? prev : [];
+        const next = safe.filter((e) => e?.source !== 'google');
+        try {
+          localStorage.setItem(
+            SUMMIT_CALENDAR_EVENTS_KEY,
+            JSON.stringify(next)
+          );
+        } catch {
+          /* ignore */
+        }
+        return next;
+      });
+
+      // Final truth check — storage must be empty after disconnect
+      if (hasBrowserGcalToken() || isBrowserGcalLinked()) {
+        disconnectGoogleCalendarBrowser();
+        clearBrowserGcalSession();
+        gcalAuthEpochRef.current = getBrowserGcalAuthEpoch();
+      }
+      setGcalConnected(false);
       showToast('Google Calendar disconnected');
     } catch {
-      showToast('Could not disconnect');
+      // Soft-fail: still force disconnected UI if anything threw mid-cleanup
+      try {
+        const {
+          clearBrowserGcalSession,
+          disconnectGoogleCalendarBrowser,
+          getBrowserGcalAuthEpoch,
+        } = await import('@/lib/gcal-browser');
+        disconnectGoogleCalendarBrowser();
+        clearBrowserGcalSession();
+        gcalAuthEpochRef.current = getBrowserGcalAuthEpoch();
+      } catch {
+        /* ignore */
+      }
+      setGcalConnected(false);
+      setGcalEmail(null);
+      setGcalName(null);
+      setGoogleEventsSafe([]);
+      showToast('Google Calendar disconnected');
     } finally {
       setGcalBusy(false);
     }
@@ -10352,12 +10546,27 @@ export default function SummitApp() {
       if (!opts?.silent) showToast('Connect Google first');
       return;
     }
+    const epochAtStart = gcalAuthEpochRef.current;
     setTasksBusy(true);
     try {
       const {
         ensureBrowserGcalSession,
         browserSessionHasTasksScope,
+        hasBrowserGcalToken,
+        isBrowserGcalLinked,
+        getBrowserGcalAuthEpoch,
       } = await import('@/lib/gcal-browser');
+      if (
+        epochAtStart !== gcalAuthEpochRef.current ||
+        epochAtStart !== getBrowserGcalAuthEpoch() ||
+        (!hasBrowserGcalToken() && !isBrowserGcalLinked() && !gcalConnected)
+      ) {
+        if (!hasBrowserGcalToken() && !isBrowserGcalLinked()) {
+          setGcalConnected(false);
+        }
+        if (!opts?.silent) showToast('Connect Google first');
+        return;
+      }
       const {
         listGoogleTasks,
         listGoogleTaskLists,
@@ -10365,10 +10574,15 @@ export default function SummitApp() {
         mergeGoogleListsIntoLocal,
       } = await import('@/lib/google-tasks');
       const session = await ensureBrowserGcalSession();
+      if (
+        epochAtStart !== gcalAuthEpochRef.current ||
+        epochAtStart !== getBrowserGcalAuthEpoch()
+      ) {
+        setGcalConnected(false);
+        return;
+      }
       if (!session?.accessToken) {
-        setGcalConnected(
-          (await import('@/lib/gcal-browser')).hasBrowserGcalToken()
-        );
+        setGcalConnected(hasBrowserGcalToken() || isBrowserGcalLinked());
         if (!opts?.silent) showToast('Connect Google first');
         return;
       }
@@ -10487,14 +10701,20 @@ export default function SummitApp() {
       }
       if (/expired|401/i.test(msg)) {
         // Keep Connected when token/email still on device — show Reconnect, don't flip Profile to Connect
-        const { isBrowserGcalLinked } = await import('@/lib/gcal-browser');
-        setGcalConnected(isBrowserGcalLinked());
-        if (isBrowserGcalLinked()) {
-          setGtasksNeedsReconnect(true);
-          setGtasksErrorKind('other');
-          setGtasksLastError(
-            'Google session expired — tap Reconnect to refresh access.'
-          );
+        const { isBrowserGcalLinked, getBrowserGcalAuthEpoch } = await import(
+          '@/lib/gcal-browser'
+        );
+        if (epochAtStart !== getBrowserGcalAuthEpoch()) {
+          setGcalConnected(false);
+        } else {
+          setGcalConnected(isBrowserGcalLinked());
+          if (isBrowserGcalLinked()) {
+            setGtasksNeedsReconnect(true);
+            setGtasksErrorKind('other');
+            setGtasksLastError(
+              'Google session expired — tap Reconnect to refresh access.'
+            );
+          }
         }
       }
       if (!opts?.silent) showToast(msg);
@@ -18059,9 +18279,15 @@ export default function SummitApp() {
             todayIso ||
             toLocalIsoDate(calendarCursor);
 
-          // Single paint source after merge (googleCalendarEvents is pull mirror only)
+          // Single paint source after merge (googleCalendarEvents is pull mirror only).
+          // When disconnected, hide Google-imported events so UI can't look linked.
           const safeCalendarEvents = Array.isArray(calendarEvents)
-            ? calendarEvents.filter((e) => e && e.startDate)
+            ? calendarEvents.filter(
+                (e) =>
+                  e &&
+                  e.startDate &&
+                  (gcalConnected || e.source !== 'google')
+              )
             : [];
           const safeTasks = Array.isArray(tasks)
             ? tasks.filter((t) => t && typeof t.title === 'string')

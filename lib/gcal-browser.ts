@@ -36,6 +36,16 @@ const TOKEN_EXP_KEY = 'summit_gcal_browser_token_exp';
 const EMAIL_KEY = 'summit_gcal_browser_email';
 const SCOPES_KEY = 'summit_gcal_browser_scopes';
 
+/**
+ * Bumped on intentional Disconnect so in-flight silent GIS refresh / connect
+ * callbacks cannot rewrite localStorage and resurrect "Connected".
+ */
+let browserGcalAuthEpoch = 0;
+
+export function getBrowserGcalAuthEpoch(): number {
+  return browserGcalAuthEpoch;
+}
+
 export type BrowserGcalSession = {
   accessToken: string;
   expiresAt: number;
@@ -192,13 +202,23 @@ export function readBrowserGcalEmail(): string | null {
   }
 }
 
-export function writeBrowserGcalSession(session: BrowserGcalSession) {
+export function writeBrowserGcalSession(
+  session: BrowserGcalSession,
+  opts?: { expectedEpoch?: number }
+): boolean {
+  if (
+    opts?.expectedEpoch != null &&
+    opts.expectedEpoch !== browserGcalAuthEpoch
+  ) {
+    return false;
+  }
   storageSet(TOKEN_KEY, session.accessToken);
   storageSet(TOKEN_EXP_KEY, String(session.expiresAt));
   if (session.email) storageSet(EMAIL_KEY, session.email);
   else storageRemove(EMAIL_KEY);
   if (session.scopes) storageSet(SCOPES_KEY, session.scopes);
   else storageRemove(SCOPES_KEY);
+  return true;
 }
 
 export function clearBrowserGcalSession() {
@@ -508,13 +528,21 @@ export async function connectGoogleCalendarBrowser(opts?: {
 
   // Reconnect for Tasks: revoke + clear localStorage so Google cannot silently
   // reuse a Calendar-only token when we request Calendar + Tasks together.
+  // Note: revokeBrowserGcalToken does NOT bump auth epoch (Disconnect does).
   if (opts?.forceConsent && !opts?.silent) {
     await revokeBrowserGcalToken();
     clearBrowserGcalSession();
   }
 
+  // Capture after forceConsent clear so Disconnect mid-popup invalidates write.
+  const epochAtStart = browserGcalAuthEpoch;
+
   try {
     await loadGoogleIdentityScript();
+
+    if (epochAtStart !== browserGcalAuthEpoch) {
+      return Promise.reject(new Error('Google sign-in cancelled — disconnected'));
+    }
 
     const session = await new Promise<BrowserGcalSession>((resolve, reject) => {
       const oauth2 = window.google?.accounts?.oauth2;
@@ -529,6 +557,10 @@ export async function connectGoogleCalendarBrowser(opts?: {
         include_granted_scopes: true,
         callback: (resp) => {
           void (async () => {
+            if (epochAtStart !== browserGcalAuthEpoch) {
+              reject(new Error('Google sign-in cancelled — disconnected'));
+              return;
+            }
             if (resp.error || !resp.access_token) {
               reject(
                 new Error(
@@ -543,6 +575,11 @@ export async function connectGoogleCalendarBrowser(opts?: {
             }
             const expiresIn = resp.expires_in ?? 3600;
             const email = await fetchTokenEmail(resp.access_token);
+
+            if (epochAtStart !== browserGcalAuthEpoch) {
+              reject(new Error('Google sign-in cancelled — disconnected'));
+              return;
+            }
 
             // Authoritative scopes from tokeninfo (GIS often omits resp.scope).
             let scopeList = normalizeOAuthScopes(resp.scope);
@@ -565,7 +602,10 @@ export async function connectGoogleCalendarBrowser(opts?: {
               email,
               scopes: granted,
             };
-            writeBrowserGcalSession(next);
+            if (!writeBrowserGcalSession(next, { expectedEpoch: epochAtStart })) {
+              reject(new Error('Google sign-in cancelled — disconnected'));
+              return;
+            }
             resolve(next);
           })();
         },
@@ -590,10 +630,20 @@ export async function connectGoogleCalendarBrowser(opts?: {
       }
     });
 
+    if (epochAtStart !== browserGcalAuthEpoch) {
+      clearBrowserGcalSession();
+      return Promise.reject(new Error('Google sign-in cancelled — disconnected'));
+    }
+
     return session;
   } catch (err) {
-    if (previous && opts?.forceConsent && !opts?.silent) {
-      writeBrowserGcalSession(previous);
+    if (
+      previous &&
+      opts?.forceConsent &&
+      !opts?.silent &&
+      epochAtStart === browserGcalAuthEpoch
+    ) {
+      writeBrowserGcalSession(previous, { expectedEpoch: epochAtStart });
     }
     throw err;
   }
@@ -614,28 +664,41 @@ export async function ensureBrowserGcalSession(): Promise<BrowserGcalSession | n
     return null;
   }
 
+  const epochAtStart = browserGcalAuthEpoch;
   try {
-    return await connectGoogleCalendarBrowser({ silent: true });
+    const session = await connectGoogleCalendarBrowser({ silent: true });
+    if (epochAtStart !== browserGcalAuthEpoch) return null;
+    return session;
   } catch {
     // Do not clearBrowserGcalSession — that made Profile say "not connected"
     // while Calendar still showed pulled Google events.
     // Return null so callers don't hit APIs with a dead token; UI uses
-    // hasBrowserGcalToken() for Connected state.
+    // hasBrowserGcalToken() / isBrowserGcalLinked() for Connected state.
     return null;
   }
 }
 
+/**
+ * Intentional Disconnect: bump auth epoch (kills in-flight silent refresh),
+ * revoke GIS token best-effort, clear ALL local Google auth keys.
+ */
 export function disconnectGoogleCalendarBrowser() {
+  browserGcalAuthEpoch += 1;
   const session =
     readBrowserGcalSession() || readRawBrowserGcalSession();
-  if (session?.accessToken && window.google?.accounts?.oauth2?.revoke) {
+  const token = session?.accessToken;
+  // Clear first so UI / hasBrowserGcalToken / isBrowserGcalLinked flip immediately
+  clearBrowserGcalSession();
+  if (token && typeof window !== 'undefined') {
     try {
-      window.google.accounts.oauth2.revoke(session.accessToken);
+      const revoke = window.google?.accounts?.oauth2?.revoke;
+      if (revoke) {
+        revoke(token, () => undefined);
+      }
     } catch {
       /* ignore */
     }
   }
-  clearBrowserGcalSession();
 }
 
 export type GoogleCalendarListEntry = {
