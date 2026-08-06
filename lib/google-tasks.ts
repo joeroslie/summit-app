@@ -45,11 +45,33 @@ export type SummitTask = {
   completed: boolean;
   completedAt?: string;
   googleTaskId?: string;
+  /**
+   * Provenance for disconnect purge (twins calendar event `source`):
+   * - local: created in Summit (kept when Google disconnects)
+   * - google: imported from Google Tasks (cleared/hidden when disconnected)
+   */
+  source?: 'local' | 'google';
+  /** Soft-delete timestamp — in Tasks Trash until permanently removed */
+  deletedAt?: string;
   /** Local Summit list id */
   listId: string;
   updatedAt: string;
   createdAt: string;
 };
+
+/** True when this task must clear/hide on Google disconnect. */
+export function isGoogleSourcedTask(t: SummitTask): boolean {
+  if (!t) return false;
+  if (t.source === 'local') return false;
+  if (t.source === 'google') return true;
+  // Legacy rows with a Google id and no source → treat as Google-imported
+  return Boolean(t.googleTaskId);
+}
+
+/** Active (not soft-deleted) tasks. */
+export function isActiveSummitTask(t: SummitTask): boolean {
+  return Boolean(t) && !t.deletedAt;
+}
 
 export const DEFAULT_TASK_LIST_ID = 'default';
 export const DEFAULT_TASK_LIST_TITLE = 'My Tasks';
@@ -114,6 +136,7 @@ export function googleTaskToSummit(
     completed,
     completedAt: completed ? gt.completed || gt.updated || now : undefined,
     googleTaskId: gt.id,
+    source: 'google',
     listId,
     updatedAt: gt.updated || now,
     createdAt: gt.updated || now,
@@ -331,12 +354,14 @@ export async function deleteGoogleTask(
  * - Update locals that already map to a Google id
  * - Import Google-only tasks
  * - Leave Summit-only locals alone (caller should push those)
+ * - Google delete (id absent from successful pull) → remove from Summit
+ * - Soft-deleted locals are kept (not resurrected from Google)
  */
 export function mergeGoogleTasksIntoLocal(
   local: SummitTask[],
   remote: GoogleTaskItem[],
   listId: string
-): { tasks: SummitTask[]; imported: number; updated: number } {
+): { tasks: SummitTask[]; imported: number; updated: number; removed: number } {
   const localSafe = Array.isArray(local) ? local : [];
   const remoteSafe = Array.isArray(remote) ? remote : [];
   const byGoogle = new Map<string, SummitTask>();
@@ -346,10 +371,11 @@ export function mergeGoogleTasksIntoLocal(
 
   let imported = 0;
   let updated = 0;
+  let removed = 0;
   const touchedGoogleIds = new Set<string>();
   const next: SummitTask[] = [];
 
-  // Keep tasks from other lists + Summit-only on this list
+  // Keep tasks from other lists + Summit-only on this list (incl. soft-deleted)
   for (const t of localSafe) {
     if (!t) continue;
     if (t.listId !== listId) {
@@ -360,9 +386,14 @@ export function mergeGoogleTasksIntoLocal(
   }
 
   for (const gt of remoteSafe) {
-    if (!gt?.id) continue;
+    if (!gt?.id || gt.deleted) continue;
     touchedGoogleIds.add(gt.id);
     const existing = byGoogle.get(gt.id);
+    // Soft-deleted locally — do not resurrect from Google pull
+    if (existing?.deletedAt) {
+      next.push(existing);
+      continue;
+    }
     const mapped = googleTaskToSummit(gt, listId);
     if (existing) {
       const merged: SummitTask = {
@@ -373,8 +404,10 @@ export function mergeGoogleTasksIntoLocal(
         completed: mapped.completed,
         completedAt: mapped.completedAt,
         googleTaskId: gt.id,
+        source: existing.source === 'local' ? 'local' : 'google',
         listId,
         updatedAt: mapped.updatedAt,
+        deletedAt: undefined,
       };
       next.push(merged);
       updated += 1;
@@ -384,7 +417,7 @@ export function mergeGoogleTasksIntoLocal(
     }
   }
 
-  // Locals on this list that pointed at Google ids no longer present stay local
+  // Locals linked to Google ids no longer on the remote list → gone (Google delete)
   for (const t of localSafe) {
     if (
       t &&
@@ -392,12 +425,16 @@ export function mergeGoogleTasksIntoLocal(
       t.googleTaskId &&
       !touchedGoogleIds.has(t.googleTaskId)
     ) {
-      next.push({ ...t, googleTaskId: undefined });
+      // Soft-deleted local with stale Google id — drop permanently on pull
+      removed += 1;
     }
   }
 
   // Stable-ish: incomplete with due date first, then incomplete, then completed
   next.sort((a, b) => {
+    if (Boolean(a.deletedAt) !== Boolean(b.deletedAt)) {
+      return a.deletedAt ? 1 : -1;
+    }
     if (a.completed !== b.completed) return a.completed ? 1 : -1;
     const ad = a.dueDate || '9999';
     const bd = b.dueDate || '9999';
@@ -405,7 +442,7 @@ export function mergeGoogleTasksIntoLocal(
     return a.title.localeCompare(b.title);
   });
 
-  return { tasks: next, imported, updated };
+  return { tasks: next, imported, updated, removed };
 }
 
 /**

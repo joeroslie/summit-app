@@ -31,6 +31,8 @@ import {
 import {
   createDefaultTaskList,
   DEFAULT_TASK_LIST_ID,
+  isActiveSummitTask,
+  isGoogleSourcedTask,
   newSummitTaskId,
   newSummitTaskListId,
   type SummitTask,
@@ -172,6 +174,16 @@ function normalizeStoredTasks(raw: unknown): SummitTask[] {
       typeof t.listId === 'string' && t.listId.trim()
         ? t.listId.trim()
         : DEFAULT_TASK_LIST_ID;
+    const source: SummitTask['source'] =
+      t.source === 'google' || t.source === 'local'
+        ? t.source
+        : typeof t.googleTaskId === 'string' && t.googleTaskId
+          ? 'google'
+          : 'local';
+    const deletedAt =
+      typeof t.deletedAt === 'string' && t.deletedAt.trim()
+        ? t.deletedAt.trim()
+        : undefined;
     out.push({
       id,
       title,
@@ -182,12 +194,25 @@ function normalizeStoredTasks(raw: unknown): SummitTask[] {
         typeof t.completedAt === 'string' ? t.completedAt : undefined,
       googleTaskId:
         typeof t.googleTaskId === 'string' ? t.googleTaskId : undefined,
+      source,
+      deletedAt,
       listId,
       updatedAt: typeof t.updatedAt === 'string' ? t.updatedAt : now,
       createdAt: typeof t.createdAt === 'string' ? t.createdAt : now,
     });
   }
   return out;
+}
+
+/** Drop Google-imported tasks (disconnect / disconnected hydrate). */
+function purgeGoogleSourcedTasks(tasks: SummitTask[]): SummitTask[] {
+  const safe = Array.isArray(tasks) ? tasks : [];
+  return safe.filter((t) => t && !isGoogleSourcedTask(t));
+}
+
+/** Tasks visible while Google is disconnected: Summit-local only, not trashed. */
+function tasksVisibleWhenDisconnected(tasks: SummitTask[]): SummitTask[] {
+  return purgeGoogleSourcedTasks(tasks).filter(isActiveSummitTask);
 }
 
 function normalizeStoredTaskLists(raw: unknown): SummitTaskList[] {
@@ -3235,6 +3260,9 @@ export default function SummitApp() {
     null
   );
   const [renameTaskListTitle, setRenameTaskListTitle] = useState('');
+  /** Completed + Trash sections collapse by default (Google Tasks-style folders). */
+  const [tasksCompletedOpen, setTasksCompletedOpen] = useState(false);
+  const [tasksTrashOpen, setTasksTrashOpen] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   /** Desktop: icon rail vs full labels. Mobile uses drawer (`sidebarOpen`). */
@@ -6018,6 +6046,15 @@ export default function SummitApp() {
                 }
               }
               if (cloudTasks) {
+                let googleLinkedForTasks = false;
+                try {
+                  const { hasBrowserGcalToken, isBrowserGcalLinked } =
+                    await import('@/lib/gcal-browser');
+                  googleLinkedForTasks =
+                    hasBrowserGcalToken() || isBrowserGcalLinked();
+                } catch {
+                  googleLinkedForTasks = false;
+                }
                 const lists = normalizeStoredTaskLists(cloudTasks.lists);
                 if (lists.length) {
                   setTaskLists(lists);
@@ -6030,7 +6067,11 @@ export default function SummitApp() {
                     /* ignore */
                   }
                 }
-                const t = normalizeStoredTasks(cloudTasks.tasks);
+                let t = normalizeStoredTasks(cloudTasks.tasks);
+                // Disconnected: never rehydrate Google-imported tasks from cloud
+                if (!googleLinkedForTasks) {
+                  t = purgeGoogleSourcedTasks(t);
+                }
                 if (t.length) {
                   setTasks(t);
                   try {
@@ -6038,6 +6079,22 @@ export default function SummitApp() {
                   } catch {
                     /* ignore */
                   }
+                } else if (!googleLinkedForTasks) {
+                  // Empty cloud must not wipe Summit-local tasks — only purge Google rows
+                  setTasks((prev) => {
+                    const safe = Array.isArray(prev) ? prev : [];
+                    if (!safe.some(isGoogleSourcedTask)) return prev;
+                    const next = purgeGoogleSourcedTasks(safe);
+                    try {
+                      localStorage.setItem(
+                        SUMMIT_TASKS_KEY,
+                        JSON.stringify(next)
+                      );
+                    } catch {
+                      /* ignore */
+                    }
+                    return next;
+                  });
                 }
                 if (
                   cloudTasks.activeListId &&
@@ -9442,6 +9499,20 @@ export default function SummitApp() {
           return next;
         });
         setGoogleEventsSafe([]);
+        setTasks((prev) => {
+          const safe = Array.isArray(prev) ? prev : [];
+          if (!safe.some(isGoogleSourcedTask)) return prev;
+          const next = purgeGoogleSourcedTasks(safe);
+          try {
+            localStorage.setItem(SUMMIT_TASKS_KEY, JSON.stringify(next));
+          } catch {
+            /* ignore */
+          }
+          return next;
+        });
+        setGtasksNeedsReconnect(false);
+        setGtasksLastError(null);
+        setGtasksErrorKind(null);
       }
     } catch {
       /* ignore */
@@ -10440,6 +10511,19 @@ export default function SummitApp() {
         return next;
       });
 
+      // Same epoch barrier for Tasks: purge Google-imported tasks + clear chips.
+      // Keep Summit-local tasks (source local / no Google provenance).
+      setTasks((prev) => {
+        const next = purgeGoogleSourcedTasks(Array.isArray(prev) ? prev : []);
+        try {
+          localStorage.setItem(SUMMIT_TASKS_KEY, JSON.stringify(next));
+        } catch {
+          /* ignore */
+        }
+        scheduleCloudTasksSave(next, taskLists, activeTaskListId);
+        return next;
+      });
+
       // Final truth check — storage must be empty after disconnect
       if (hasBrowserGcalToken() || isBrowserGcalLinked()) {
         disconnectGoogleCalendarBrowser();
@@ -10447,7 +10531,7 @@ export default function SummitApp() {
         gcalAuthEpochRef.current = getBrowserGcalAuthEpoch();
       }
       setGcalConnected(false);
-      showToast('Google Calendar disconnected');
+      showToast('Google disconnected');
     } catch {
       // Soft-fail: still force disconnected UI if anything threw mid-cleanup
       try {
@@ -10466,7 +10550,16 @@ export default function SummitApp() {
       setGcalEmail(null);
       setGcalName(null);
       setGoogleEventsSafe([]);
-      showToast('Google Calendar disconnected');
+      setTasks((prev) => {
+        const next = purgeGoogleSourcedTasks(Array.isArray(prev) ? prev : []);
+        try {
+          localStorage.setItem(SUMMIT_TASKS_KEY, JSON.stringify(next));
+        } catch {
+          /* ignore */
+        }
+        return next;
+      });
+      showToast('Google disconnected');
     } finally {
       setGcalBusy(false);
     }
@@ -10476,15 +10569,33 @@ export default function SummitApp() {
     task: SummitTask,
     listsOverride?: SummitTaskList[]
   ): Promise<SummitTask> => {
+    if (task.deletedAt) return task;
+    const epochAtStart = gcalAuthEpochRef.current;
     const {
       ensureBrowserGcalSession,
       browserSessionHasTasksScope,
+      getBrowserGcalAuthEpoch,
+      hasBrowserGcalToken,
+      isBrowserGcalLinked,
     } = await import('@/lib/gcal-browser');
+    if (
+      epochAtStart !== gcalAuthEpochRef.current ||
+      epochAtStart !== getBrowserGcalAuthEpoch() ||
+      (!hasBrowserGcalToken() && !isBrowserGcalLinked())
+    ) {
+      return task;
+    }
     const {
       createGoogleTask,
       updateGoogleTask,
     } = await import('@/lib/google-tasks');
     const session = await ensureBrowserGcalSession();
+    if (
+      epochAtStart !== gcalAuthEpochRef.current ||
+      epochAtStart !== getBrowserGcalAuthEpoch()
+    ) {
+      return task;
+    }
     if (!session?.accessToken) return task;
     if (!browserSessionHasTasksScope(session)) {
       setGtasksNeedsReconnect(true);
@@ -10617,6 +10728,7 @@ export default function SummitApp() {
       let nextTasks = Array.isArray(tasks) ? tasks : [];
       let imported = 0;
       let updated = 0;
+      let removed = 0;
       for (const list of nextLists) {
         const gListId = googleListIdFor(list);
         if (!gListId) continue;
@@ -10625,6 +10737,13 @@ export default function SummitApp() {
             showCompleted: true,
             listId: gListId,
           });
+          if (
+            epochAtStart !== gcalAuthEpochRef.current ||
+            epochAtStart !== getBrowserGcalAuthEpoch()
+          ) {
+            setGcalConnected(false);
+            return;
+          }
           const merged = mergeGoogleTasksIntoLocal(
             nextTasks,
             remote,
@@ -10633,14 +10752,24 @@ export default function SummitApp() {
           nextTasks = merged.tasks;
           imported += merged.imported;
           updated += merged.updated;
+          removed += merged.removed;
         } catch {
           /* skip one list; continue others */
         }
       }
 
       if (!opts?.pullOnly) {
-        const unsynced = nextTasks.filter((t) => !t.googleTaskId);
+        const unsynced = nextTasks.filter(
+          (t) => !t.googleTaskId && !t.deletedAt
+        );
         for (const t of unsynced) {
+          if (
+            epochAtStart !== gcalAuthEpochRef.current ||
+            epochAtStart !== getBrowserGcalAuthEpoch()
+          ) {
+            setGcalConnected(false);
+            return;
+          }
           try {
             const pushed = await pushTaskToGoogle(t, nextLists);
             nextTasks = nextTasks.map((x) => (x.id === t.id ? pushed : x));
@@ -10650,6 +10779,14 @@ export default function SummitApp() {
         }
       }
 
+      if (
+        epochAtStart !== gcalAuthEpochRef.current ||
+        epochAtStart !== getBrowserGcalAuthEpoch() ||
+        (!hasBrowserGcalToken() && !isBrowserGcalLinked())
+      ) {
+        setGcalConnected(false);
+        return;
+      }
       persistTasks(nextTasks);
       if (!opts?.silent) {
         const parts = [
@@ -10658,8 +10795,9 @@ export default function SummitApp() {
             : '',
           imported ? `${imported} tasks imported` : '',
           updated ? `${updated} updated` : '',
+          removed ? `${removed} removed` : '',
           !opts?.pullOnly
-            ? `${nextTasks.filter((t) => t.googleTaskId).length} linked`
+            ? `${nextTasks.filter((t) => t.googleTaskId && !t.deletedAt).length} linked`
             : '',
         ].filter(Boolean);
         showToast(
@@ -10833,6 +10971,7 @@ export default function SummitApp() {
       notes: newTaskNotes.trim() || undefined,
       dueDate: due,
       completed: false,
+      source: 'local',
       listId,
       createdAt: now,
       updatedAt: now,
@@ -10852,7 +10991,9 @@ export default function SummitApp() {
     setNewTaskTitle('');
     setNewTaskDue('');
     setNewTaskNotes('');
-    showToast(task.googleTaskId ? 'Task added · synced' : 'Task added');
+    showToast(
+      gcalConnected && task.googleTaskId ? 'Task added · synced' : 'Task added'
+    );
   };
 
   const updateTaskLocal = async (
@@ -10860,8 +11001,11 @@ export default function SummitApp() {
     patch: Partial<Pick<SummitTask, 'title' | 'notes' | 'dueDate' | 'completed'>>,
     opts?: { syncGoogle?: boolean }
   ) => {
+    const existing = tasks.find((t) => t.id === taskId);
+    if (!existing || existing.deletedAt) return;
     const now = new Date().toISOString();
     const syncGoogle = opts?.syncGoogle !== false;
+    const epochAtStart = gcalAuthEpochRef.current;
     let next = tasks.map((t) => {
       if (t.id !== taskId) return t;
       const completed =
@@ -10884,8 +11028,22 @@ export default function SummitApp() {
       !gtasksNeedsReconnect
     ) {
       try {
-        const pushed = await pushTaskToGoogle(updated);
-        next = next.map((t) => (t.id === taskId ? pushed : t));
+        const { getBrowserGcalAuthEpoch, hasBrowserGcalToken } = await import(
+          '@/lib/gcal-browser'
+        );
+        if (
+          epochAtStart === gcalAuthEpochRef.current &&
+          epochAtStart === getBrowserGcalAuthEpoch() &&
+          hasBrowserGcalToken()
+        ) {
+          const pushed = await pushTaskToGoogle(updated);
+          if (
+            epochAtStart === gcalAuthEpochRef.current &&
+            epochAtStart === getBrowserGcalAuthEpoch()
+          ) {
+            next = next.map((t) => (t.id === taskId ? pushed : t));
+          }
+        }
       } catch {
         /* local save still applies */
       }
@@ -10895,6 +11053,7 @@ export default function SummitApp() {
 
   const flushTaskToGoogle = async (taskId: string) => {
     if (!gcalConnected || gtasksNeedsReconnect) return;
+    const epochAtStart = gcalAuthEpochRef.current;
     let current: SummitTask | undefined;
     try {
       const raw = localStorage.getItem(SUMMIT_TASKS_KEY);
@@ -10904,9 +11063,25 @@ export default function SummitApp() {
     } catch {
       current = tasks.find((t) => t.id === taskId);
     }
-    if (!current) return;
+    if (!current || current.deletedAt) return;
     try {
+      const { getBrowserGcalAuthEpoch, hasBrowserGcalToken } = await import(
+        '@/lib/gcal-browser'
+      );
+      if (
+        epochAtStart !== gcalAuthEpochRef.current ||
+        epochAtStart !== getBrowserGcalAuthEpoch() ||
+        !hasBrowserGcalToken()
+      ) {
+        return;
+      }
       const pushed = await pushTaskToGoogle(current);
+      if (
+        epochAtStart !== gcalAuthEpochRef.current ||
+        epochAtStart !== getBrowserGcalAuthEpoch()
+      ) {
+        return;
+      }
       const raw = localStorage.getItem(SUMMIT_TASKS_KEY);
       const list = normalizeStoredTasks(raw ? JSON.parse(raw) : tasks);
       persistTasks(list.map((t) => (t.id === taskId ? pushed : t)));
@@ -10915,17 +11090,73 @@ export default function SummitApp() {
     }
   };
 
+  /** Soft-delete → Tasks Trash (local). Google delete happens on permanent purge. */
   const deleteTask = async (taskId: string) => {
+    const target = tasks.find((t) => t.id === taskId);
+    if (!target || target.deletedAt) return;
+    const now = new Date().toISOString();
+    // Keep googleTaskId so pull won't re-import; merge skips soft-deleted
+    persistTasks(
+      tasks.map((t) =>
+        t.id === taskId ? { ...t, deletedAt: now, updatedAt: now } : t
+      )
+    );
+    showToast('Moved to Tasks trash');
+  };
+
+  const restoreTaskFromTrash = (taskId: string) => {
+    const target = tasks.find((t) => t.id === taskId);
+    if (!target?.deletedAt) return;
+    const now = new Date().toISOString();
+    const restored: SummitTask = {
+      ...target,
+      deletedAt: undefined,
+      updatedAt: now,
+      source: target.source === 'google' ? 'google' : 'local',
+    };
+    persistTasks(tasks.map((t) => (t.id === taskId ? restored : t)));
+    if (gcalConnected && !gtasksNeedsReconnect) {
+      void (async () => {
+        try {
+          const pushed = await pushTaskToGoogle(restored);
+          setTasks((prev) => {
+            const next = (Array.isArray(prev) ? prev : []).map((t) =>
+              t.id === taskId ? { ...pushed, deletedAt: undefined } : t
+            );
+            try {
+              localStorage.setItem(SUMMIT_TASKS_KEY, JSON.stringify(next));
+            } catch {
+              /* ignore */
+            }
+            scheduleCloudTasksSave(next, taskLists, activeTaskListId);
+            return next;
+          });
+        } catch {
+          /* local restore already applied */
+        }
+      })();
+    }
+    showToast('Task restored');
+  };
+
+  const permanentlyDeleteTask = async (taskId: string) => {
     const target = tasks.find((t) => t.id === taskId);
     if (!target) return;
     if (target.googleTaskId && gcalConnected && !gtasksNeedsReconnect) {
       try {
-        const { ensureBrowserGcalSession } = await import('@/lib/gcal-browser');
+        const { ensureBrowserGcalSession, getBrowserGcalAuthEpoch } =
+          await import('@/lib/gcal-browser');
         const { deleteGoogleTask } = await import('@/lib/google-tasks');
+        const epochAtStart = gcalAuthEpochRef.current;
         const session = await ensureBrowserGcalSession();
         const list = taskLists.find((l) => l.id === target.listId);
         const gListId = googleListIdFor(list);
-        if (session?.accessToken && gListId) {
+        if (
+          session?.accessToken &&
+          gListId &&
+          epochAtStart === gcalAuthEpochRef.current &&
+          epochAtStart === getBrowserGcalAuthEpoch()
+        ) {
           await deleteGoogleTask(
             session.accessToken,
             target.googleTaskId,
@@ -10933,11 +11164,62 @@ export default function SummitApp() {
           );
         }
       } catch {
-        /* still remove locally */
+        /* still drop locally */
       }
     }
     persistTasks(tasks.filter((t) => t.id !== taskId));
-    showToast('Task deleted');
+    showToast('Task permanently deleted');
+  };
+
+  const emptyTasksTrash = () => {
+    const trashed = tasks.filter((t) => t.deletedAt);
+    if (trashed.length === 0) return;
+    if (
+      !confirm(
+        `Permanently delete ${trashed.length} task${trashed.length === 1 ? '' : 's'}? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    // Best-effort Google purge for each; local wipe is authoritative
+    if (gcalConnected && !gtasksNeedsReconnect) {
+      void (async () => {
+        try {
+          const { ensureBrowserGcalSession, getBrowserGcalAuthEpoch } =
+            await import('@/lib/gcal-browser');
+          const { deleteGoogleTask } = await import('@/lib/google-tasks');
+          const epochAtStart = gcalAuthEpochRef.current;
+          const session = await ensureBrowserGcalSession();
+          if (
+            !session?.accessToken ||
+            epochAtStart !== gcalAuthEpochRef.current ||
+            epochAtStart !== getBrowserGcalAuthEpoch()
+          ) {
+            return;
+          }
+          for (const t of trashed) {
+            if (!t.googleTaskId) continue;
+            const list = taskLists.find((l) => l.id === t.listId);
+            const gListId = googleListIdFor(list);
+            if (!gListId) continue;
+            try {
+              await deleteGoogleTask(
+                session.accessToken,
+                t.googleTaskId,
+                gListId
+              );
+            } catch {
+              /* continue */
+            }
+          }
+        } catch {
+          /* local empty still applied */
+        }
+      })();
+    }
+    persistTasks(tasks.filter((t) => !t.deletedAt));
+    setTasksTrashOpen(false);
+    showToast('Tasks trash emptied');
   };
 
   const applyLeadFields = (lead: Lead) => {
@@ -18289,9 +18571,16 @@ export default function SummitApp() {
                   (gcalConnected || e.source !== 'google')
               )
             : [];
-          const safeTasks = Array.isArray(tasks)
-            ? tasks.filter((t) => t && typeof t.title === 'string')
-            : [];
+          // When disconnected: Summit-local tasks only (no Google-imported chips).
+          const safeTasks = (
+            gcalConnected
+              ? (Array.isArray(tasks) ? tasks : []).filter(
+                  (t) => t && typeof t.title === 'string' && isActiveSummitTask(t)
+                )
+              : tasksVisibleWhenDisconnected(
+                  Array.isArray(tasks) ? tasks : []
+                )
+          ).filter((t) => t && typeof t.title === 'string');
 
           const daySummitEvents = safeCalendarEvents.filter((ev) =>
             eventOccursOnDay(ev, selectedIso)
@@ -18312,7 +18601,9 @@ export default function SummitApp() {
 
           const tasksByDate = new Map<string, SummitTask[]>();
           for (const task of safeTasks) {
-            if (!task?.dueDate || task.completed) continue;
+            if (!task?.dueDate || task.completed || task.deletedAt) continue;
+            // Belt-and-suspenders: never paint Google-sourced chips while unlinked
+            if (!gcalConnected && isGoogleSourcedTask(task)) continue;
             const list = tasksByDate.get(task.dueDate) || [];
             list.push(task);
             tasksByDate.set(task.dueDate, list);
@@ -19285,9 +19576,20 @@ export default function SummitApp() {
         {activeTab === 'tasks' && (() => {
           try {
           const listId = activeTaskList?.id || DEFAULT_TASK_LIST_ID;
-          const listTasks = safeTasksState.filter((t) => t.listId === listId);
-          const openTasks = listTasks.filter((t) => !t.completed);
-          const doneTasks = listTasks.filter((t) => t.completed);
+          // One Google connection: when disconnected, never paint Google-imported tasks
+          const visibleTasks = (
+            gcalConnected
+              ? safeTasksState
+              : purgeGoogleSourcedTasks(safeTasksState)
+          ).filter((t) => t && typeof t.title === 'string');
+          const listTasks = visibleTasks.filter((t) => t.listId === listId);
+          const openTasks = listTasks.filter(
+            (t) => !t.completed && isActiveSummitTask(t)
+          );
+          const doneTasks = listTasks.filter(
+            (t) => t.completed && isActiveSummitTask(t)
+          );
+          const trashTasks = listTasks.filter((t) => Boolean(t.deletedAt));
           return (
             <div className="page-shell page-fade space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -19299,7 +19601,15 @@ export default function SummitApp() {
                     {activeTaskList?.title || 'My Tasks'} · {openTasks.length}{' '}
                     open
                     {doneTasks.length ? ` · ${doneTasks.length} done` : ''}
+                    {trashTasks.length
+                      ? ` · ${trashTasks.length} in trash`
+                      : ''}
                   </p>
+                  {!gcalConnected ? (
+                    <p className="text-xs text-zinc-400 mt-1">
+                      Google not connected — showing Summit tasks only
+                    </p>
+                  ) : null}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <div
@@ -19344,7 +19654,11 @@ export default function SummitApp() {
                     >
                       Reconnect for Tasks
                     </button>
-                  ) : null}
+                  ) : (
+                    <span className="px-3 py-2 rounded-2xl text-xs font-semibold uppercase tracking-wide text-emerald-800 bg-emerald-50 border border-emerald-200">
+                      Google connected
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -19375,8 +19689,11 @@ export default function SummitApp() {
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {safeTaskLists.map((list) => {
-                    const count = safeTasksState.filter(
-                      (t) => t.listId === list.id && !t.completed
+                    const count = visibleTasks.filter(
+                      (t) =>
+                        t.listId === list.id &&
+                        !t.completed &&
+                        isActiveSummitTask(t)
                     ).length;
                     const active = list.id === listId;
                     return (
@@ -19543,7 +19860,7 @@ export default function SummitApp() {
                             }
                             className="rounded-lg border border-zinc-200 px-2 py-1 text-xs text-zinc-700"
                           />
-                          {task.googleTaskId ? (
+                          {gcalConnected && task.googleTaskId ? (
                             <span className="text-[10px] font-medium uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
                               Google
                             </span>
@@ -19592,44 +19909,129 @@ export default function SummitApp() {
               </div>
 
               {doneTasks.length > 0 ? (
-                <div className="space-y-3">
-                  <div className="text-xs font-medium uppercase tracking-wide text-zinc-400">
-                    Completed
-                  </div>
-                  {doneTasks.slice(0, 20).map((task) => (
-                    <div
-                      key={task.id}
-                      className="rounded-2xl border border-zinc-100 bg-zinc-50/80 px-4 py-3 flex items-center gap-3"
-                    >
-                      <button
-                        type="button"
-                        aria-label={`Reopen ${task.title}`}
-                        onClick={() =>
-                          void updateTaskLocal(task.id, { completed: false })
-                        }
-                        className="w-5 h-5 rounded border border-emerald-500 bg-emerald-500 text-white text-[10px] flex items-center justify-center shrink-0"
-                      >
-                        ✓
-                      </button>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm text-zinc-500 line-through truncate">
-                          {task.title}
-                        </div>
-                        {task.dueDate ? (
-                          <div className="text-[11px] text-zinc-400 mt-0.5">
-                            Due {task.dueDate}
+                <div className="rounded-2xl border border-zinc-200 bg-white overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setTasksCompletedOpen((o) => !o)}
+                    className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-zinc-50 transition-colors"
+                    aria-expanded={tasksCompletedOpen}
+                  >
+                    <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                      Completed
+                      <span className="ml-2 text-zinc-400 font-normal normal-case tracking-normal">
+                        {doneTasks.length}
+                      </span>
+                    </span>
+                    <span className="text-zinc-400 text-sm tabular-nums">
+                      {tasksCompletedOpen ? '▾' : '▸'}
+                    </span>
+                  </button>
+                  {tasksCompletedOpen ? (
+                    <div className="space-y-2 px-3 pb-3 border-t border-zinc-100 pt-3">
+                      {doneTasks.map((task) => (
+                        <div
+                          key={task.id}
+                          className="rounded-2xl border border-zinc-100 bg-zinc-50/80 px-4 py-3 flex items-center gap-3"
+                        >
+                          <button
+                            type="button"
+                            aria-label={`Reopen ${task.title}`}
+                            onClick={() =>
+                              void updateTaskLocal(task.id, {
+                                completed: false,
+                              })
+                            }
+                            className="w-5 h-5 rounded border border-emerald-500 bg-emerald-500 text-white text-[10px] flex items-center justify-center shrink-0"
+                          >
+                            ✓
+                          </button>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm text-zinc-500 line-through truncate">
+                              {task.title}
+                            </div>
+                            {task.dueDate ? (
+                              <div className="text-[11px] text-zinc-400 mt-0.5">
+                                Due {task.dueDate}
+                              </div>
+                            ) : null}
                           </div>
-                        ) : null}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => void deleteTask(task.id)}
-                        className="text-xs text-zinc-400 hover:text-red-600"
-                      >
-                        Delete
-                      </button>
+                          <button
+                            type="button"
+                            onClick={() => void deleteTask(task.id)}
+                            className="text-xs text-zinc-400 hover:text-red-600"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  ) : null}
+                </div>
+              ) : null}
+
+              {trashTasks.length > 0 ? (
+                <div className="rounded-2xl border border-zinc-200 bg-white overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setTasksTrashOpen((o) => !o)}
+                    className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-zinc-50 transition-colors"
+                    aria-expanded={tasksTrashOpen}
+                  >
+                    <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                      Trash
+                      <span className="ml-2 text-zinc-400 font-normal normal-case tracking-normal">
+                        {trashTasks.length}
+                      </span>
+                    </span>
+                    <span className="text-zinc-400 text-sm tabular-nums">
+                      {tasksTrashOpen ? '▾' : '▸'}
+                    </span>
+                  </button>
+                  {tasksTrashOpen ? (
+                    <div className="space-y-2 px-3 pb-3 border-t border-zinc-100 pt-3">
+                      <div className="flex justify-end px-1">
+                        <button
+                          type="button"
+                          onClick={() => emptyTasksTrash()}
+                          className="text-xs font-medium text-red-600 hover:text-red-700"
+                        >
+                          Empty trash
+                        </button>
+                      </div>
+                      {trashTasks.map((task) => (
+                        <div
+                          key={task.id}
+                          className="rounded-2xl border border-zinc-100 bg-zinc-50/60 px-4 py-3 flex items-center gap-3"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm text-zinc-500 truncate">
+                              {task.title}
+                            </div>
+                            {task.deletedAt ? (
+                              <div className="text-[11px] text-zinc-400 mt-0.5">
+                                Deleted{' '}
+                                {new Date(task.deletedAt).toLocaleString()}
+                              </div>
+                            ) : null}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => restoreTaskFromTrash(task.id)}
+                            className="text-xs font-medium text-sky-700 hover:underline"
+                          >
+                            Restore
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void permanentlyDeleteTask(task.id)}
+                            className="text-xs text-zinc-400 hover:text-red-600"
+                          >
+                            Delete forever
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>
