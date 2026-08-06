@@ -149,9 +149,9 @@ export const GOOGLE_EVENT_COLORS: GoogleEventColorSwatch[] = [
 ];
 
 /**
- * Fallback when an event has no colorId and no calendarList color.
- * Cobalt modern (#4285f4) — typical Google primary-calendar blue.
- * Prefer calendarList.backgroundColor (Eucalyptus/Mango/etc.) whenever available.
+ * Last-resort paint when an event has no colorId and no calendarList color.
+ * Cobalt modern (#4285f4) — Google primary default in the modern theme.
+ * Prefer live calendarList resolution (Eucalyptus/Mango/etc.) whenever available.
  */
 export const GOOGLE_CALENDAR_DEFAULT_COLOR = {
   name: 'Cobalt',
@@ -161,42 +161,50 @@ export const GOOGLE_CALENDAR_DEFAULT_COLOR = {
   solidText: '#ffffff',
 } as const;
 
+export type GoogleCalendarListColorSwatch = {
+  name: string;
+  /** API `colors.get` / calendarList.backgroundColor for presets (classic theme) */
+  classic: string;
+  /** Google Calendar web *modern* theme (default UI) — paint this for presets */
+  modern: string;
+};
+
 /**
- * Google calendarList colorId 1–24 (classic API palette).
- * Prefer calendarList.backgroundColor hex from the API; use this when only colorId is present.
+ * Google calendarList colorId 1–24.
+ * API + colors.get return classic hex; Calendar web (modern theme) paints modern.
  * Names match Google Calendar UI (Eucalyptus, Mango, Cobalt, …).
  */
 export const GOOGLE_CALENDAR_LIST_COLORS: Record<
   string,
-  { name: string; bg: string; fg: string }
+  GoogleCalendarListColorSwatch
 > = {
-  '1': { name: 'Cocoa', bg: '#ac725e', fg: '#1d1d1d' },
-  '2': { name: 'Flamingo', bg: '#d06b64', fg: '#1d1d1d' },
-  '3': { name: 'Tomato', bg: '#f83a22', fg: '#1d1d1d' },
-  '4': { name: 'Tangerine', bg: '#fa573c', fg: '#1d1d1d' },
-  '5': { name: 'Pumpkin', bg: '#ff7537', fg: '#1d1d1d' },
-  '6': { name: 'Mango', bg: '#ffad46', fg: '#1d1d1d' },
-  '7': { name: 'Eucalyptus', bg: '#42d692', fg: '#1d1d1d' },
-  '8': { name: 'Basil', bg: '#16a765', fg: '#ffffff' },
-  '9': { name: 'Pistachio', bg: '#7bd148', fg: '#1d1d1d' },
-  '10': { name: 'Avocado', bg: '#b3dc6c', fg: '#1d1d1d' },
-  '11': { name: 'Citron', bg: '#fbe983', fg: '#1d1d1d' },
-  '12': { name: 'Banana', bg: '#fad165', fg: '#1d1d1d' },
-  '13': { name: 'Sage', bg: '#92e1c0', fg: '#1d1d1d' },
-  '14': { name: 'Peacock', bg: '#9fe1e7', fg: '#1d1d1d' },
-  '15': { name: 'Cobalt', bg: '#9fc6e7', fg: '#1d1d1d' },
-  '16': { name: 'Blueberry', bg: '#4986e7', fg: '#ffffff' },
-  '17': { name: 'Lavender', bg: '#9a9cff', fg: '#1d1d1d' },
-  '18': { name: 'Wisteria', bg: '#b99aff', fg: '#1d1d1d' },
-  '19': { name: 'Graphite', bg: '#c2c2c2', fg: '#1d1d1d' },
-  '20': { name: 'Birch', bg: '#cabdbf', fg: '#1d1d1d' },
-  '21': { name: 'Radicchio', bg: '#cca6ac', fg: '#1d1d1d' },
-  '22': { name: 'Cherry Blossom', bg: '#f691b2', fg: '#1d1d1d' },
-  '23': { name: 'Grape', bg: '#cd74e6', fg: '#ffffff' },
-  '24': { name: 'Amethyst', bg: '#a47ae2', fg: '#ffffff' },
+  '1': { name: 'Cocoa', classic: '#ac725e', modern: '#795548' },
+  '2': { name: 'Flamingo', classic: '#d06b64', modern: '#e67c73' },
+  '3': { name: 'Tomato', classic: '#f83a22', modern: '#d50000' },
+  '4': { name: 'Tangerine', classic: '#fa573c', modern: '#f4511e' },
+  '5': { name: 'Pumpkin', classic: '#ff7537', modern: '#ef6c00' },
+  '6': { name: 'Mango', classic: '#ffad46', modern: '#f09300' },
+  '7': { name: 'Eucalyptus', classic: '#42d692', modern: '#009688' },
+  '8': { name: 'Basil', classic: '#16a765', modern: '#0b8043' },
+  '9': { name: 'Pistachio', classic: '#7bd148', modern: '#7cb342' },
+  '10': { name: 'Avocado', classic: '#b3dc6c', modern: '#c0ca33' },
+  '11': { name: 'Citron', classic: '#fbe983', modern: '#e4c441' },
+  '12': { name: 'Banana', classic: '#fad165', modern: '#f6bf26' },
+  '13': { name: 'Sage', classic: '#92e1c0', modern: '#33b679' },
+  '14': { name: 'Peacock', classic: '#9fe1e7', modern: '#039be5' },
+  '15': { name: 'Cobalt', classic: '#9fc6e7', modern: '#4285f4' },
+  '16': { name: 'Blueberry', classic: '#4986e7', modern: '#3f51b5' },
+  '17': { name: 'Lavender', classic: '#9a9cff', modern: '#7986cb' },
+  '18': { name: 'Wisteria', classic: '#b99aff', modern: '#b39ddb' },
+  '19': { name: 'Graphite', classic: '#c2c2c2', modern: '#616161' },
+  '20': { name: 'Birch', classic: '#cabdbf', modern: '#a79b8e' },
+  '21': { name: 'Radicchio', classic: '#cca6ac', modern: '#ad1457' },
+  '22': { name: 'Cherry Blossom', classic: '#f691b2', modern: '#d81b60' },
+  '23': { name: 'Grape', classic: '#cd74e6', modern: '#8e24aa' },
+  '24': { name: 'Amethyst', classic: '#a47ae2', modern: '#9e69af' },
 };
 
-/** Optional calendar-list color (from calendarList.backgroundColor). */
+/** Optional calendar-list color (from calendarList → modern paint hex). */
 export type CalendarListColor = {
   bg: string;
   text?: string;
@@ -218,7 +226,7 @@ export function normalizeCssHex(raw?: string | null): string | undefined {
   return `#${s.toLowerCase()}`;
 }
 
-/** Resolve calendarList colorId → classic palette hex. */
+/** Resolve calendarList colorId → Google Calendar *modern* paint hex. */
 export function googleCalendarListColorFromId(
   colorId?: string | null
 ): CalendarListColor | undefined {
@@ -226,24 +234,70 @@ export function googleCalendarListColorFromId(
   const id = String(colorId).trim();
   const sw = GOOGLE_CALENDAR_LIST_COLORS[id];
   if (!sw) return undefined;
-  return { bg: sw.bg, text: sw.fg };
+  return { bg: sw.modern, text: contrastTextOnBg(sw.modern) };
+}
+
+/** Classic API hex → modern paint (when colorId missing but classic bg present). */
+function modernFromClassicCalendarHex(
+  classicHex: string
+): CalendarListColor | undefined {
+  const bg = normalizeCssHex(classicHex);
+  if (!bg) return undefined;
+  for (const sw of Object.values(GOOGLE_CALENDAR_LIST_COLORS)) {
+    if (normalizeCssHex(sw.classic) === bg) {
+      return { bg: sw.modern, text: contrastTextOnBg(sw.modern) };
+    }
+  }
+  return undefined;
 }
 
 /**
- * Prefer API backgroundColor hex; else calendar colorId palette; else undefined.
- * Never invent Cobalt here — callers fall back only when nothing resolves.
+ * Normalize any stored/API calendar hex to Google Calendar *modern* paint.
+ * Classic presets remap; custom / already-modern hex pass through.
+ */
+export function toGoogleCalendarModernPaintHex(
+  raw?: string | null
+): string | undefined {
+  const bg = normalizeCssHex(raw);
+  if (!bg) return undefined;
+  return modernFromClassicCalendarHex(bg)?.bg || bg;
+}
+
+/**
+ * Resolve a calendarList entry to the hex Google Calendar *web* paints today.
+ *
+ * - Preset colorId (or classic API backgroundColor) → modern theme hex
+ *   (Eucalyptus #009688, Mango #f09300, Cobalt #4285f4, …)
+ * - Custom backgroundColor (not a classic preset) → API hex as-is
+ * - Never invent a color when nothing resolves — callers fall back last.
  */
 export function resolveCalendarListEntryColor(entry: {
   backgroundColor?: string | null;
   foregroundColor?: string | null;
   colorId?: string | null;
 }): CalendarListColor | undefined {
-  const bg = normalizeCssHex(entry.backgroundColor);
-  if (bg) {
-    const fg =
-      normalizeCssHex(entry.foregroundColor) || contrastTextOnBg(bg);
-    return { bg, text: fg };
+  const apiBg = normalizeCssHex(entry.backgroundColor);
+  const apiFg = normalizeCssHex(entry.foregroundColor);
+  const id =
+    entry.colorId != null ? String(entry.colorId).trim() : '';
+  const sw = id ? GOOGLE_CALENDAR_LIST_COLORS[id] : undefined;
+
+  if (sw) {
+    const classic = normalizeCssHex(sw.classic);
+    // Preset: API returns classic (or omits bg) → paint modern to match Calendar web
+    if (!apiBg || apiBg === classic || apiBg === normalizeCssHex(sw.modern)) {
+      return { bg: sw.modern, text: apiFg || contrastTextOnBg(sw.modern) };
+    }
+    // Custom hex with a nearest colorId — trust API backgroundColor
+    return { bg: apiBg, text: apiFg || contrastTextOnBg(apiBg) };
   }
+
+  if (apiBg) {
+    const fromClassic = modernFromClassicCalendarHex(apiBg);
+    if (fromClassic) return fromClassic;
+    return { bg: apiBg, text: apiFg || contrastTextOnBg(apiBg) };
+  }
+
   return googleCalendarListColorFromId(entry.colorId);
 }
 

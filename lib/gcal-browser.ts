@@ -720,6 +720,35 @@ export async function listGoogleCalendarList(
   return data.items || [];
 }
 
+export type GoogleColorsResource = {
+  kind?: string;
+  updated?: string;
+  /** colorId → classic API hex (calendarList palette) */
+  calendar?: Record<string, { background?: string; foreground?: string }>;
+  /** colorId → classic API hex (event colorId 1–11) */
+  event?: Record<string, { background?: string; foreground?: string }>;
+};
+
+/**
+ * Authoritative classic palettes from GET /calendar/v3/colors.
+ * Note: Calendar *web* (modern theme) remaps these — Summit paints modern via
+ * `resolveCalendarListEntryColor` / `GOOGLE_EVENT_COLORS`.
+ */
+export async function fetchGoogleCalendarColors(
+  accessToken: string
+): Promise<GoogleColorsResource | null> {
+  try {
+    const res = await fetch(
+      'https://www.googleapis.com/calendar/v3/colors',
+      { headers: gcalAuthHeaders(accessToken) }
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as GoogleColorsResource;
+  } catch {
+    return null;
+  }
+}
+
 /** Events from one calendar id (primary or email). Paginates fully. */
 export async function listGoogleEventsForCalendar(
   accessToken: string,
@@ -774,8 +803,8 @@ export async function listGoogleEventsForCalendar(
 
 export type GoogleEventsPullResult = {
   events: GoogleCalendarListItem[];
-  /** calendarList id → hex colors */
-  colorMap: Record<string, { bg: string; fg: string }>;
+  /** calendarList id → modern paint hex (+ colorId when known) */
+  colorMap: Record<string, { bg: string; fg: string; colorId?: string }>;
   /** Cancelled event / instance ids from showDeleted pull */
   cancelledIds: string[];
   /** How many calendarList entries were loaded (0 = list failed / fallback) */
@@ -789,19 +818,22 @@ export type GoogleEventsPullResult = {
    * delete-on-pull (would wipe Eucalyptus/Mango locals on a network blip).
    */
   pullComplete: boolean;
+  /** Classic palettes from colors.get (optional; paint uses modern remap) */
+  googleColors?: GoogleColorsResource | null;
 };
 
 function colorMapFromCalendarList(
   calendars: GoogleCalendarListEntry[]
-): Record<string, { bg: string; fg: string }> {
-  const map: Record<string, { bg: string; fg: string }> = {};
+): Record<string, { bg: string; fg: string; colorId?: string }> {
+  const map: Record<string, { bg: string; fg: string; colorId?: string }> = {};
   for (const c of Array.isArray(calendars) ? calendars : []) {
     if (!c?.id) continue;
     const resolved = resolveCalendarListEntryColor(c);
     if (!resolved?.bg) continue;
     const entry = {
       bg: resolved.bg,
-      fg: resolved.text || '#ffffff',
+      fg: resolved.text || contrastFg(resolved.bg),
+      colorId: c.colorId ? String(c.colorId) : undefined,
     };
     map[c.id] = entry;
     if (c.primary) map.primary = entry;
@@ -809,25 +841,41 @@ function colorMapFromCalendarList(
   return map;
 }
 
+function contrastFg(bg: string): string {
+  const hex = normalizeCssHex(bg) || bg;
+  const h = hex.replace(/^#/, '');
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return '#ffffff';
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return lum > 0.65 ? '#1f1f1f' : '#ffffff';
+}
+
 function resolveCalColors(
   cal: GoogleCalendarListEntry,
-  colorMap: Record<string, { bg: string; fg: string }>
-): { bg: string; fg: string } | undefined {
+  colorMap: Record<string, { bg: string; fg: string; colorId?: string }>
+): { bg: string; fg: string; colorId?: string } | undefined {
   const fromMap = colorMap[cal.id];
   if (fromMap?.bg) return fromMap;
   if (cal.primary && colorMap.primary?.bg) return colorMap.primary;
   const resolved = resolveCalendarListEntryColor(cal);
   if (resolved?.bg) {
-    return { bg: resolved.bg, fg: resolved.text || '#ffffff' };
+    return {
+      bg: resolved.bg,
+      fg: resolved.text || contrastFg(resolved.bg),
+      colorId: cal.colorId ? String(cal.colorId) : undefined,
+    };
   }
+  // Custom / unknown — prefer raw API hex over inventing Cobalt
   const bg = normalizeCssHex(cal.backgroundColor);
   if (bg) {
     return {
       bg,
-      fg: normalizeCssHex(cal.foregroundColor) || '#ffffff',
+      fg: normalizeCssHex(cal.foregroundColor) || contrastFg(bg),
+      colorId: cal.colorId ? String(cal.colorId) : undefined,
     };
   }
-  // No invented Cobalt — caller paints Cobalt only when nothing resolves
   return undefined;
 }
 
@@ -851,6 +899,7 @@ export async function listUpcomingGoogleEvents(
     calendars = [];
   }
 
+  const googleColorsPromise = fetchGoogleCalendarColors(accessToken);
   const colorMap = colorMapFromCalendarList(calendars);
   const cancelledIds = new Set<string>();
 
@@ -969,6 +1018,7 @@ export async function listUpcomingGoogleEvents(
   }
 
   const pullComplete = calendarsFetched > 0;
+  const googleColors = await googleColorsPromise;
 
   return {
     events: Array.isArray(out) ? out : [],
@@ -978,6 +1028,7 @@ export async function listUpcomingGoogleEvents(
     calendarsFetched,
     fetchedCalendarIds: Array.from(fetchedCalendarIds),
     pullComplete,
+    googleColors,
   };
 }
 

@@ -68,6 +68,7 @@ import {
   timedBlockPaintHeightPx,
   normalizeCssHex,
   resolveCalendarListEntryColor,
+  toGoogleCalendarModernPaintHex,
   timedEventMinutesOnDay,
   type GoogleEventColorId,
   type SummitCalendarEvent,
@@ -3162,9 +3163,9 @@ export default function SummitApp() {
       };
     }>
   >([]);
-  /** calendarList id → background/foreground (re-resolve on refresh) */
+  /** calendarList id → modern paint hex (re-resolve on every pull) */
   const [googleCalendarColorMap, setGoogleCalendarColorMap] = useState<
-    Record<string, { bg: string; fg: string }>
+    Record<string, { bg: string; fg: string; colorId?: string }>
   >({});
   /** Writable calendars from calendarList (for create picker) */
   const [googleCalendarList, setGoogleCalendarList] = useState<
@@ -9425,7 +9426,7 @@ export default function SummitApp() {
     stored?: { bg?: string; fg?: string } | null
   ): CalendarListColor | undefined => {
     const id = String(calendarId || '').trim();
-    // Live calendarList map wins over stored (re-resolve every pull; kill stale Cobalt)
+    // Live calendarList map wins (modern remapped hex from last pull)
     if (id) {
       const fromMap = safeGoogleColorMap[id];
       if (fromMap?.bg) {
@@ -9436,10 +9437,8 @@ export default function SummitApp() {
         };
       }
     }
-    const storedBg = normalizeCssHex(stored?.bg);
-    // Ignore baked-in invented Cobalt (#4285f4) — only paint it via final fallback
-    // when no calendarList hex exists (prevents false Cobalt on Eucalyptus/Mango).
-    if (storedBg && storedBg !== '#4285f4') {
+    const storedBg = toGoogleCalendarModernPaintHex(stored?.bg);
+    if (storedBg) {
       return {
         bg: storedBg,
         text: normalizeCssHex(stored?.fg) || undefined,
@@ -9450,7 +9449,6 @@ export default function SummitApp() {
       const primary = safeGoogleColorMap.primary;
       if (primary?.bg) {
         const pbg = normalizeCssHex(primary.bg) || primary.bg;
-        // If primary map is itself Cobalt, still OK for true primary events
         return {
           bg: pbg,
           text: normalizeCssHex(primary.fg) || primary.fg,
@@ -9521,7 +9519,10 @@ export default function SummitApp() {
           : 0;
 
       // Live color map for this pull (avoid stale React state in recolor)
-      let effectiveColorMap: Record<string, { bg: string; fg: string }> = {
+      let effectiveColorMap: Record<
+        string,
+        { bg: string; fg: string; colorId?: string }
+      > = {
         ...(colorMap && typeof colorMap === 'object' && !Array.isArray(colorMap)
           ? colorMap
           : {}),
@@ -9648,8 +9649,8 @@ export default function SummitApp() {
         fetchedCalendarIds:
           fetchedCalendarIds.size > 0 ? fetchedCalendarIds : undefined,
       });
-      // Re-resolve calendar colors from fresh calendarList map on every pull.
-      // Never paint a secondary calendar with primary/Cobalt just because lookup missed.
+      // Re-resolve calendar colors from fresh calendarList map on every pull
+      // (overwrite stored classic / stale hex with modern Google web paint).
       const mergedEvents = Array.isArray(merged?.events) ? merged.events : [];
       const recolored = mergedEvents.map((ev) => {
         const calId = (ev.calendarId || '').trim();
@@ -9659,14 +9660,8 @@ export default function SummitApp() {
           : effectiveColorMap.primary;
         const bg = normalizeCssHex(colors?.bg) || colors?.bg;
         if (!bg) {
-          // Keep prior only if it isn't the invented Cobalt fallback
-          const prev = normalizeCssHex(ev.calendarColorBg);
-          if (prev && prev !== '#4285f4') return ev;
-          return {
-            ...ev,
-            calendarColorBg: undefined,
-            calendarColorFg: undefined,
-          };
+          // No live map entry — keep stored (may be custom); do not invent Cobalt
+          return ev;
         }
         return {
           ...ev,
@@ -9696,6 +9691,7 @@ export default function SummitApp() {
         calendarsFetched,
         fetchedCalendars: fetchedCalendarIds.size,
         colorMapSize: Object.keys(effectiveColorMap || {}).length,
+        colorsApi: Boolean(pulled?.googleColors?.event),
         window: `${pullWindow.startDate}→${pullWindow.endDateExclusive}`,
         breakfast: breakfastSample
           ? {
@@ -9985,16 +9981,8 @@ export default function SummitApp() {
           googleHtmlLink: existing.googleHtmlLink,
           calendarId,
           colorId,
-          calendarColorBg:
-            calendarColorBg ||
-            (normalizeCssHex(existing.calendarColorBg) !== '#4285f4'
-              ? existing.calendarColorBg
-              : undefined),
-          calendarColorFg:
-            calendarColorFg ||
-            (normalizeCssHex(existing.calendarColorBg) !== '#4285f4'
-              ? existing.calendarColorFg
-              : undefined),
+          calendarColorBg: calendarColorBg || existing.calendarColorBg,
+          calendarColorFg: calendarColorFg || existing.calendarColorFg,
           source: existing.source || 'summit',
         }
       : base;
