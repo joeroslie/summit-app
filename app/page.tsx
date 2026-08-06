@@ -5913,65 +5913,80 @@ export default function SummitApp() {
                 const normalized = normalizeStoredCalendarEvents(cloudEvents);
                 if (normalized.length) {
                   calendarCloudHydrateGenRef.current += 1;
-                  const pullGen = calendarGooglePullGenRef.current;
-                  // If Google pull already ran this session, never resurrect
-                  // google-linked events the pull already deleted.
-                  if (pullGen > 0) {
-                    setCalendarEvents((prev) => {
-                      const prevSafe = Array.isArray(prev) ? prev : [];
-                      const prevGoogleIds = new Set(
-                        prevSafe
-                          .map((e) => e.googleEventId)
-                          .filter((id): id is string => Boolean(id))
-                      );
-                      const prevIds = new Set(prevSafe.map((e) => e.id));
-                      const merged = [...prevSafe];
-                      for (const ev of normalized) {
-                        if (prevIds.has(ev.id)) continue;
-                        // Skip cloud google-linked ghosts not in post-pull local
-                        if (
-                          ev.googleEventId &&
-                          !prevGoogleIds.has(ev.googleEventId)
-                        ) {
-                          continue;
-                        }
-                        if (ev.source === 'google' && !ev.googleEventId) {
-                          continue;
-                        }
-                        merged.push(ev);
-                        prevIds.add(ev.id);
-                      }
-                      try {
-                        localStorage.setItem(
-                          SUMMIT_CALENDAR_EVENTS_KEY,
-                          JSON.stringify(merged)
-                        );
-                      } catch {
-                        /* ignore */
-                      }
-                      return merged;
-                    });
-                  } else {
-                    setCalendarEvents(normalized);
-                    try {
-                      localStorage.setItem(
-                        SUMMIT_CALENDAR_EVENTS_KEY,
-                        JSON.stringify(normalized)
-                      );
-                    } catch {
-                      /* ignore */
-                    }
-                  }
-                  // After cloud hydrate, re-pull so Google delete-on-pull wins
+                  let googleLinked = false;
                   try {
                     const { hasBrowserGcalToken } = await import(
                       '@/lib/gcal-browser'
                     );
-                    if (hasBrowserGcalToken()) {
-                      void refreshFromGoogle({ silent: true });
-                    }
+                    googleLinked = hasBrowserGcalToken();
                   } catch {
-                    /* ignore */
+                    googleLinked = false;
+                  }
+                  // Never full-replace from cloud when Google is linked or a pull
+                  // already ran — that race resurrected deleted Google ghosts.
+                  setCalendarEvents((prev) => {
+                    const prevSafe = Array.isArray(prev) ? prev : [];
+                    const pullGen = calendarGooglePullGenRef.current;
+                    const prevGoogleIds = new Set(
+                      prevSafe
+                        .map((e) => e.googleEventId)
+                        .filter((id): id is string => Boolean(id))
+                    );
+                    const prevIds = new Set(prevSafe.map((e) => e.id));
+                    // Cold start, no Google: cloud is fine as seed
+                    if (
+                      pullGen === 0 &&
+                      !googleLinked &&
+                      prevSafe.length === 0
+                    ) {
+                      try {
+                        localStorage.setItem(
+                          SUMMIT_CALENDAR_EVENTS_KEY,
+                          JSON.stringify(normalized)
+                        );
+                      } catch {
+                        /* ignore */
+                      }
+                      return normalized;
+                    }
+                    const merged = [...prevSafe];
+                    for (const ev of normalized) {
+                      if (prevIds.has(ev.id)) continue;
+                      // Skip cloud google-linked ghosts not in current local
+                      // (especially after delete-on-pull)
+                      if (
+                        (pullGen > 0 || googleLinked) &&
+                        ev.googleEventId &&
+                        !prevGoogleIds.has(ev.googleEventId)
+                      ) {
+                        continue;
+                      }
+                      if (ev.source === 'google' && !ev.googleEventId) {
+                        continue;
+                      }
+                      // When Google linked / pull ran, only add Summit-only cloud rows
+                      if (
+                        (pullGen > 0 || googleLinked) &&
+                        (ev.googleEventId || ev.source === 'google')
+                      ) {
+                        continue;
+                      }
+                      merged.push(ev);
+                      prevIds.add(ev.id);
+                    }
+                    try {
+                      localStorage.setItem(
+                        SUMMIT_CALENDAR_EVENTS_KEY,
+                        JSON.stringify(merged)
+                      );
+                    } catch {
+                      /* ignore */
+                    }
+                    return merged;
+                  });
+                  // After cloud hydrate, re-pull so Google delete-on-pull wins
+                  if (googleLinked) {
+                    void refreshFromGoogle({ silent: true });
                   }
                 }
               } else {
@@ -9422,7 +9437,9 @@ export default function SummitApp() {
       }
     }
     const storedBg = normalizeCssHex(stored?.bg);
-    if (storedBg) {
+    // Ignore baked-in invented Cobalt (#4285f4) — only paint it via final fallback
+    // when no calendarList hex exists (prevents false Cobalt on Eucalyptus/Mango).
+    if (storedBg && storedBg !== '#4285f4') {
       return {
         bg: storedBg,
         text: normalizeCssHex(stored?.fg) || undefined,
@@ -9432,8 +9449,10 @@ export default function SummitApp() {
     if (!id || id === 'primary') {
       const primary = safeGoogleColorMap.primary;
       if (primary?.bg) {
+        const pbg = normalizeCssHex(primary.bg) || primary.bg;
+        // If primary map is itself Cobalt, still OK for true primary events
         return {
-          bg: normalizeCssHex(primary.bg) || primary.bg,
+          bg: pbg,
           text: normalizeCssHex(primary.fg) || primary.fg,
         };
       }
@@ -9606,6 +9625,17 @@ export default function SummitApp() {
           return Array.isArray(calendarEvents) ? calendarEvents : [];
         }
       })();
+      const fetchedCalendarIds = new Set(
+        Array.isArray(pulled?.fetchedCalendarIds)
+          ? pulled.fetchedCalendarIds.filter(
+              (id): id is string => typeof id === 'string' && Boolean(id.trim())
+            )
+          : []
+      );
+      // Never delete-on-pull when zero calendars listed (network blip / auth glitch)
+      const pullAuthoritative =
+        pulled?.pullComplete === true || calendarsFetched > 0;
+
       const merged = safeMergeGoogleCalendarEventsIntoLocal(localRaw, coloredItems, {
         knownAdjustmentGoogleIds: adjIds,
         pullWindow: {
@@ -9614,6 +9644,9 @@ export default function SummitApp() {
         },
         retainGoogleIds: activeRetainGoogleIds(),
         cancelledGoogleIds,
+        pullAuthoritative,
+        fetchedCalendarIds:
+          fetchedCalendarIds.size > 0 ? fetchedCalendarIds : undefined,
       });
       // Re-resolve calendar colors from fresh calendarList map on every pull.
       // Never paint a secondary calendar with primary/Cobalt just because lookup missed.
@@ -9643,9 +9676,10 @@ export default function SummitApp() {
         };
       });
       calendarGooglePullGenRef.current += 1;
+      // Authoritative Summit store — single render path for all Google + local events
       persistCalendarEvents(recolored);
 
-      // One authoritative Google list for UI — pull items only (no stale dual-store ghosts)
+      // Mirror of last pull only (debug / status). UI paints calendarEvents, not this.
       setGoogleEventsSafe(coloredItems);
 
       const breakfastSample = coloredItems.find((e) =>
@@ -9656,9 +9690,11 @@ export default function SummitApp() {
         imported: merged.imported,
         updated: merged.updated,
         removed: merged.removed,
+        pullAuthoritative,
         cancelled: cancelledGoogleIds.size,
         calendarsLoaded,
         calendarsFetched,
+        fetchedCalendars: fetchedCalendarIds.size,
         colorMapSize: Object.keys(effectiveColorMap || {}).length,
         window: `${pullWindow.startDate}→${pullWindow.endDateExclusive}`,
         breakfast: breakfastSample
@@ -9949,8 +9985,16 @@ export default function SummitApp() {
           googleHtmlLink: existing.googleHtmlLink,
           calendarId,
           colorId,
-          calendarColorBg: calendarColorBg || existing.calendarColorBg,
-          calendarColorFg: calendarColorFg || existing.calendarColorFg,
+          calendarColorBg:
+            calendarColorBg ||
+            (normalizeCssHex(existing.calendarColorBg) !== '#4285f4'
+              ? existing.calendarColorBg
+              : undefined),
+          calendarColorFg:
+            calendarColorFg ||
+            (normalizeCssHex(existing.calendarColorBg) !== '#4285f4'
+              ? existing.calendarColorFg
+              : undefined),
           source: existing.source || 'summit',
         }
       : base;
@@ -10088,7 +10132,10 @@ export default function SummitApp() {
         await deleteGoogleEventWithBrowserToken(
           session.accessToken,
           googleId,
-          target.calendarId
+          target.calendarId,
+          (Array.isArray(googleCalendarList) ? googleCalendarList : [])
+            .map((c) => c?.id)
+            .filter((id): id is string => Boolean(id))
         );
         showToast('Event deleted · removed from Google');
         return;
@@ -18024,72 +18071,7 @@ export default function SummitApp() {
             todayIso ||
             toLocalIsoDate(calendarCursor);
 
-          const gcalEventDayKeys = (event: {
-            start?: { dateTime?: string; date?: string };
-            end?: { dateTime?: string; date?: string };
-          }): string[] => {
-            const startRaw = event.start?.date || event.start?.dateTime;
-            if (!startRaw) return [];
-            const allDay = Boolean(event.start?.date && !event.start?.dateTime);
-            if (allDay) {
-              const startDate = event.start!.date!;
-              const endExclusive =
-                event.end?.date ||
-                (() => {
-                  const d = new Date(startDate + 'T12:00:00');
-                  d.setDate(d.getDate() + 1);
-                  return toLocalIsoDate(d);
-                })();
-              const endInclusive = (() => {
-                const d = new Date(endExclusive + 'T12:00:00');
-                d.setDate(d.getDate() - 1);
-                return toLocalIsoDate(d);
-              })();
-              const keys: string[] = [];
-              let cur = startDate;
-              let guard = 0;
-              const last =
-                endInclusive < startDate ? startDate : endInclusive;
-              while (cur <= last && guard < 60) {
-                keys.push(cur);
-                const d = new Date(cur + 'T12:00:00');
-                d.setDate(d.getDate() + 1);
-                cur = toLocalIsoDate(d);
-                guard += 1;
-              }
-              return keys.length ? keys : [startDate];
-            }
-            const startD = new Date(event.start!.dateTime!);
-            if (Number.isNaN(startD.getTime())) return [];
-            const endD = event.end?.dateTime
-              ? new Date(event.end.dateTime)
-              : new Date(startD.getTime() + 60 * 60 * 1000);
-            const keys: string[] = [];
-            const cursor = new Date(startD);
-            cursor.setHours(12, 0, 0, 0);
-            const endDay = new Date(endD);
-            // End exactly at midnight → prior day only
-            if (
-              endD.getHours() === 0 &&
-              endD.getMinutes() === 0 &&
-              endD.getSeconds() === 0 &&
-              endD.getTime() > startD.getTime()
-            ) {
-              endDay.setTime(endD.getTime() - 1);
-            }
-            endDay.setHours(12, 0, 0, 0);
-            let guard = 0;
-            while (cursor.getTime() <= endDay.getTime() && guard < 60) {
-              keys.push(toLocalIsoDate(cursor));
-              cursor.setDate(cursor.getDate() + 1);
-              guard += 1;
-            }
-            return keys.length ? keys : [toLocalIsoDate(startD)];
-          };
-
-          const safeGoogleEvents = normalizeGoogleCalendarEventsList(
-            googleCalendarEvents
-          );
+          // Single paint source after merge (googleCalendarEvents is pull mirror only)
           const safeCalendarEvents = Array.isArray(calendarEvents)
             ? calendarEvents.filter((e) => e && e.startDate)
             : [];
@@ -18097,41 +18079,21 @@ export default function SummitApp() {
             ? tasks.filter((t) => t && typeof t.title === 'string')
             : [];
 
-          const googleByDate = new Map<
-            string,
-            (typeof safeGoogleEvents)[number][]
-          >();
-          for (const event of safeGoogleEvents) {
-            if (!event || typeof event !== 'object') continue;
-            for (const key of gcalEventDayKeys(event)) {
-              const list = googleByDate.get(key) || [];
-              list.push(event);
-              googleByDate.set(key, list);
-            }
-          }
-
-          const dayGoogle = googleByDate.get(selectedIso) || [];
-
           const daySummitEvents = safeCalendarEvents.filter((ev) =>
             eventOccursOnDay(ev, selectedIso)
           );
 
-          // Google events not already represented as Summit events or lead adjustments
-          const summitGoogleIds = new Set(
-            safeCalendarEvents
-              .map((e) => e?.googleEventId)
-              .filter((id): id is string => Boolean(id))
-          );
+          // ONE authoritative render path: calendarEvents after merge.
+          // googleCalendarEvents is pull mirror only — never paint it (kills dual-store ghosts).
           const adjustmentGoogleIds = new Set(
             (Array.isArray(openJobs) ? openJobs : [])
               .map((l) => l?.calendarEventId)
               .filter((id): id is string => Boolean(id))
           );
-          const dayGoogleOnly = dayGoogle.filter(
+          // Lead adjustment appointments live on leads, not calendarEvents
+          const daySummitVisible = daySummitEvents.filter(
             (ev) =>
-              ev?.id &&
-              !summitGoogleIds.has(ev.id) &&
-              !adjustmentGoogleIds.has(ev.id)
+              !ev.googleEventId || !adjustmentGoogleIds.has(ev.googleEventId)
           );
 
           const tasksByDate = new Map<string, SummitTask[]>();
@@ -18194,6 +18156,12 @@ export default function SummitApp() {
               e && eventOccursOnDay(e, iso)
             )) {
               if (!ev.allDay && ev.startTime) continue;
+              if (
+                ev.googleEventId &&
+                adjustmentGoogleIds.has(ev.googleEventId)
+              ) {
+                continue;
+              }
               chips.push({
                 key: `e-${ev.id}`,
                 label: ev.title,
@@ -18213,23 +18181,6 @@ export default function SummitApp() {
                 kind: 'task',
               });
             }
-            for (const ev of (googleByDate.get(iso) || []).filter(
-              (g) =>
-                !summitGoogleIds.has(g.id) && !adjustmentGoogleIds.has(g.id)
-            )) {
-              const isAllDay = Boolean(ev.start?.date && !ev.start?.dateTime);
-              if (!isAllDay) continue;
-              chips.push({
-                key: `g-${ev.id}`,
-                label: ev.summary || 'Google event',
-                kind: 'google',
-                colorId: ev.colorId,
-                calendarColor: calendarColorFor(ev.calendarId, {
-                  bg: ev.calendarBackground,
-                  fg: ev.calendarForeground,
-                }),
-              });
-            }
             return chips;
           };
 
@@ -18239,6 +18190,12 @@ export default function SummitApp() {
               e && eventOccursOnDay(e, iso)
             )) {
               if (ev.allDay || !ev.startTime) continue;
+              if (
+                ev.googleEventId &&
+                adjustmentGoogleIds.has(ev.googleEventId)
+              ) {
+                continue;
+              }
               const range = timedEventMinutesOnDay(ev, iso);
               if (!range) continue;
               const { startMin: start, endMin: end } = range;
@@ -18264,66 +18221,6 @@ export default function SummitApp() {
                 widthPct: 100,
                 zIndex: 10,
                 onOpen: () => openEditCalendarEvent(ev),
-              });
-            }
-            for (const ev of (googleByDate.get(iso) || []).filter(
-              (g) =>
-                !summitGoogleIds.has(g.id) && !adjustmentGoogleIds.has(g.id)
-            )) {
-              if (ev.start?.date && !ev.start?.dateTime) continue;
-              const startRaw = ev.start?.dateTime;
-              if (!startRaw) continue;
-              const startD = new Date(startRaw);
-              if (Number.isNaN(startD.getTime())) continue;
-              const endD = ev.end?.dateTime
-                ? new Date(ev.end.dateTime)
-                : new Date(startD.getTime() + 60 * 60 * 1000);
-              const startDayIso = toLocalIsoDate(startD);
-              let endDayIso = toLocalIsoDate(endD);
-              const endsMidnight =
-                endD.getHours() === 0 &&
-                endD.getMinutes() === 0 &&
-                endD.getSeconds() === 0 &&
-                endD.getTime() > startD.getTime();
-              if (endsMidnight) {
-                const prev = new Date(endD.getTime() - 1);
-                endDayIso = toLocalIsoDate(prev);
-              }
-              const start =
-                startDayIso === iso
-                  ? startD.getHours() * 60 + startD.getMinutes()
-                  : 0;
-              let end =
-                endDayIso === iso && !endsMidnight
-                  ? endD.getHours() * 60 + endD.getMinutes()
-                  : endDayIso === iso && endsMidnight
-                    ? 24 * 60
-                    : endDayIso > iso
-                      ? 24 * 60
-                      : endD.getHours() * 60 + endD.getMinutes();
-              if (startDayIso === iso && endDayIso > iso) end = 24 * 60;
-              // Don't invent a 60‑min collision window for zero-length events
-              if (!(end > start)) end = Math.min(24 * 60, start + 1);
-              const dur = end - start;
-              blocks.push({
-                key: `g-${ev.id}`,
-                label: ev.summary || 'Google event',
-                kind: 'google',
-                colorId: ev.colorId,
-                calendarColor: calendarColorFor(ev.calendarId, {
-                  bg: ev.calendarBackground,
-                  fg: ev.calendarForeground,
-                }),
-                top: (start / 60) * WEEK_VIEW_HOUR_PX,
-                height: Math.max(
-                  WEEK_VIEW_MIN_EVENT_PX,
-                  (dur / 60) * WEEK_VIEW_HOUR_PX
-                ),
-                startMin: start,
-                endMin: end,
-                leftPct: 0,
-                widthPct: 100,
-                zIndex: 10,
               });
             }
             const layout = layoutOverlappingTimedEvents(
@@ -18822,14 +18719,14 @@ export default function SummitApp() {
                           day.getMonth() === calendarCursor.getMonth();
                         const isToday = iso === todayIso;
                         const isSelected = iso === selectedIso;
-                        const gEvents = (googleByDate.get(iso) || []).filter(
-                          (ev) =>
-                            !summitGoogleIds.has(ev.id) &&
-                            !adjustmentGoogleIds.has(ev.id)
-                        );
                         const dayTaskList = tasksByDate.get(iso) || [];
-                        const dayEvts = safeCalendarEvents.filter((ev) =>
-                          eventOccursOnDay(ev, iso)
+                        const dayEvts = safeCalendarEvents.filter(
+                          (ev) =>
+                            eventOccursOnDay(ev, iso) &&
+                            !(
+                              ev.googleEventId &&
+                              adjustmentGoogleIds.has(ev.googleEventId)
+                            )
                         );
                         type DayChip = {
                           key: string;
@@ -18856,32 +18753,9 @@ export default function SummitApp() {
                             label: task.title,
                             kind: 'task' as const,
                           })),
-                          ...gEvents
-                            .slice(
-                              0,
-                              Math.max(
-                                0,
-                                3 -
-                                  Math.min(2, dayEvts.length) -
-                                  Math.min(1, dayTaskList.length)
-                              )
-                            )
-                            .map((ev) => ({
-                              key: `g-${ev.id}`,
-                              label: ev.summary || 'Google event',
-                              kind: 'google' as const,
-                              colorId: ev.colorId,
-                              calendarColor: calendarColorFor(ev.calendarId, {
-                                bg: ev.calendarBackground,
-                                fg: ev.calendarForeground,
-                              }),
-                            })),
                         ].slice(0, 3);
                         const more =
-                          dayEvts.length +
-                          dayTaskList.length +
-                          gEvents.length -
-                          chips.length;
+                          dayEvts.length + dayTaskList.length - chips.length;
                         return (
                           <div
                             key={iso}
@@ -19003,20 +18877,14 @@ export default function SummitApp() {
                             })}
                       </h2>
                       <p className="text-sm text-zinc-500 mt-0.5">
-                        {daySummitEvents.length +
-                          dayGoogleOnly.length +
-                          dayTasks.length ===
-                        0
+                        {daySummitVisible.length + dayTasks.length === 0
                           ? 'Nothing scheduled — create an event or add a task'
                           : [
-                              daySummitEvents.length
-                                ? `${daySummitEvents.length} event${daySummitEvents.length === 1 ? '' : 's'}`
+                              daySummitVisible.length
+                                ? `${daySummitVisible.length} event${daySummitVisible.length === 1 ? '' : 's'}`
                                 : '',
                               dayTasks.length
                                 ? `${dayTasks.length} task${dayTasks.length === 1 ? '' : 's'}`
-                                : '',
-                              dayGoogleOnly.length
-                                ? `${dayGoogleOnly.length} Google`
                                 : '',
                             ]
                               .filter(Boolean)
@@ -19043,12 +18911,12 @@ export default function SummitApp() {
                   </div>
                 </div>
 
-                {daySummitEvents.length > 0 && (
+                {daySummitVisible.length > 0 && (
                   <div className="space-y-2">
                     <div className="text-xs font-medium uppercase tracking-wide text-zinc-400">
                       Events
                     </div>
-                    {daySummitEvents.map((event) => {
+                    {daySummitVisible.map((event) => {
                       const chipStyle = eventChipColorStyle(
                         event.colorId,
                         calendarColorFor(event.calendarId, {
@@ -19150,55 +19018,7 @@ export default function SummitApp() {
                   </div>
                 )}
 
-                {dayGoogleOnly.length > 0 && (
-                  <div className="space-y-2">
-                    <div className="text-xs font-medium uppercase tracking-wide text-zinc-400">
-                      Google Calendar
-                    </div>
-                    {dayGoogleOnly.map((event) => {
-                      const startRaw =
-                        event.start?.dateTime || event.start?.date;
-                      const isAllDay = Boolean(
-                        event.start?.date && !event.start?.dateTime
-                      );
-                      const timeLabel = !startRaw
-                        ? '—'
-                        : isAllDay
-                          ? 'All day'
-                          : new Date(startRaw).toLocaleTimeString([], {
-                              hour: 'numeric',
-                              minute: '2-digit',
-                            });
-                      return (
-                        <div
-                          key={event.id}
-                          className="flex items-center gap-4 rounded-2xl border border-emerald-200 bg-emerald-50/40 px-4 py-3"
-                        >
-                          <div className="w-20 shrink-0 font-mono text-emerald-800/80 text-sm">
-                            {timeLabel}
-                          </div>
-                          <div className="flex-1 min-w-0 font-semibold text-zinc-900 truncate">
-                            {event.summary || '(No title)'}
-                          </div>
-                          {event.htmlLink ? (
-                            <a
-                              href={event.htmlLink}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-xs font-semibold text-emerald-800 border border-emerald-300 px-3 py-1 rounded-full shrink-0 hover:bg-emerald-100"
-                            >
-                              Open
-                            </a>
-                          ) : null}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {daySummitEvents.length === 0 &&
-                  dayGoogleOnly.length === 0 &&
-                  dayTasks.length === 0 && (
+                {daySummitVisible.length === 0 && dayTasks.length === 0 && (
                     <p className="text-sm text-zinc-500">
                       Empty day — create an event or add a task.
                     </p>

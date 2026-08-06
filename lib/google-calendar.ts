@@ -507,10 +507,20 @@ export async function upsertManualCalendarEvent(
 export async function deleteGoogleCalendarEvent(
   accessToken: string,
   googleEventId: string,
-  calendarId?: string | null
+  calendarId?: string | null,
+  /** Extra calendar ids to try (e.g. writable calendarList) when event moved */
+  extraCalendarIds?: string[] | null
 ): Promise<void> {
   const tryIds = Array.from(
-    new Set([resolveManualCalendarId(calendarId), 'primary'])
+    new Set(
+      [
+        resolveManualCalendarId(calendarId),
+        'primary',
+        ...(Array.isArray(extraCalendarIds) ? extraCalendarIds : []),
+      ]
+        .map((id) => (id || '').trim())
+        .filter(Boolean)
+    )
   );
   let lastErr = '';
   for (const tryId of tryIds) {

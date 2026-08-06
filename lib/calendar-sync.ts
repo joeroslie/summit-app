@@ -33,6 +33,8 @@ export type MergeGooglePullResult = {
   removed: number;
   /** googleEventIds removed this merge (for purging parallel UI stores) */
   removedGoogleIds: string[];
+  /** False when pull was incomplete — delete-on-pull was skipped */
+  pullAuthoritative: boolean;
 };
 
 /** Local YYYY-MM-DD from a Date (no UTC shift). */
@@ -141,6 +143,17 @@ export function mergeGoogleCalendarEventsIntoLocal(
     retainGoogleIds?: Set<string>;
     /** Explicit cancelled ids from showDeleted pull */
     cancelledGoogleIds?: Set<string>;
+    /**
+     * When false, import/update/cancel only — never delete-on-pull for missing ids.
+     * Use when the Google list call failed / fetched zero calendars.
+     */
+    pullAuthoritative?: boolean;
+    /**
+     * Calendar ids that were successfully listed this pull.
+     * Locals on calendars not in this set are never delete-on-pull'd
+     * (partial multi-cal failure must not wipe Eucalyptus/Mango events).
+     */
+    fetchedCalendarIds?: Set<string>;
   }
 ): MergeGooglePullResult {
   const localSafe = Array.isArray(local) ? local : [];
@@ -149,6 +162,8 @@ export function mergeGoogleCalendarEventsIntoLocal(
   const retainIds = opts?.retainGoogleIds || new Set<string>();
   const cancelledIds = new Set(opts?.cancelledGoogleIds || []);
   const pullWindow = opts?.pullWindow;
+  const pullAuthoritative = opts?.pullAuthoritative !== false;
+  const fetchedCalIds = opts?.fetchedCalendarIds;
 
   const byGoogle = new Map<string, SummitCalendarEvent>();
   const byId = new Map<string, SummitCalendarEvent>();
@@ -191,7 +206,9 @@ export function mergeGoogleCalendarEventsIntoLocal(
 
     const existing =
       byGoogle.get(ge.id) ||
-      (meta.summitEventId ? byId.get(meta.summitEventId) : undefined);
+      (meta.summitEventId ? byId.get(meta.summitEventId) : undefined) ||
+      // Recurring: local stored master, pull has expanded instance
+      (ge.recurringEventId ? byGoogle.get(ge.recurringEventId) : undefined);
 
     if (existing) {
       const merged: SummitCalendarEvent = {
@@ -207,18 +224,25 @@ export function mergeGoogleCalendarEventsIntoLocal(
         leadName: existing.leadName,
         googleEventId: ge.id,
         googleHtmlLink: mapped.googleHtmlLink || existing.googleHtmlLink,
+        // Pull calendar id wins — fixes stale "primary" after multi-cal reconnect
         calendarId: mapped.calendarId || existing.calendarId,
         colorId: mapped.colorId,
-        // Prefer fresh pull colors; do not keep stale Cobalt when pull has calendar hex
-        calendarColorBg: mapped.calendarColorBg ?? existing.calendarColorBg,
-        calendarColorFg: mapped.calendarColorFg ?? existing.calendarColorFg,
+        // Pull colors win (including undefined) so stale Cobalt cannot stick
+        calendarColorBg: mapped.calendarColorBg,
+        calendarColorFg: mapped.calendarColorFg,
         updatedAt: mapped.updatedAt,
         source: existing.source || mapped.source,
       };
       nextById.set(existing.id, merged);
+      // Master→instance remap: drop stale byGoogle master key collision
+      if (existing.googleEventId && existing.googleEventId !== ge.id) {
+        byGoogle.delete(existing.googleEventId);
+      }
+      byGoogle.set(ge.id, merged);
       updated += 1;
     } else {
       nextById.set(mapped.id, mapped);
+      byGoogle.set(ge.id, mapped);
       imported += 1;
     }
   }
@@ -246,6 +270,20 @@ export function mergeGoogleCalendarEventsIntoLocal(
       Boolean(gid) &&
       googleIdPresentInPull(gid, remoteIds, remoteRecurringMasters);
     if (stillOnGoogle) {
+      // Master shell + expanded instances already imported → drop master (no dual chip)
+      const instancesImported = Array.from(nextById.values()).some(
+        (x) =>
+          Boolean(x.googleEventId) &&
+          Boolean(gid) &&
+          x.googleEventId !== gid &&
+          (x.googleEventId!.startsWith(`${gid}_`) ||
+            x.googleEventId === gid)
+      );
+      if (instancesImported && gid && !remoteIds.has(gid)) {
+        removed += 1;
+        removedGoogleIds.push(gid);
+        continue;
+      }
       // e.g. adjustment skip — preserve local link if any
       nextById.set(e.id, e);
       continue;
@@ -255,6 +293,24 @@ export function mergeGoogleCalendarEventsIntoLocal(
     if (gid && retainIds.has(gid)) {
       nextById.set(e.id, e);
       continue;
+    }
+
+    // Incomplete pull — never wipe; partial multi-cal — never wipe unfetched calendars
+    if (!pullAuthoritative) {
+      nextById.set(e.id, e);
+      continue;
+    }
+    if (fetchedCalIds && fetchedCalIds.size > 0) {
+      const calId = (e.calendarId || '').trim();
+      if (calId) {
+        const calWasFetched =
+          fetchedCalIds.has(calId) ||
+          (calId === 'primary' && fetchedCalIds.has('primary'));
+        if (!calWasFetched) {
+          nextById.set(e.id, e);
+          continue;
+        }
+      }
     }
 
     const inWindow =
@@ -272,7 +328,27 @@ export function mergeGoogleCalendarEventsIntoLocal(
     nextById.set(e.id, e);
   }
 
-  const events = Array.from(nextById.values()).sort((a, b) => {
+  // Dedupe by googleEventId — keep newest updatedAt (kills dual local copies)
+  const deduped = new Map<string, SummitCalendarEvent>();
+  const noGoogle: SummitCalendarEvent[] = [];
+  for (const ev of nextById.values()) {
+    const gid = (ev.googleEventId || '').trim();
+    if (!gid) {
+      noGoogle.push(ev);
+      continue;
+    }
+    const prev = deduped.get(gid);
+    if (!prev) {
+      deduped.set(gid, ev);
+      continue;
+    }
+    const prevT = Date.parse(prev.updatedAt || '') || 0;
+    const nextT = Date.parse(ev.updatedAt || '') || 0;
+    removed += 1; // dropped duplicate local row (same Google id)
+    deduped.set(gid, nextT >= prevT ? ev : prev);
+  }
+
+  const events = [...noGoogle, ...deduped.values()].sort((a, b) => {
     if (a.startDate !== b.startDate) return a.startDate.localeCompare(b.startDate);
     const at = a.allDay ? '00:00' : a.startTime || '00:00';
     const bt = b.allDay ? '00:00' : b.startTime || '00:00';
@@ -280,7 +356,14 @@ export function mergeGoogleCalendarEventsIntoLocal(
     return a.title.localeCompare(b.title);
   });
 
-  return { events, imported, updated, removed, removedGoogleIds };
+  return {
+    events,
+    imported,
+    updated,
+    removed,
+    removedGoogleIds,
+    pullAuthoritative,
+  };
 }
 
 /**
@@ -294,6 +377,8 @@ export function safeMergeGoogleCalendarEventsIntoLocal(
     pullWindow?: Pick<CalendarPullWindow, 'startDate' | 'endDateExclusive'>;
     retainGoogleIds?: Set<string>;
     cancelledGoogleIds?: Set<string>;
+    pullAuthoritative?: boolean;
+    fetchedCalendarIds?: Set<string>;
   }
 ): MergeGooglePullResult {
   try {
@@ -307,6 +392,7 @@ export function safeMergeGoogleCalendarEventsIntoLocal(
       updated: 0,
       removed: 0,
       removedGoogleIds: [],
+      pullAuthoritative: false,
     };
   }
 }

@@ -1015,8 +1015,9 @@ export function googleEventToSummitEvent(
       .trim() || undefined;
   }
 
+  // Prefer real calendarList id; never invent "primary" when unknown (wrong cal → Cobalt)
   const calendarId =
-    (event.calendarId || event.organizer?.email || '').trim() || 'primary';
+    (event.calendarId || event.organizer?.email || '').trim() || undefined;
   const calendarColorBg =
     normalizeCssHex(event.calendarBackground) || undefined;
   const calendarColorFg =
