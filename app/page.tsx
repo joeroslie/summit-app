@@ -923,7 +923,7 @@ function mergeCompanySettings(
   cloud: CompanySettings | null
 ): CompanySettings {
   if (!cloud) return local;
-  const pick = (c: string, l: string) => (c.trim() ? c : l);
+  const pick = (c: string, l: string) => ((c || '').trim() ? c : l);
   return {
     company: pick(cloud.company, local.company),
     projectManager: pick(cloud.projectManager, local.projectManager),
@@ -2685,7 +2685,9 @@ function mapDbLeadToApp(row: Record<string, unknown>): Lead {
   // Prefer structured notes in details (array). Fallback: legacy joined string column.
   let notes: LeadNote[] = [];
   if (Array.isArray(d.notes) && d.notes.length > 0) {
-    notes = (d.notes as LeadNote[]).map((n: any, i: number) => ({
+    notes = (
+      d.notes as Array<Partial<LeadNote> & { body?: unknown }>
+    ).map((n, i) => ({
       id: String(n?.id ?? `note-${i}`),
       text: String(n?.text ?? n?.body ?? ''),
       date: String(n?.date ?? n?.createdAt ?? ''),
@@ -2762,16 +2764,14 @@ function mapDbLeadToApp(row: Record<string, unknown>): Lead {
     category,
     notes,
     photos: Array.isArray(d.photos) ? (d.photos as LeadPhoto[]) : [],
-    photoReports: Array.isArray((d as any).photoReports)
-      ? (d as any).photoReports
+    photoReports: Array.isArray(d.photoReports)
+      ? (d.photoReports as PhotoReport[])
       : [],
     documents: Array.isArray(d.documents) ? (d.documents as LeadDocument[]) : [],
-    measurementReports: Array.isArray((d as any).measurementReports)
-      ? ((d as any).measurementReports as LeadDocument[])
+    measurementReports: Array.isArray(d.measurementReports)
+      ? (d.measurementReports as LeadDocument[])
       : [],
-    trash: Array.isArray((d as any).trash)
-      ? ((d as any).trash as LeadTrashItem[])
-      : [],
+    trash: Array.isArray(d.trash) ? (d.trash as LeadTrashItem[]) : [],
     takeoff:
       d.takeoff && typeof d.takeoff === 'object'
         ? { ...emptyTakeoff(), ...(d.takeoff as TakeoffSheet) }
@@ -9696,7 +9696,7 @@ export default function SummitApp() {
           : 0;
 
       // Live color map for this pull (avoid stale React state in recolor)
-      let effectiveColorMap: Record<
+      const effectiveColorMap: Record<
         string,
         { bg: string; fg: string; colorId?: string }
       > = {
@@ -10893,7 +10893,7 @@ export default function SummitApp() {
         Array.isArray(taskLists) ? taskLists : [],
         Array.isArray(remoteLists) ? remoteLists : []
       );
-      let nextLists = Array.isArray(listsMerged.lists)
+      const nextLists = Array.isArray(listsMerged.lists)
         ? listsMerged.lists
         : [createDefaultTaskList()];
       persistTaskLists(nextLists);
@@ -12407,7 +12407,7 @@ export default function SummitApp() {
               const dh = h * ratio;
               const x = margin + (boxW - dw) / 2;
               doc.addImage(data, 'JPEG', x, top, dw, dh);
-              let cy = top + dh + 5;
+              const cy = top + dh + 5;
               doc.setFontSize(9);
               doc.setTextColor(40);
               if (cap) {

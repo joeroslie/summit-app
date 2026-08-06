@@ -182,7 +182,7 @@ function parseAreasPerPitch(fullText: string): {
   const pctIdx = afterPitches.search(/\d+(?:\.\d+)?%/);
   const areaZone =
     pctIdx >= 0 ? afterPitches.slice(0, pctIdx) : afterPitches.slice(0, 240);
-  let areas = [...areaZone.matchAll(/([\d,]+\.\d+|\d{1,5}(?:\.\d+)?)/g)]
+  const areas = [...areaZone.matchAll(/([\d,]+\.\d+|\d{1,5}(?:\.\d+)?)/g)]
     .map((m) => parseNum(m[1]))
     .filter((v): v is number => v != null && v > 0)
     .slice(0, n);
