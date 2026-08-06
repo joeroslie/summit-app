@@ -204,11 +204,71 @@ export function mergeGoogleCalendarEventsIntoLocal(
     const mapped = googleEventToSummitEvent(ge);
     if (!mapped) continue;
 
+    const masterLocal =
+      (ge.recurringEventId
+        ? byGoogle.get(ge.recurringEventId)
+        : undefined) ||
+      (ge.recurringEventId && meta.summitEventId
+        ? byId.get(meta.summitEventId)
+        : undefined);
+
+    // Recurring instances: never collapse onto the Summit master row
+    if (ge.recurringEventId) {
+      const existingInstance = byGoogle.get(ge.id);
+      const instanceId =
+        existingInstance?.id ||
+        (meta.summitEventId
+          ? `${meta.summitEventId}__${ge.id}`
+          : mapped.id);
+      const merged: SummitCalendarEvent = {
+        ...(existingInstance || mapped),
+        id: instanceId,
+        title: mapped.title,
+        notes: mapped.notes,
+        startDate: mapped.startDate,
+        endDate: mapped.endDate,
+        startTime: mapped.startTime,
+        endTime: mapped.endTime,
+        allDay: mapped.allDay,
+        leadId:
+          mapped.leadId ??
+          existingInstance?.leadId ??
+          masterLocal?.leadId,
+        leadName:
+          existingInstance?.leadName ||
+          masterLocal?.leadName ||
+          mapped.leadName,
+        googleEventId: ge.id,
+        googleHtmlLink: mapped.googleHtmlLink || existingInstance?.googleHtmlLink,
+        calendarId: mapped.calendarId || existingInstance?.calendarId,
+        colorId: mapped.colorId ?? existingInstance?.colorId ?? masterLocal?.colorId,
+        calendarColorBg: mapped.calendarColorBg,
+        calendarColorFg: mapped.calendarColorFg,
+        rrule:
+          mapped.rrule ||
+          existingInstance?.rrule ||
+          masterLocal?.rrule,
+        recurringEventId: ge.recurringEventId,
+        updatedAt: mapped.updatedAt,
+        createdAt:
+          existingInstance?.createdAt ||
+          masterLocal?.createdAt ||
+          mapped.createdAt,
+        source:
+          existingInstance?.source ||
+          masterLocal?.source ||
+          mapped.source,
+      };
+      nextById.set(instanceId, merged);
+      byGoogle.set(ge.id, merged);
+      if (existingInstance) updated += 1;
+      else imported += 1;
+      continue;
+    }
+
     const existing =
       byGoogle.get(ge.id) ||
-      (meta.summitEventId ? byId.get(meta.summitEventId) : undefined) ||
-      // Recurring: local stored master, pull has expanded instance
-      (ge.recurringEventId ? byGoogle.get(ge.recurringEventId) : undefined);
+      (meta.summitEventId ? byId.get(meta.summitEventId) : undefined);
 
     if (existing) {
       const merged: SummitCalendarEvent = {
@@ -230,6 +290,8 @@ export function mergeGoogleCalendarEventsIntoLocal(
         // Pull colors win (including undefined) so stale Cobalt cannot stick
         calendarColorBg: mapped.calendarColorBg,
         calendarColorFg: mapped.calendarColorFg,
+        rrule: mapped.rrule || existing.rrule,
+        recurringEventId: mapped.recurringEventId || existing.recurringEventId,
         updatedAt: mapped.updatedAt,
         source: existing.source || mapped.source,
       };

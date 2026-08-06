@@ -405,6 +405,13 @@ export type SummitCalendarEvent = {
   calendarColorBg?: string;
   /** Resolved calendarList.foregroundColor */
   calendarColorFg?: string;
+  /**
+   * Recurrence rule body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;BYDAY=MO`.
+   * Present on Summit masters and copied onto series instances when known.
+   */
+  rrule?: string;
+  /** Google recurring master id (set on expanded instances from singleEvents pull) */
+  recurringEventId?: string;
   updatedAt: string;
   createdAt: string;
   /** Created in Summit vs imported from Google */
@@ -430,6 +437,8 @@ export type GoogleEventForMerge = {
   status?: string;
   /** Present on expanded recurring instances */
   recurringEventId?: string;
+  /** Master events only (not returned when singleEvents=true) */
+  recurrence?: string[];
   extendedProperties?: {
     private?: Record<string, string>;
   };
@@ -496,6 +505,9 @@ export function normalizeGoogleCalendarEventsList(
         typeof e.recurringEventId === 'string'
           ? e.recurringEventId
           : undefined,
+      recurrence: Array.isArray(e.recurrence)
+        ? e.recurrence.filter((r): r is string => typeof r === 'string')
+        : undefined,
       extendedProperties: e.extendedProperties,
       updated: typeof e.updated === 'string' ? e.updated : undefined,
     });
@@ -934,6 +946,14 @@ export function normalizeStoredCalendarEvents(raw: unknown): SummitCalendarEvent
       normalizeCssHex(e.calendarColorBg) || undefined;
     const calendarColorFg =
       normalizeCssHex(e.calendarColorFg) || undefined;
+    const rruleRaw =
+      typeof e.rrule === 'string' && e.rrule.trim()
+        ? e.rrule.trim().replace(/^RRULE:/i, '')
+        : undefined;
+    const recurringEventId =
+      typeof e.recurringEventId === 'string' && e.recurringEventId.trim()
+        ? e.recurringEventId.trim()
+        : undefined;
     out.push({
       id:
         typeof e.id === 'string' && e.id.trim()
@@ -964,6 +984,8 @@ export function normalizeStoredCalendarEvents(raw: unknown): SummitCalendarEvent
       colorId,
       calendarColorBg,
       calendarColorFg,
+      rrule: rruleRaw || undefined,
+      recurringEventId,
       updatedAt: typeof e.updatedAt === 'string' ? e.updatedAt : now,
       createdAt: typeof e.createdAt === 'string' ? e.createdAt : now,
       source: e.source === 'google' ? 'google' : 'summit',
@@ -1078,8 +1100,29 @@ export function googleEventToSummitEvent(
     normalizeCssHex(event.calendarForeground) ||
     (calendarColorBg ? contrastTextOnBg(calendarColorBg) : undefined);
 
+  const rruleFromRecurrence = Array.isArray(event.recurrence)
+    ? event.recurrence
+        .map((r) => String(r || '').trim())
+        .find((r) => /^RRULE:/i.test(r) || /^FREQ=/i.test(r))
+    : undefined;
+  const rrule = rruleFromRecurrence
+    ? rruleFromRecurrence.replace(/^RRULE:/i, '').trim() || undefined
+    : undefined;
+  const recurringEventId =
+    typeof event.recurringEventId === 'string' && event.recurringEventId.trim()
+      ? event.recurringEventId.trim()
+      : undefined;
+
+  // Stable id: one local row per Google instance; masters keep summitEventId
+  const id =
+    recurringEventId && meta.summitEventId
+      ? `${meta.summitEventId}__${event.id}`
+      : recurringEventId
+        ? `gcal_${event.id}`
+        : meta.summitEventId || newSummitCalendarEventId();
+
   return {
-    id: meta.summitEventId || newSummitCalendarEventId(),
+    id,
     title,
     notes,
     startDate: parts.startDate,
@@ -1094,6 +1137,8 @@ export function googleEventToSummitEvent(
     colorId: normalizeGoogleEventColorId(event.colorId),
     calendarColorBg,
     calendarColorFg,
+    rrule,
+    recurringEventId,
     updatedAt: now,
     createdAt: now,
     source: 'google',

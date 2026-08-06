@@ -42,6 +42,17 @@ import {
   safeMergeGoogleCalendarEventsIntoLocal,
   pullWindowForMonthCursor,
 } from '@/lib/calendar-sync';
+import {
+  DEFAULT_RECURRENCE_DRAFT,
+  RRULE_WEEKDAYS,
+  buildRruleFromDraft,
+  expandEventsForDisplayRange,
+  recurrenceDraftFromRrule,
+  recurrenceLabel,
+  recurrencePresetOptions,
+  type RecurrenceDraft,
+  type RruleWeekday,
+} from '@/lib/calendar-recurrence';
 import { CalendarErrorBoundary } from '@/components/CalendarErrorBoundary';
 import {
   SUMMIT_CALENDAR_EVENTS_KEY,
@@ -824,7 +835,7 @@ const SYSTEM_DOCUMENTS = [
   {
     id: 'emergency',
     name: 'Mitigation Service Agreement',
-    description: 'Mitigation only · separate PDF',
+    description: '',
   },
 ] as const;
 
@@ -3187,6 +3198,8 @@ export default function SummitApp() {
       organizer?: { email?: string; displayName?: string; self?: boolean };
       start: { dateTime?: string; date?: string };
       end: { dateTime?: string; date?: string };
+      status?: string;
+      recurringEventId?: string;
       updated?: string;
       extendedProperties?: {
         private?: Record<string, string>;
@@ -3238,6 +3251,7 @@ export default function SummitApp() {
     leadSearch: '',
     calendarId: 'primary' as string,
     colorId: undefined as GoogleEventColorId | undefined,
+    recurrence: { ...DEFAULT_RECURRENCE_DRAFT } as RecurrenceDraft,
   });
   const [calEventBusy, setCalEventBusy] = useState(false);
   /** Local + Google Tasks (Google Tasks-style lists + calendar chips) */
@@ -9966,6 +9980,8 @@ export default function SummitApp() {
           googleEventId: ev.googleEventId,
           calendarId: ev.calendarId || 'primary',
           colorId: ev.colorId ?? null,
+          rrule: ev.rrule ?? null,
+          recurringEventId: ev.recurringEventId ?? null,
         });
         rememberRetainedGoogleId(out.eventId);
         next = next.map((x) =>
@@ -10090,25 +10106,61 @@ export default function SummitApp() {
       leadSearch: '',
       calendarId: primaryCal?.id || 'primary',
       colorId: undefined,
+      recurrence: { ...DEFAULT_RECURRENCE_DRAFT },
     });
     setCalEventModal({ mode: 'create' });
   };
 
+  /** Resolve virtual occurrence / series instance → editable series master when possible. */
+  const resolveEditableCalendarEvent = (
+    event: SummitCalendarEvent
+  ): SummitCalendarEvent => {
+    const locals = Array.isArray(calendarEvents) ? calendarEvents : [];
+    const occ = event.id.match(/^(.*)__occ_(\d{4}-\d{2}-\d{2})$/);
+    if (occ) {
+      const master = locals.find((e) => e.id === occ[1]);
+      if (master) return master;
+    }
+    // Summit series instance id: `{summitId}__{googleInstanceId}`
+    if (event.recurringEventId && event.id.includes('__')) {
+      const baseId = event.id.split('__')[0]!;
+      const master = locals.find(
+        (e) =>
+          e.id === baseId ||
+          (e.googleEventId === event.recurringEventId && !e.recurringEventId)
+      );
+      if (master) return { ...master, rrule: master.rrule || event.rrule };
+    }
+    return event;
+  };
+
   const openEditCalendarEvent = (event: SummitCalendarEvent) => {
+    const editable = resolveEditableCalendarEvent(event);
+    const startDate = event.startDate || editable.startDate;
     setCalEventDraft({
-      title: event.title,
-      notes: event.notes || '',
-      startDate: event.startDate,
-      endDate: event.endDate || event.startDate,
-      startTime: event.startTime || '09:00',
-      endTime: event.endTime || defaultEndTime(event.startTime || '09:00'),
-      allDay: event.allDay,
-      leadId: event.leadId ?? null,
+      title: editable.title,
+      notes: editable.notes || '',
+      startDate,
+      endDate: event.endDate || editable.endDate || startDate,
+      startTime: event.startTime || editable.startTime || '09:00',
+      endTime:
+        event.endTime ||
+        editable.endTime ||
+        defaultEndTime(event.startTime || editable.startTime || '09:00'),
+      allDay: event.allDay ?? editable.allDay,
+      leadId: editable.leadId ?? null,
       leadSearch: '',
-      calendarId: event.calendarId || 'primary',
-      colorId: normalizeGoogleEventColorId(event.colorId),
+      calendarId: editable.calendarId || event.calendarId || 'primary',
+      colorId: normalizeGoogleEventColorId(editable.colorId || event.colorId),
+      recurrence: recurrenceDraftFromRrule(
+        editable.rrule || event.rrule,
+        startDate
+      ),
     });
-    setCalEventModal({ mode: 'edit', eventId: event.id });
+    setCalEventModal({
+      mode: 'edit',
+      eventId: editable.id,
+    });
   };
 
   const saveCalendarEventDraft = async () => {
@@ -10145,11 +10197,54 @@ export default function SummitApp() {
       mapColors?.bg || listColors?.backgroundColor || undefined;
     const calendarColorFg =
       mapColors?.fg || listColors?.foregroundColor || undefined;
-    const base: SummitCalendarEvent = {
-      id:
-        calEventModal?.mode === 'edit' && calEventModal.eventId
+    const rrule = buildRruleFromDraft(
+      calEventDraft.recurrence,
+      calEventDraft.startDate
+    );
+    const localEvents = Array.isArray(calendarEvents) ? calendarEvents : [];
+    let existing: SummitCalendarEvent | undefined;
+    if (calEventModal?.mode === 'edit' && calEventModal.eventId) {
+      existing = localEvents.find((e) => e.id === calEventModal.eventId);
+      if (!existing) {
+        // Instance row while modal holds summit base id
+        existing = localEvents.find(
+          (e) =>
+            e.id === calEventModal.eventId ||
+            e.id.startsWith(`${calEventModal.eventId}__`)
+        );
+      }
+    }
+
+    // Series edit: collapse instances → one master shell (pull re-expands)
+    const seriesMasterGoogleId =
+      (existing?.recurringEventId || '').trim() ||
+      (existing?.rrule &&
+      existing.googleEventId &&
+      !existing.recurringEventId
+        ? existing.googleEventId.trim()
+        : '');
+    const summitBaseId = (() => {
+      if (!existing) return undefined;
+      if (existing.id.includes('__')) return existing.id.split('__')[0]!;
+      return existing.id;
+    })();
+    const editingSeries = Boolean(
+      existing &&
+        (existing.recurringEventId ||
+          existing.rrule ||
+          rrule ||
+          seriesMasterGoogleId)
+    );
+
+    const baseId =
+      editingSeries && summitBaseId
+        ? summitBaseId
+        : calEventModal?.mode === 'edit' && calEventModal.eventId
           ? calEventModal.eventId
-          : newSummitCalendarEventId(),
+          : newSummitCalendarEventId();
+
+    const base: SummitCalendarEvent = {
+      id: baseId,
       title,
       notes: calEventDraft.notes.trim() || undefined,
       startDate: calEventDraft.startDate,
@@ -10166,36 +10261,48 @@ export default function SummitApp() {
       colorId,
       calendarColorBg,
       calendarColorFg,
+      rrule,
+      recurringEventId: undefined,
       updatedAt: now,
       createdAt: now,
       source: 'summit',
     };
 
-    const localEvents = Array.isArray(calendarEvents) ? calendarEvents : [];
-    let existing: SummitCalendarEvent | undefined;
-    if (calEventModal?.mode === 'edit' && calEventModal.eventId) {
-      existing = localEvents.find((e) => e.id === calEventModal.eventId);
-    }
     const event: SummitCalendarEvent = existing
       ? {
           ...existing,
           ...base,
-          id: existing.id,
+          id: baseId,
           createdAt: existing.createdAt,
-          googleEventId: existing.googleEventId,
+          googleEventId: seriesMasterGoogleId || existing.googleEventId,
           googleHtmlLink: existing.googleHtmlLink,
           calendarId,
           colorId,
           calendarColorBg: calendarColorBg || existing.calendarColorBg,
           calendarColorFg: calendarColorFg || existing.calendarColorFg,
+          rrule,
+          recurringEventId: undefined,
           source: existing.source || 'summit',
         }
       : base;
 
-    const next =
-      existing != null
-        ? localEvents.map((e) => (e.id === event.id ? event : e))
-        : [event, ...localEvents];
+    let next: SummitCalendarEvent[];
+    if (editingSeries && existing) {
+      const masterGid = (seriesMasterGoogleId || event.googleEventId || '').trim();
+      next = localEvents.filter((e) => {
+        if (e.id === existing!.id || e.id === baseId) return false;
+        if (e.id.startsWith(`${baseId}__`)) return false;
+        if (masterGid && (e.googleEventId === masterGid || e.recurringEventId === masterGid)) {
+          return false;
+        }
+        return true;
+      });
+      next = [event, ...next];
+    } else if (existing != null) {
+      next = localEvents.map((e) => (e.id === event.id ? event : e));
+    } else {
+      next = [event, ...localEvents];
+    }
     persistCalendarEvents(next);
     setCalendarSelectedDay(event.startDate);
     setCalEventModal(null);
@@ -10224,6 +10331,10 @@ export default function SummitApp() {
       const session = await ensureBrowserGcalSession();
       if (session?.accessToken && hasBrowserGcalToken()) {
         setGcalConnected(true);
+        const clearRecurrence = Boolean(
+          !event.rrule &&
+            (existing?.rrule || existing?.recurringEventId || seriesMasterGoogleId)
+        );
         const out = await syncManualEventWithBrowserToken(
           session.accessToken,
           {
@@ -10240,6 +10351,9 @@ export default function SummitApp() {
             googleEventId: event.googleEventId,
             calendarId: event.calendarId || 'primary',
             colorId: event.colorId ?? null,
+            rrule: event.rrule || (clearRecurrence ? null : undefined),
+            recurringEventId:
+              seriesMasterGoogleId || event.recurringEventId || undefined,
           }
         );
         rememberRetainedGoogleId(out.eventId);
@@ -10250,6 +10364,8 @@ export default function SummitApp() {
                 googleEventId: out.eventId,
                 googleHtmlLink: out.htmlLink || e.googleHtmlLink,
                 calendarId: out.calendarId || e.calendarId || 'primary',
+                rrule: event.rrule,
+                recurringEventId: undefined,
                 updatedAt: new Date().toISOString(),
               }
             : e
@@ -10258,9 +10374,13 @@ export default function SummitApp() {
         // Soft pull (retain protects just-pushed id from delete-on-pull lag)
         void loadGoogleEvents({ silent: true });
         showToast(
-          event.leadId
-            ? 'Event saved · linked lead · synced to Google'
-            : 'Event saved · synced to Google'
+          event.rrule
+            ? event.leadId
+              ? 'Series saved · linked lead · synced to Google'
+              : 'Series saved · synced to Google'
+            : event.leadId
+              ? 'Event saved · linked lead · synced to Google'
+              : 'Event saved · synced to Google'
         );
         return;
       }
@@ -10283,28 +10403,78 @@ export default function SummitApp() {
   };
 
   const deleteCalendarEvent = async (eventId: string) => {
-    const target = (Array.isArray(calendarEvents) ? calendarEvents : []).find(
-      (e) => e.id === eventId
-    );
+    const locals = Array.isArray(calendarEvents) ? calendarEvents : [];
+    const target =
+      locals.find((e) => e.id === eventId) ||
+      locals.find((e) => e.id.startsWith(`${eventId}__`));
     if (!target) return;
-    const next = (Array.isArray(calendarEvents) ? calendarEvents : []).filter(
-      (e) => e.id !== eventId
+
+    const summitBaseId = target.id.includes('__')
+      ? target.id.split('__')[0]!
+      : target.id;
+    const seriesMasterGoogleId = (
+      target.recurringEventId ||
+      (target.rrule && !target.recurringEventId ? target.googleEventId : '') ||
+      ''
+    ).trim();
+    const isSeries = Boolean(
+      target.rrule || target.recurringEventId || seriesMasterGoogleId
     );
+
+    const next = locals.filter((e) => {
+      if (e.id === target.id || e.id === eventId || e.id === summitBaseId) {
+        return false;
+      }
+      if (e.id.startsWith(`${summitBaseId}__`)) return false;
+      if (
+        seriesMasterGoogleId &&
+        (e.googleEventId === seriesMasterGoogleId ||
+          e.recurringEventId === seriesMasterGoogleId)
+      ) {
+        return false;
+      }
+      return true;
+    });
     persistCalendarEvents(next);
     setCalEventModal(null);
 
-    const googleId = (target.googleEventId || '').trim();
+    // Delete series master on Google when linked; else the single event id
+    const googleId = (
+      seriesMasterGoogleId ||
+      target.googleEventId ||
+      ''
+    ).trim();
     // Purge parallel googleCalendarEvents store so UI can't resurrect the chip
-    if (googleId) {
+    if (googleId || seriesMasterGoogleId) {
       const gPrev = Array.isArray(googleCalendarEvents)
         ? googleCalendarEvents
         : [];
-      setGoogleEventsSafe(gPrev.filter((e) => e?.id !== googleId));
-      retainGoogleIdsRef.current.delete(googleId);
+      setGoogleEventsSafe(
+        gPrev.filter((e) => {
+          const id = (e?.id || '').trim();
+          if (!id) return true;
+          if (googleId && (id === googleId || id.startsWith(`${googleId}_`))) {
+            return false;
+          }
+          if (
+            seriesMasterGoogleId &&
+            (id === seriesMasterGoogleId ||
+              id.startsWith(`${seriesMasterGoogleId}_`) ||
+              e.recurringEventId === seriesMasterGoogleId)
+          ) {
+            return false;
+          }
+          return true;
+        })
+      );
+      if (googleId) retainGoogleIdsRef.current.delete(googleId);
+      if (seriesMasterGoogleId) {
+        retainGoogleIdsRef.current.delete(seriesMasterGoogleId);
+      }
     }
 
     if (!googleId) {
-      showToast('Event deleted');
+      showToast(isSeries ? 'Series deleted' : 'Event deleted');
       return;
     }
 
@@ -10316,7 +10486,7 @@ export default function SummitApp() {
         hasBrowserGcalToken,
       } = await import('@/lib/gcal-browser');
       if (!gcalConnected && !hasBrowserGcalToken()) {
-        showToast('Event deleted');
+        showToast(isSeries ? 'Series deleted' : 'Event deleted');
         return;
       }
       const session = await ensureBrowserGcalSession();
@@ -10330,14 +10500,20 @@ export default function SummitApp() {
             .map((c) => c?.id)
             .filter((id): id is string => Boolean(id))
         );
-        showToast('Event deleted · removed from Google');
+        showToast(
+          isSeries
+            ? 'Series deleted · removed from Google'
+            : 'Event deleted · removed from Google'
+        );
         return;
       }
       setGcalConnected(hasBrowserGcalToken());
       showToast(
         hasBrowserGcalToken()
           ? 'Removed locally — Google session expired, reconnect to finish delete'
-          : 'Event deleted'
+          : isSeries
+            ? 'Series deleted'
+            : 'Event deleted'
       );
     } catch {
       showToast('Removed locally — could not delete on Google');
@@ -15826,9 +16002,14 @@ export default function SummitApp() {
                 >
                   {calEventModal.mode === 'create' ? 'Create event' : 'Event'}
                 </h2>
-                <p className="text-sm text-zinc-500 mt-1">
-                  Title, time, optional notes — link a lead if you want.
-                </p>
+                {calEventModal.mode === 'edit' &&
+                (editing?.rrule ||
+                  editing?.recurringEventId ||
+                  calEventDraft.recurrence.preset !== 'none') ? (
+                  <p className="text-sm text-zinc-500 mt-1">
+                    Saves update the whole series
+                  </p>
+                ) : null}
               </div>
               <div className="p-5 sm:p-6 space-y-4 overflow-y-auto flex-1">
                 <label className="block space-y-1.5">
@@ -15936,6 +16117,338 @@ export default function SummitApp() {
                         className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300"
                       />
                     </label>
+                  </div>
+                ) : null}
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">
+                    Repeat
+                  </span>
+                  <select
+                    value={calEventDraft.recurrence.preset}
+                    onChange={(e) => {
+                      const preset = e.target
+                        .value as RecurrenceDraft['preset'];
+                      setCalEventDraft((d) => {
+                        const startWd = RRULE_WEEKDAYS[
+                          new Date(`${d.startDate}T12:00:00`).getDay()
+                        ] as RruleWeekday;
+                        if (preset === 'none') {
+                          return {
+                            ...d,
+                            recurrence: { ...DEFAULT_RECURRENCE_DRAFT },
+                          };
+                        }
+                        if (preset === 'custom') {
+                          return {
+                            ...d,
+                            recurrence: {
+                              ...d.recurrence,
+                              preset: 'custom',
+                              freq:
+                                d.recurrence.preset === 'none'
+                                  ? 'WEEKLY'
+                                  : d.recurrence.freq,
+                              interval: Math.max(1, d.recurrence.interval || 1),
+                              byDay:
+                                d.recurrence.byDay.length > 0
+                                  ? d.recurrence.byDay
+                                  : [startWd],
+                            },
+                          };
+                        }
+                        return {
+                          ...d,
+                          recurrence: {
+                            ...DEFAULT_RECURRENCE_DRAFT,
+                            preset,
+                            freq:
+                              preset === 'daily'
+                                ? 'DAILY'
+                                : preset === 'monthly'
+                                  ? 'MONTHLY'
+                                  : preset === 'yearly'
+                                    ? 'YEARLY'
+                                    : 'WEEKLY',
+                            byDay:
+                              preset === 'weekly'
+                                ? [startWd]
+                                : preset === 'weekdays'
+                                  ? ['MO', 'TU', 'WE', 'TH', 'FR']
+                                  : [],
+                          },
+                        };
+                      });
+                    }}
+                    className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300 bg-white"
+                  >
+                    {recurrencePresetOptions(calEventDraft.startDate || '').map(
+                      (opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.value === 'custom' &&
+                          calEventDraft.recurrence.preset === 'custom'
+                            ? recurrenceLabel(
+                                calEventDraft.recurrence,
+                                calEventDraft.startDate
+                              )
+                            : opt.label}
+                        </option>
+                      )
+                    )}
+                  </select>
+                </label>
+                {calEventDraft.recurrence.preset === 'custom' ? (
+                  <div className="rounded-2xl border border-zinc-200 p-3 space-y-3 bg-zinc-50/60">
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="block space-y-1.5">
+                        <span className="text-xs font-medium text-zinc-500">
+                          Every
+                        </span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={365}
+                          value={calEventDraft.recurrence.interval}
+                          onChange={(e) =>
+                            setCalEventDraft((d) => ({
+                              ...d,
+                              recurrence: {
+                                ...d.recurrence,
+                                interval: Math.max(
+                                  1,
+                                  Math.min(365, Number(e.target.value) || 1)
+                                ),
+                              },
+                            }))
+                          }
+                          className="w-full rounded-xl border border-zinc-200 px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300 bg-white"
+                        />
+                      </label>
+                      <label className="block space-y-1.5">
+                        <span className="text-xs font-medium text-zinc-500">
+                          Unit
+                        </span>
+                        <select
+                          value={calEventDraft.recurrence.freq}
+                          onChange={(e) =>
+                            setCalEventDraft((d) => ({
+                              ...d,
+                              recurrence: {
+                                ...d.recurrence,
+                                freq: e.target.value as RecurrenceDraft['freq'],
+                                byDay:
+                                  e.target.value === 'WEEKLY'
+                                    ? d.recurrence.byDay.length > 0
+                                      ? d.recurrence.byDay
+                                      : [
+                                          RRULE_WEEKDAYS[
+                                            new Date(
+                                              `${d.startDate}T12:00:00`
+                                            ).getDay()
+                                          ] as RruleWeekday,
+                                        ]
+                                    : [],
+                              },
+                            }))
+                          }
+                          className="w-full rounded-xl border border-zinc-200 px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300 bg-white"
+                        >
+                          <option value="DAILY">Day</option>
+                          <option value="WEEKLY">Week</option>
+                          <option value="MONTHLY">Month</option>
+                          <option value="YEARLY">Year</option>
+                        </select>
+                      </label>
+                    </div>
+                    {calEventDraft.recurrence.freq === 'WEEKLY' ? (
+                      <div className="space-y-1.5">
+                        <div className="text-xs font-medium text-zinc-500">
+                          On
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {(
+                            [
+                              ['SU', 'S'],
+                              ['MO', 'M'],
+                              ['TU', 'T'],
+                              ['WE', 'W'],
+                              ['TH', 'T'],
+                              ['FR', 'F'],
+                              ['SA', 'S'],
+                            ] as [RruleWeekday, string][]
+                          ).map(([day, label]) => {
+                            const on =
+                              calEventDraft.recurrence.byDay.includes(day);
+                            return (
+                              <button
+                                key={day}
+                                type="button"
+                                aria-pressed={on}
+                                onClick={() =>
+                                  setCalEventDraft((d) => {
+                                    const set = new Set(d.recurrence.byDay);
+                                    if (set.has(day)) set.delete(day);
+                                    else set.add(day);
+                                    const byDay = RRULE_WEEKDAYS.filter((w) =>
+                                      set.has(w)
+                                    );
+                                    return {
+                                      ...d,
+                                      recurrence: {
+                                        ...d.recurrence,
+                                        byDay:
+                                          byDay.length > 0
+                                            ? byDay
+                                            : [day],
+                                      },
+                                    };
+                                  })
+                                }
+                                className={`h-8 w-8 rounded-full text-xs font-semibold ${
+                                  on
+                                    ? 'bg-sky-600 text-white'
+                                    : 'bg-white border border-zinc-200 text-zinc-700'
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
+                    <div className="space-y-1.5">
+                      <div className="text-xs font-medium text-zinc-500">
+                        Ends
+                      </div>
+                      <div className="space-y-2">
+                        <label className="flex items-center gap-2 text-sm text-zinc-800">
+                          <input
+                            type="radio"
+                            name="cal-recur-ends"
+                            checked={
+                              calEventDraft.recurrence.ends.kind === 'never'
+                            }
+                            onChange={() =>
+                              setCalEventDraft((d) => ({
+                                ...d,
+                                recurrence: {
+                                  ...d.recurrence,
+                                  ends: { kind: 'never' },
+                                },
+                              }))
+                            }
+                          />
+                          Never
+                        </label>
+                        <label className="flex items-center gap-2 text-sm text-zinc-800 flex-wrap">
+                          <input
+                            type="radio"
+                            name="cal-recur-ends"
+                            checked={
+                              calEventDraft.recurrence.ends.kind === 'on'
+                            }
+                            onChange={() =>
+                              setCalEventDraft((d) => ({
+                                ...d,
+                                recurrence: {
+                                  ...d.recurrence,
+                                  ends: {
+                                    kind: 'on',
+                                    untilDate:
+                                      d.recurrence.ends.kind === 'on'
+                                        ? d.recurrence.ends.untilDate
+                                        : d.startDate,
+                                  },
+                                },
+                              }))
+                            }
+                          />
+                          On
+                          <input
+                            type="date"
+                            disabled={
+                              calEventDraft.recurrence.ends.kind !== 'on'
+                            }
+                            value={
+                              calEventDraft.recurrence.ends.kind === 'on'
+                                ? calEventDraft.recurrence.ends.untilDate
+                                : calEventDraft.startDate
+                            }
+                            onChange={(e) =>
+                              setCalEventDraft((d) => ({
+                                ...d,
+                                recurrence: {
+                                  ...d.recurrence,
+                                  ends: {
+                                    kind: 'on',
+                                    untilDate: e.target.value,
+                                  },
+                                },
+                              }))
+                            }
+                            className="rounded-xl border border-zinc-200 px-2 py-1.5 text-sm disabled:opacity-40 bg-white"
+                          />
+                        </label>
+                        <label className="flex items-center gap-2 text-sm text-zinc-800 flex-wrap">
+                          <input
+                            type="radio"
+                            name="cal-recur-ends"
+                            checked={
+                              calEventDraft.recurrence.ends.kind === 'after'
+                            }
+                            onChange={() =>
+                              setCalEventDraft((d) => ({
+                                ...d,
+                                recurrence: {
+                                  ...d.recurrence,
+                                  ends: {
+                                    kind: 'after',
+                                    count:
+                                      d.recurrence.ends.kind === 'after'
+                                        ? d.recurrence.ends.count
+                                        : 10,
+                                  },
+                                },
+                              }))
+                            }
+                          />
+                          After
+                          <input
+                            type="number"
+                            min={1}
+                            max={999}
+                            disabled={
+                              calEventDraft.recurrence.ends.kind !== 'after'
+                            }
+                            value={
+                              calEventDraft.recurrence.ends.kind === 'after'
+                                ? calEventDraft.recurrence.ends.count
+                                : 10
+                            }
+                            onChange={(e) =>
+                              setCalEventDraft((d) => ({
+                                ...d,
+                                recurrence: {
+                                  ...d.recurrence,
+                                  ends: {
+                                    kind: 'after',
+                                    count: Math.max(
+                                      1,
+                                      Math.min(
+                                        999,
+                                        Number(e.target.value) || 1
+                                      )
+                                    ),
+                                  },
+                                },
+                              }))
+                            }
+                            className="w-20 rounded-xl border border-zinc-200 px-2 py-1.5 text-sm disabled:opacity-40 bg-white"
+                          />
+                          occurrences
+                        </label>
+                      </div>
+                    </div>
                   </div>
                 ) : null}
                 <label className="block space-y-1.5">
@@ -16140,7 +16653,11 @@ export default function SummitApp() {
                     }
                     className="sm:mr-auto px-4 py-3 rounded-2xl text-sm font-medium text-red-700 border border-red-200 hover:bg-red-50 disabled:opacity-50"
                   >
-                    Delete
+                    {editing?.rrule ||
+                    editing?.recurringEventId ||
+                    calEventDraft.recurrence.preset !== 'none'
+                      ? 'Delete series'
+                      : 'Delete'}
                   </button>
                 ) : null}
                 <button
@@ -18563,14 +19080,26 @@ export default function SummitApp() {
 
           // Single paint source after merge (googleCalendarEvents is pull mirror only).
           // When disconnected, hide Google-imported events so UI can't look linked.
-          const safeCalendarEvents = Array.isArray(calendarEvents)
-            ? calendarEvents.filter(
-                (e) =>
-                  e &&
-                  e.startDate &&
-                  (gcalConnected || e.source !== 'google')
-              )
-            : [];
+          // Expand local RRULE masters in the visible month/week range (Google
+          // instances already arrive expanded via singleEvents=true).
+          const displayRangeStart = toLocalIsoDate(
+            calendarViewMode === 'week' ? weekStart : monthGridStart
+          );
+          const displayRangeEnd = toLocalIsoDate(
+            calendarViewMode === 'week'
+              ? weekEnd
+              : addDays(monthGridStart, 41)
+          );
+          const safeCalendarEvents = expandEventsForDisplayRange(
+            (Array.isArray(calendarEvents) ? calendarEvents : []).filter(
+              (e) =>
+                e &&
+                e.startDate &&
+                (gcalConnected || e.source !== 'google')
+            ),
+            displayRangeStart,
+            displayRangeEnd
+          ) as SummitCalendarEvent[];
           // When disconnected: Summit-local tasks only (no Google-imported chips).
           const safeTasks = (
             gcalConnected
@@ -19597,19 +20126,6 @@ export default function SummitApp() {
                   <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
                     Tasks
                   </h1>
-                  <p className="text-zinc-500 mt-1">
-                    {activeTaskList?.title || 'My Tasks'} · {openTasks.length}{' '}
-                    open
-                    {doneTasks.length ? ` · ${doneTasks.length} done` : ''}
-                    {trashTasks.length
-                      ? ` · ${trashTasks.length} in trash`
-                      : ''}
-                  </p>
-                  {!gcalConnected ? (
-                    <p className="text-xs text-zinc-400 mt-1">
-                      Google not connected — showing Summit tasks only
-                    </p>
-                  ) : null}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <div
@@ -20201,18 +20717,6 @@ export default function SummitApp() {
               </p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <button
-                type="button"
-                onClick={() => handleTabChange('tasks')}
-                className="text-left bg-white border border-zinc-200 rounded-3xl p-6 sm:p-7 hover:border-sky-300 hover:shadow-sm transition"
-              >
-                <div className="text-xl font-semibold text-zinc-900 mb-1">
-                  Tasks
-                </div>
-                <p className="text-sm text-zinc-500">
-                  Manage to-dos · due dates show on Calendar
-                </p>
-              </button>
               <div className="bg-white border border-zinc-200 rounded-3xl p-6 sm:p-7">
                 <div className="text-xl font-semibold text-zinc-900 mb-1">
                   Weather Tracking

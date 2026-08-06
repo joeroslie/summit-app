@@ -365,6 +365,16 @@ export type ManualCalendarPayload = {
   calendarId?: string;
   /** Google Calendar event colorId "1"–"11"; null clears to calendar default */
   colorId?: string | null;
+  /**
+   * RRULE body or full `RRULE:…` string. When set, pushed as
+   * `recurrence: ['RRULE:…']`. Empty/null clears recurrence on update.
+   */
+  rrule?: string | null;
+  /**
+   * When editing a series instance, patch the master (recurringEventId)
+   * instead of the instance id.
+   */
+  recurringEventId?: string | null;
 };
 
 function resolveManualCalendarId(calendarId?: string | null): string {
@@ -430,12 +440,22 @@ export function buildManualCalendarEventBody(ev: ManualCalendarPayload) {
         ? { colorId: String(ev.colorId).trim() }
         : {};
 
+  let recurrencePayload: { recurrence: string[] } | Record<string, never> = {};
+  if (ev.rrule === null || ev.rrule === '') {
+    // Explicit clear on update (empty array removes recurrence)
+    recurrencePayload = { recurrence: [] };
+  } else if (typeof ev.rrule === 'string' && ev.rrule.trim()) {
+    const body = ev.rrule.trim().replace(/^RRULE:/i, '');
+    if (body) recurrencePayload = { recurrence: [`RRULE:${body}`] };
+  }
+
   return {
     summary: ev.title.trim() || '(No title)',
     description,
     start,
     end,
     ...colorPayload,
+    ...recurrencePayload,
     reminders: {
       useDefault: true,
     },
@@ -452,15 +472,20 @@ export async function upsertManualCalendarEvent(
   const body = buildManualCalendarEventBody(ev);
   const calendarId = resolveManualCalendarId(ev.calendarId);
   const calPath = encodeURIComponent(calendarId);
+  // Series edit: patch the master when we only have an instance id
+  const patchEventId = (
+    (ev.recurringEventId || '').trim() ||
+    (ev.googleEventId || '').trim()
+  );
 
-  if (ev.googleEventId) {
+  if (patchEventId) {
     // Try the event's calendar first; fall back to primary if moved/legacy
     const tryIds = Array.from(
       new Set([calendarId, 'primary'].filter(Boolean))
     );
     for (const tryId of tryIds) {
       const res = await fetch(
-        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(tryId)}/events/${encodeURIComponent(ev.googleEventId)}`,
+        `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(tryId)}/events/${encodeURIComponent(patchEventId)}`,
         {
           method: 'PATCH',
           headers: {
