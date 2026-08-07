@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Hybrid C — Zinc Light + Orange</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #eceef1;
+    --bg-raised: #f4f5f7;
+    --surface: #ffffff;
+    --surface-2: #f0f1f3;
+    --border: rgba(20, 22, 28, 0.08);
+    --border-strong: rgba(20, 22, 28, 0.14);
+    --text-primary: #14161c;
+    --text-secondary: #5c616b;
+    --text-muted: #8b909a;
+    --accent: #ff7a1a;
+    --accent-2: #e86a10;
+    --accent-soft: rgba(255, 122, 26, 0.1);
+    --accent-border: rgba(255, 122, 26, 0.4);
+    --danger: #e0483a;
+    --success: #1f9a68;
+    --info: #2a8fbc;
+    --shadow-lg: 0 12px 28px -10px rgba(20, 22, 28, 0.12);
+    --shadow-md: 0 6px 14px -6px rgba(20, 22, 28, 0.1);
+    --shadow-sm: none;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--text-primary);
+    font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body { min-height: 100vh; }
+  .container { max-width: 1080px; margin: 0 auto; padding: 64px 40px 88px; }
+  .topbar {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 24px; margin-bottom: 48px; flex-wrap: wrap;
+  }
+  .eyebrow {
+    font-size: 12px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text-muted); margin-bottom: 10px;
+  }
+  h1.greeting { font-size: 44px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.05; margin: 0; }
+  .btn-new-lead {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--accent); border: none; border-radius: 10px;
+    padding: 12px 22px; cursor: pointer;
+    color: #fff; font-family: inherit; font-size: 14px; font-weight: 700;
+  }
+  .btn-new-lead:hover { background: var(--accent-2); }
+  .btn-new-lead .plus { font-size: 18px; font-weight: 800; line-height: 1; }
+  .pipeline-panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 18px; padding: 32px; margin-bottom: 18px; box-shadow: var(--shadow-lg);
+  }
+  .pipeline-header {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 24px; margin-bottom: 28px; flex-wrap: wrap;
+  }
+  .pv-label { font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; }
+  .pv-value { font-family: 'JetBrains Mono', monospace; font-size: 42px; font-weight: 600; color: var(--accent); }
+  .pipeline-meta { display: flex; gap: 36px; }
+  .meta-item .num { display: block; font-family: 'JetBrains Mono', monospace; font-size: 22px; font-weight: 600; }
+  .meta-item .lbl { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+  .stage-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+  .stage-tile {
+    background: var(--bg-raised); border: 1px solid transparent; border-radius: 12px;
+    padding: 18px 12px; text-align: center; cursor: pointer;
+  }
+  .stage-tile:hover, .stage-tile.active { border-color: var(--accent-border); background: var(--surface); }
+  .stage-dot-row { display: flex; align-items: center; justify-content: center; gap: 6px; margin-bottom: 8px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: #a0a4ad; }
+  .stage-tile.active .dot { background: var(--accent); }
+  .stage-name { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+  .stage-count { font-family: 'JetBrains Mono', monospace; font-size: 26px; font-weight: 700; margin: 4px 0 2px; }
+  .stage-value { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600; color: var(--text-muted); }
+  .storm-alert {
+    background: var(--surface); border: 1px solid rgba(224, 72, 58, 0.22);
+    border-left: 3px solid var(--danger); border-radius: 14px;
+    padding: 22px 26px; margin-bottom: 18px; cursor: pointer;
+    display: flex; align-items: center; justify-content: space-between; gap: 20px;
+  }
+  .storm-label { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--danger); margin-bottom: 6px; }
+  .pulse-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); animation: pulse 1.8s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(224,72,58,0.45); } 70% { box-shadow: 0 0 0 8px rgba(224,72,58,0); } 100% { box-shadow: 0 0 0 0 rgba(224,72,58,0); } }
+  .storm-title { font-size: 18px; font-weight: 700; }
+  .storm-sub { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+  .arrow { color: var(--text-muted); font-size: 18px; }
+  .glimpse-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .glimpse-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    padding: 22px 24px; cursor: pointer;
+  }
+  .glimpse-card:hover { border-color: var(--accent-border); }
+  .glimpse-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .glimpse-title { font-size: 14px; font-weight: 700; }
+  .schedule-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .time-chip { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 4px 8px; min-width: 64px; text-align: center; }
+  .schedule-text { font-size: 13.5px; color: var(--text-secondary); }
+  .more-note { font-size: 12px; color: var(--text-muted); }
+  .big-num { font-family: 'JetBrains Mono', monospace; font-size: 34px; font-weight: 700; margin-bottom: 12px; }
+  .task-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .task-badge { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; border-radius: 999px; padding: 3px 9px; }
+  .task-badge.overdue { background: rgba(224,72,58,0.12); color: var(--danger); }
+  .task-badge.today { background: var(--accent-soft); color: var(--accent); }
+  .task-text { font-size: 13.5px; color: var(--text-secondary); }
+  .lead-name { font-size: 16px; font-weight: 700; }
+  .lead-address { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+  .lead-tags { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+  .stage-badge { font-size: 11px; font-weight: 700; padding: 5px 12px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+  .job-number { font-size: 12px; color: var(--text-muted); }
+  .canvass-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; text-align: center; }
+  .canvass-num { font-family: 'JetBrains Mono', monospace; font-size: 26px; font-weight: 700; }
+  .canvass-lbl { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.06em; }
+  @media (max-width: 860px) {
+    .stage-grid { grid-template-columns: repeat(3, 1fr); }
+    .glimpse-grid { grid-template-columns: 1fr; }
+    h1.greeting { font-size: 32px; }
+    .container { padding: 40px 24px 64px; }
+  }
+</style>
+</head>
+<body>
+  <div class="container">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">Tuesday · Aug 6</div>
+        <h1 class="greeting">Good evening, Joe</h1>
+      </div>
+      <button class="btn-new-lead" type="button"><span class="plus">+</span> New Lead</button>
+    </header>
+    <section class="pipeline-panel">
+      <div class="pipeline-header">
+        <div>
+          <div class="pv-label">Pipeline Value</div>
+          <div class="pv-value">$482,600</div>
+        </div>
+        <div class="pipeline-meta">
+          <div class="meta-item"><span class="num">14</span><span class="lbl">active jobs</span></div>
+          <div class="meta-item"><span class="num">9</span><span class="lbl">estimates on file</span></div>
+        </div>
+      </div>
+      <div class="stage-grid">
+        <div class="stage-tile active"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Lead</span></div><div class="stage-count">5</div><div class="stage-value">$86,200</div></div>
+        <div class="stage-tile"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Prospect</span></div><div class="stage-count">4</div><div class="stage-value">$142,900</div></div>
+        <div class="stage-tile"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Approved</span></div><div class="stage-count">3</div><div class="stage-value">$168,400</div></div>
+        <div class="stage-tile"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Completed</span></div><div class="stage-count">1</div><div class="stage-value">$52,000</div></div>
+        <div class="stage-tile"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Invoiced</span></div><div class="stage-count">1</div><div class="stage-value">$33,100</div></div>
+        <div class="stage-tile"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Closed</span></div><div class="stage-count">0</div><div class="stage-value">$0</div></div>
+      </div>
+    </section>
+    <section class="storm-alert">
+      <div>
+        <div class="storm-label"><span class="pulse-dot"></span>Active Storm Alert</div>
+        <div class="storm-title">Hail · 1.5in reported near Gilbert, AZ</div>
+        <div class="storm-sub">12 minutes ago · 3 severe reports in the last 24h</div>
+      </div>
+      <span class="arrow">→</span>
+    </section>
+    <section class="glimpse-grid">
+      <div class="glimpse-card">
+        <div class="glimpse-head"><span class="glimpse-title">Today's Schedule</span><span class="arrow">→</span></div>
+        <div class="schedule-row"><span class="time-chip">9:00 AM</span><span class="schedule-text">Roof inspection — 4821 E Cactus Rd</span></div>
+        <div class="schedule-row"><span class="time-chip">11:30 AM</span><span class="schedule-text">Adjuster meeting — Sanchez claim</span></div>
+        <div class="schedule-row"><span class="time-chip">2:00 PM</span><span class="schedule-text">Estimate walkthrough — Ironwood Estates</span></div>
+        <div class="more-note">+1 more today</div>
+      </div>
+      <div class="glimpse-card">
+        <div class="glimpse-head"><span class="glimpse-title">Open Tasks</span><span class="arrow">→</span></div>
+        <div class="big-num">7</div>
+        <div class="task-row"><span class="task-badge overdue">Overdue</span><span class="task-text">Send updated estimate to Whitmore</span></div>
+        <div class="task-row"><span class="task-badge today">Due Today</span><span class="task-text">Call insurance adjuster — Reyes</span></div>
+      </div>
+      <div class="glimpse-card">
+        <div class="glimpse-head"><span class="glimpse-title">Jump Back In</span><span class="arrow">→</span></div>
+        <div class="lead-name">Marcus Whitmore</div>
+        <div class="lead-address">4821 E Cactus Rd, Scottsdale, AZ</div>
+        <div class="lead-tags"><span class="stage-badge">Approved</span><span class="job-number">Job #10482</span></div>
+      </div>
+      <div class="glimpse-card">
+        <div class="glimpse-head"><span class="glimpse-title">Canvassing Today</span><span class="arrow">→</span></div>
+        <div class="canvass-grid">
+          <div><div class="canvass-num">38</div><div class="canvass-lbl">Doors</div></div>
+          <div><div class="canvass-num" style="color:var(--info)">11</div><div class="canvass-lbl">Convos</div></div>
+          <div><div class="canvass-num" style="color:var(--success)">2</div><div class="canvass-lbl">Signed</div></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

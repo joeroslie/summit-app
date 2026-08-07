@@ -27,6 +27,13 @@ All Full-book rows with blank material cost (package / crew-list labor does not 
 | --- | --- | --- | --- | --- |
 | Clay tile material | per tile |  | in package |  |
 
+## Hip & Ridge
+
+| Product | Unit | Material cost | Labor cost | Sell price |
+| --- | --- | --- | --- | --- |
+| GAF hip & ridge (standard) | bundle |  | in package |  |
+| Malarkey RidgeFlex (standard) | bundle |  | in package |  |
+
 ## Other
 
 | Product | Unit | Material cost | Labor cost | Sell price |

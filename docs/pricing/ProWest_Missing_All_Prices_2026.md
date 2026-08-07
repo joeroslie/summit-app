@@ -4,7 +4,14 @@ Rows where **material OR labor** is still a real gap (blank / TBD), from Full bo
 
 Excluded (not gaps): labor `in package`, `n/a — material only`, `see crew list`, dollar amounts, steep filled, HVAC $900, fascia/mold $4, cut-in $20. Sell blank alone does not qualify.
 
-**27 rows** — fill blanks; Material / Labor / Both.
+**29 rows** — fill blanks; Material / Labor / Both.
+
+## Hip & Ridge
+
+| Product | Unit | Material cost | Labor cost | What's missing |
+| --- | --- | --- | --- | --- |
+| GAF hip & ridge (standard) | bundle |  | in package | Material |
+| Malarkey RidgeFlex (standard) | bundle |  | in package | Material |
 
 ## Low-slope / flat — BUR base
 
@@ -29,7 +36,7 @@ Labor TBD by type.
 | 2"×4" Low Rise Gravel Stop | each | $12.90 |  | Labor |
 | 2"×6" Roof to Wall | each | $11.20 |  | Labor |
 | 3-in-1 | each | $12.80 |  | Labor |
-| 4"×4"×8" Step Flashing | box | $54.50 |  | Labor |
+| 4"×4"×8" Step Flashing | box (~100 pcs) | $54.50 |  | Labor |
 | Pan Flashing | each | $16.50 |  | Labor |
 
 ## Coatings Systems

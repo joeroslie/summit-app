@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Warm Trade — Summit Dashboard Concept</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #e8e0d0;
+    --bg-raised: #efe8d9;
+    --surface: #f6f1e6;
+    --surface-2: #f0e9da;
+    --border: rgba(60, 45, 30, 0.1);
+    --border-strong: rgba(60, 45, 30, 0.18);
+    --text-primary: #2c2418;
+    --text-secondary: #6c5f4c;
+    --text-muted: #948669;
+    --terracotta: #b5502f;
+    --terracotta-2: #c96a41;
+    --terracotta-soft: rgba(181, 80, 47, 0.12);
+    --terracotta-border: rgba(181, 80, 47, 0.35);
+    --forest: #3c5340;
+    --forest-soft: rgba(60, 83, 64, 0.12);
+    --gold: #a8823a;
+    --danger: #a8412a;
+    --shadow-lg: 0 22px 44px -16px rgba(43, 32, 16, 0.28), 0 4px 12px -4px rgba(43, 32, 16, 0.12);
+    --shadow-md: 0 12px 26px -10px rgba(43, 32, 16, 0.22), 0 2px 6px -2px rgba(43, 32, 16, 0.1);
+    --shadow-sm: 0 2px 8px rgba(43, 32, 16, 0.1);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: 'Sora', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    position: relative;
+    min-height: 100vh;
+    background-image:
+      radial-gradient(ellipse 900px 500px at 90% -10%, rgba(181, 80, 47, 0.06), transparent 55%),
+      radial-gradient(ellipse 700px 500px at 0% 10%, rgba(60, 83, 64, 0.05), transparent 55%);
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 999;
+    opacity: 0.05;
+    mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  .container { max-width: 1180px; margin: 0 auto; padding: 56px 32px 80px; }
+
+  .topbar {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 40px;
+    flex-wrap: wrap;
+  }
+
+  .eyebrow {
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--terracotta);
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .eyebrow::before {
+    content: "";
+    width: 16px;
+    height: 2px;
+    background: var(--terracotta);
+    border-radius: 2px;
+  }
+
+  h1.greeting {
+    font-size: 42px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    line-height: 1.08;
+    margin: 0;
+    color: var(--text-primary);
+  }
+
+  /* New Lead button — compact, crafted, embossed edge, not a pill */
+  .btn-new-lead {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--terracotta);
+    background-image: linear-gradient(165deg, var(--terracotta-2), var(--terracotta));
+    border: none;
+    border-radius: 10px;
+    padding: 12px 20px 13px 14px;
+    cursor: pointer;
+    color: #fbf3ea;
+    font-family: 'Sora', sans-serif;
+    font-size: 14.5px;
+    font-weight: 600;
+    box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,0.18), inset 0 -2px 0 rgba(0,0,0,0.12);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .btn-new-lead:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255,255,255,0.22), inset 0 -2px 0 rgba(0,0,0,0.14);
+  }
+
+  .btn-new-lead:active { transform: translateY(0); }
+
+  .btn-new-lead .plus-chip {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  /* ---------- Pipeline panel ---------- */
+  .pipeline-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    padding: 32px;
+    margin-bottom: 24px;
+    box-shadow: var(--shadow-lg);
+  }
+
+  .pipeline-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 28px;
+    flex-wrap: wrap;
+  }
+
+  .pv-label {
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+
+  .pv-value {
+    font-size: 42px;
+    font-weight: 700;
+    color: var(--forest);
+    letter-spacing: -0.01em;
+  }
+
+  .pipeline-meta { display: flex; gap: 32px; }
+
+  .meta-item .num {
+    display: block;
+    font-size: 23px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .meta-item .lbl { font-size: 12.5px; color: var(--text-muted); margin-top: 2px; }
+
+  .stage-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+
+  .stage-tile {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 18px 14px;
+    text-align: center;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  }
+
+  .stage-tile:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-md);
+    border-color: var(--border-strong);
+  }
+
+  .stage-tile.active {
+    border-color: var(--terracotta);
+    box-shadow: 0 0 0 1px var(--terracotta-border), var(--shadow-md);
+  }
+
+  .stage-dot-row { display: flex; align-items: center; justify-content: center; gap: 6px; margin-bottom: 8px; }
+
+  .dot { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 0 3px rgba(255,255,255,0.5); }
+
+  .stage-name {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+  }
+
+  .stage-count { font-size: 27px; font-weight: 700; color: var(--text-primary); margin: 4px 0 2px; }
+
+  .stage-value { font-size: 12.5px; font-weight: 600; color: var(--text-muted); }
+
+  /* ---------- Storm alert ---------- */
+  .storm-alert {
+    background: linear-gradient(135deg, #f3e2d4, #f6ece0);
+    border: 1px solid rgba(168, 65, 42, 0.28);
+    border-left: 4px solid var(--danger);
+    border-radius: 18px;
+    padding: 22px 26px;
+    margin-bottom: 24px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    box-shadow: var(--shadow-md);
+  }
+
+  .storm-alert:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+
+  .storm-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--danger);
+    margin-bottom: 8px;
+  }
+
+  .pulse-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--danger);
+    animation: pulse 1.8s infinite;
+  }
+
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(168, 65, 42, 0.45); }
+    70% { box-shadow: 0 0 0 10px rgba(168, 65, 42, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(168, 65, 42, 0); }
+  }
+
+  .storm-title { font-size: 20px; font-weight: 700; color: var(--text-primary); }
+  .storm-sub { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
+
+  .arrow { color: var(--text-muted); font-size: 20px; flex-shrink: 0; transition: transform 0.15s ease, color 0.15s ease; }
+  .storm-alert:hover .arrow, .glimpse-card:hover .arrow { transform: translateX(3px); color: var(--terracotta); }
+
+  /* ---------- Glimpse grid ---------- */
+  .glimpse-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+
+  .glimpse-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 22px 24px;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .glimpse-card:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-md);
+    border-color: var(--forest);
+  }
+
+  .glimpse-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+
+  .glimpse-title { font-size: 14.5px; font-weight: 700; color: var(--text-primary); }
+
+  .schedule-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+
+  .time-chip {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--forest);
+    background: var(--forest-soft);
+    border-radius: 7px;
+    padding: 4px 8px;
+    flex-shrink: 0;
+    min-width: 66px;
+    text-align: center;
+  }
+
+  .schedule-text { font-size: 13.5px; color: var(--text-secondary); }
+
+  .more-note { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+  .big-num { font-size: 34px; font-weight: 700; color: var(--text-primary); margin-bottom: 12px; }
+
+  .task-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+
+  .task-badge {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border-radius: 999px;
+    padding: 3px 9px;
+    flex-shrink: 0;
+  }
+
+  .task-badge.overdue { background: rgba(168, 65, 42, 0.14); color: var(--danger); }
+  .task-badge.today { background: rgba(168, 130, 58, 0.16); color: var(--gold); }
+
+  .task-text { font-size: 13.5px; color: var(--text-secondary); }
+
+  .lead-name { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+  .lead-address { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+
+  .lead-tags { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+
+  .stage-badge {
+    font-size: 11.5px;
+    font-weight: 700;
+    padding: 5px 12px;
+    border-radius: 999px;
+    background: var(--terracotta-soft);
+    color: var(--terracotta);
+    border: 1px solid var(--terracotta-border);
+  }
+
+  .job-number { font-size: 12px; color: var(--text-muted); }
+
+  .canvass-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; text-align: center; }
+
+  .canvass-num { font-size: 26px; font-weight: 700; }
+
+  .canvass-lbl { font-size: 10.5px; color: var(--text-muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+  @media (max-width: 860px) {
+    .stage-grid { grid-template-columns: repeat(3, 1fr); }
+    .glimpse-grid { grid-template-columns: 1fr; }
+    h1.greeting { font-size: 30px; }
+    .pv-value { font-size: 32px; }
+  }
+</style>
+</head>
+<body>
+  <div class="container">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">Tuesday · Aug 6</div>
+        <h1 class="greeting">Good evening, Joe</h1>
+      </div>
+      <button class="btn-new-lead" type="button">
+        <span class="plus-chip">+</span>
+        <span>New Lead</span>
+      </button>
+    </header>
+
+    <section class="pipeline-panel">
+      <div class="pipeline-header">
+        <div>
+          <div class="pv-label">Pipeline Value</div>
+          <div class="pv-value">$482,600</div>
+        </div>
+        <div class="pipeline-meta">
+          <div class="meta-item">
+            <span class="num">14</span>
+            <span class="lbl">active jobs</span>
+          </div>
+          <div class="meta-item">
+            <span class="num">9</span>
+            <span class="lbl">estimates on file</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage-grid">
+        <div class="stage-tile active">
+          <div class="stage-dot-row"><span class="dot" style="background:#8f8267"></span><span class="stage-name">Lead</span></div>
+          <div class="stage-count">5</div>
+          <div class="stage-value">$86,200</div>
+        </div>
+        <div class="stage-tile">
+          <div class="stage-dot-row"><span class="dot" style="background:var(--gold)"></span><span class="stage-name">Prospect</span></div>
+          <div class="stage-count">4</div>
+          <div class="stage-value">$142,900</div>
+        </div>
+        <div class="stage-tile">
+          <div class="stage-dot-row"><span class="dot" style="background:var(--terracotta)"></span><span class="stage-name">Approved</span></div>
+          <div class="stage-count">3</div>
+          <div class="stage-value">$168,400</div>
+        </div>
+        <div class="stage-tile">
+          <div class="stage-dot-row"><span class="dot" style="background:var(--forest)"></span><span class="stage-name">Completed</span></div>
+          <div class="stage-count">1</div>
+          <div class="stage-value">$52,000</div>
+        </div>
+        <div class="stage-tile">
+          <div class="stage-dot-row"><span class="dot" style="background:#6b5a94"></span><span class="stage-name">Invoiced</span></div>
+          <div class="stage-count">1</div>
+          <div class="stage-value">$33,100</div>
+        </div>
+        <div class="stage-tile">
+          <div class="stage-dot-row"><span class="dot" style="background:#2b4030"></span><span class="stage-name">Closed</span></div>
+          <div class="stage-count">0</div>
+          <div class="stage-value">$0</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="storm-alert">
+      <div>
+        <div class="storm-label"><span class="pulse-dot"></span>Active Storm Alert</div>
+        <div class="storm-title">Hail · 1.5in reported near Gilbert, AZ</div>
+        <div class="storm-sub">12 minutes ago · 3 severe reports in the last 24h</div>
+      </div>
+      <span class="arrow">→</span>
+    </section>
+
+    <section class="glimpse-grid">
+      <div class="glimpse-card">
+        <div class="glimpse-head"><span class="glimpse-title">Today's Schedule</span><span class="arrow">→</span></div>
+        <div class="schedule-row"><span class="time-chip">9:00 AM</span><span class="schedule-text">Roof inspection — 4821 E Cactus Rd</span></div>
+        <div class="schedule-row"><span class="time-chip">11:30 AM</span><span class="schedule-text">Adjuster meeting — Sanchez claim</span></div>
+        <div class="schedule-row"><span class="time-chip">2:00 PM</span><span class="schedule-text">Estimate walkthrough — Ironwood Estates</span></div>
+        <div class="more-note">+1 more today</div>
+      </div>
+
+      <div class="glimpse-card">
+        <div class="glimpse-head"><span class="glimpse-title">Open Tasks</span><span class="arrow">→</span></div>
+        <div class="big-num">7</div>
+        <div class="task-row"><span class="task-badge overdue">Overdue</span><span class="task-text">Send updated estimate to Whitmore</span></div>
+        <div class="task-row"><span class="task-badge today">Due Today</span><span class="task-text">Call insurance adjuster — Reyes</span></div>
+      </div>
+
+      <div class="glimpse-card">
+        <div class="glimpse-head"><span class="glimpse-title">Jump Back In</span><span class="arrow">→</span></div>
+        <div class="lead-name">Marcus Whitmore</div>
+        <div class="lead-address">4821 E Cactus Rd, Scottsdale, AZ</div>
+        <div class="lead-tags">
+          <span class="stage-badge">Approved</span>
+          <span class="job-number">Job #10482</span>
+        </div>
+      </div>
+
+      <div class="glimpse-card">
+        <div class="glimpse-head"><span class="glimpse-title">Canvassing Today</span><span class="arrow">→</span></div>
+        <div class="canvass-grid">
+          <div><div class="canvass-num" style="color:var(--text-primary)">38</div><div class="canvass-lbl">Doors</div></div>
+          <div><div class="canvass-num" style="color:var(--terracotta)">11</div><div class="canvass-lbl">Convos</div></div>
+          <div><div class="canvass-num" style="color:var(--forest)">2</div><div class="canvass-lbl">Signed</div></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

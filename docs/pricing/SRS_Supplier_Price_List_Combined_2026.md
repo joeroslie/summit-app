@@ -9,6 +9,8 @@ Roofing materials. Blank costs first — please fill and return.
 | BUR system (full package) | sq | |
 | Valley liner (membrane) | LF or roll | |
 | Clay tile material | per tile | |
+| GAF hip & ridge (standard) | bundle | |
+| Malarkey RidgeFlex (standard) | bundle | |
 
 ## Shingles
 
@@ -35,6 +37,8 @@ Roofing materials. Blank costs first — please fill and return.
 | IKO Hip & Ridge (standard) | bundle | $99.50/bdl |
 | IKO Ultra Hip & Ridge (high-profile) | bundle | $104.00/bdl |
 | Owens Corning DecoRidge (high-profile) | bundle | $116.00/bdl |
+| GAF hip & ridge (standard) | bundle | |
+| Malarkey RidgeFlex (standard) | bundle | |
 
 ## Starter
 
@@ -251,4 +255,4 @@ Roofing materials. Blank costs first — please fill and return.
 | Product | Unit | Cost |
 | --- | --- | --- |
 | Caulking | tube | $10.00 |
-| Furring Strips 1"×2"×4" | bundle | $13.50 |
+| Furring Strips 1"×2"×4' | bundle | $13.50 |

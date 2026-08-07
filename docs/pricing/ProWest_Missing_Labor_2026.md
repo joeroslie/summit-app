@@ -15,7 +15,7 @@ Labor exists but TBD by type.
 | 2"×4" Low Rise Gravel Stop | each | $12.90 |  |  |
 | 2"×6" Roof to Wall | each | $11.20 |  |  |
 | 3-in-1 | each | $12.80 |  |  |
-| 4"×4"×8" Step Flashing | box | $54.50 |  |  |
+| 4"×4"×8" Step Flashing | box (~100 pcs) | $54.50 |  |  |
 | Pan Flashing | each | $16.50 |  |  |
 
 ## Tile Accessories

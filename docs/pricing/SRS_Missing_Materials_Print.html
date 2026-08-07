@@ -44,6 +44,7 @@ body {
   padding-bottom: 0.1rem;
   page-break-after: avoid;
 }
+.sec > p.note { margin: 0 0 0.28rem; color: var(--muted); font-size: 8pt; }
 table {
   width: 100%;
   border-collapse: collapse;
@@ -65,9 +66,15 @@ th {
 .cols-3 th:nth-child(1), .cols-3 td:nth-child(1) { width: 52%; }
 .cols-3 th:nth-child(2), .cols-3 td:nth-child(2) { width: 18%; }
 .cols-3 th:nth-child(3), .cols-3 td:nth-child(3) { width: 30%; }
+.cols-5 th:nth-child(1), .cols-5 td:nth-child(1) { width: 34%; }
+.cols-5 th:nth-child(2), .cols-5 td:nth-child(2) { width: 12%; }
+.cols-5 th:nth-child(3), .cols-5 td:nth-child(3) { width: 20%; }
+.cols-5 th:nth-child(4), .cols-5 td:nth-child(4) { width: 18%; }
+.cols-5 th:nth-child(5), .cols-5 td:nth-child(5) { width: 16%; }
 
 @media print {
   body { background: #fff; font-size: 8.5pt; }
+  .screen-only { display: none !important; }
   .wrap { max-width: none; padding: 0; margin: 0; }
   .panel { border: none; padding: 0; }
   .sec { break-inside: avoid; page-break-inside: avoid; }
@@ -75,6 +82,7 @@ th {
   tr { break-inside: avoid; page-break-inside: avoid; }
   @page { margin: 0.5in; size: letter; }
 }
+
 </style>
 </head>
 <body>
@@ -84,51 +92,53 @@ th {
     <p class="sub">Please fill Cost and return.</p>
 
     <section class="sec">
-      <h2>Coatings</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>Acrylic elastomeric coating (3 gal/100sq ft, two coats)</td><td>sq</td><td></td></tr>
-          <tr><td>Silicone coating system</td><td>sq</td><td></td></tr>
-          <tr><td>Urethane coating system</td><td>sq</td><td></td></tr>
-        </tbody>
-      </table>
+    <h2>Coatings</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>Acrylic elastomeric coating (3 gal/100sq ft, two coats)</td><td>sq</td><td></td></tr>
+    <tr><td>Silicone coating system</td><td>sq</td><td></td></tr>
+    <tr><td>Urethane coating system</td><td>sq</td><td></td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Foam</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>Foam granules</td><td>bag (~30 lb/sq)</td><td></td></tr>
-          <tr><td>Foam primer</td><td>gal (~0.5 gal/sq)</td><td></td></tr>
-          <tr><td>Foam top coating</td><td>gal</td><td></td></tr>
-          <tr><td>ISO board</td><td>sq</td><td></td></tr>
-          <tr><td>Roofing — Foam (full)</td><td>sq</td><td></td></tr>
-          <tr><td>Foam Overlay and (2) Coats</td><td>sq</td><td></td></tr>
-        </tbody>
-      </table>
+    <h2>Foam</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>Foam granules</td><td>bag (~30 lb/sq)</td><td></td></tr>
+    <tr><td>Foam primer</td><td>gal (~0.5 gal/sq)</td><td></td></tr>
+    <tr><td>Foam top coating</td><td>gal</td><td></td></tr>
+    <tr><td>ISO board</td><td>sq</td><td></td></tr>
+    <tr><td>Roofing — Foam (full)</td><td>sq</td><td></td></tr>
+    <tr><td>Foam Overlay and (2) Coats</td><td>sq</td><td></td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Tile</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>Clay tile material</td><td>per tile</td><td></td></tr>
-        </tbody>
-      </table>
+    <h2>Tile</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>Clay tile material</td><td>per tile</td><td></td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Other</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>BUR system (full package)</td><td>sq</td><td></td></tr>
-          <tr><td>Valley liner (membrane)</td><td>LF or roll</td><td></td></tr>
-        </tbody>
-      </table>
+    <h2>Hip &amp; Ridge</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>GAF hip &amp; ridge (standard)</td><td>bundle</td><td></td></tr>
+    <tr><td>Malarkey RidgeFlex (standard)</td><td>bundle</td><td></td></tr>
+    </tbody></table>
+    </section>
+    <section class="sec">
+    <h2>Other</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>BUR system (full package)</td><td>sq</td><td></td></tr>
+    <tr><td>Valley liner (membrane)</td><td>LF or roll</td><td></td></tr>
+    </tbody></table>
     </section>
   </div>
 </div>

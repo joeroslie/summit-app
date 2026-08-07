@@ -100,3 +100,49 @@ export type CreatedLeadInfo = {
   supabaseLeadId: string | null;
   jobNumber: string;
 };
+
+/**
+ * Manual one-tap daily counters (tap a dashboard card, or its +/− control).
+ * Logged as timestamped events — not a single mutable number — so historical
+ * days are preserved and totals survive a refresh. Daily totals on screen
+ * combine these with activity already derivable from pin timestamps.
+ */
+export type TallyType = 'door' | 'conversation' | 'signed';
+
+export type TallyEntry = {
+  id: number;
+  created_at: string;
+  type: TallyType;
+};
+
+export const TALLY_LABELS: Record<TallyType, string> = {
+  door: 'Doors knocked',
+  conversation: 'Conversations',
+  signed: 'Signed',
+};
+
+/**
+ * Local calendar day key (YYYY-MM-DD). Canvassing is a field-rep "today"
+ * tracker — day boundaries must follow the device's local clock, not UTC
+ * (a rep working an evening block shouldn't see doors roll into "tomorrow"
+ * hours before midnight).
+ */
+export function localDateKey(input: string | number | Date = new Date()): string {
+  const d = input instanceof Date ? input : new Date(input);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * True when a Supabase/PostgREST error means the table hasn't been created
+ * yet (setup SQL not run) — used to fall back to local storage instead of
+ * repeatedly failing writes against a table that doesn't exist.
+ */
+export function isMissingTableError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const e = error as { code?: string; message?: string };
+  if (e.code === 'PGRST205' || e.code === '42P01') return true;
+  return /schema cache|does not exist/i.test(e.message || '');
+}

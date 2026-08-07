@@ -27,6 +27,13 @@ Please fill Cost and return.
 | --- | --- | --- |
 | Clay tile material | per tile | |
 
+## Hip & Ridge
+
+| Product | Unit | Cost |
+| --- | --- | --- |
+| GAF hip & ridge (standard) | bundle | |
+| Malarkey RidgeFlex (standard) | bundle | |
+
 ## Other
 
 | Product | Unit | Cost |

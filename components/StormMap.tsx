@@ -1,18 +1,34 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { dispositionStyle, type CanvassPin } from '@/lib/canvassing';
+import {
+  eventStyle,
+  markerRadiusFor,
+  type StormReport,
+} from '@/lib/weather';
+import {
+  CLUSTER_SEVERITY_STYLES,
+  zoneFillColor,
+  zoneStrokeColor,
+  type StormCluster,
+} from '@/lib/storm-clusters';
 
 type LatLngPoint = { lat: number; lng: number };
 
-type CanvassMapProps = {
-  pins: CanvassPin[];
-  selectedPinId: number | null;
-  onSelectPin: (id: number) => void;
-  /** Tap the basemap to drop a new pin at that spot. */
-  onMapDrop: (point: LatLngPoint) => void;
-  /** Fly-to point — set after "Use my location" / address search / selecting a pin. */
+type StormMapProps = {
+  reports: StormReport[];
+  selectedReportId: string | null;
+  onSelectReport: (id: string) => void;
+  /** "You are here" blue dot — twin of Hail Recon/HailTrace's locator. */
+  userLocation?: LatLngPoint | null;
+  /** Fly-to point — set after selecting a report / "Show my location". */
   center?: LatLngPoint | null;
+  /** Bump to re-fit the map to all currently plotted reports. */
+  fitSignal?: number;
+  /** Approximate damage-zone polygons, clustered from the plotted reports. */
+  clusters?: StormCluster[];
+  /** Toggle for the damage-zone overlay layer. */
+  showDamageZones?: boolean;
   className?: string;
   height?: number;
 };
@@ -41,44 +57,55 @@ function waitForSize(el: HTMLElement, attempts = 40): Promise<void> {
 }
 
 /**
- * Canvassing pin map — twin of components/RoofTracer.tsx's Leaflet setup
+ * Storm report map — twin of components/CanvassMap.tsx's Leaflet setup
  * (dynamic import, satellite/street toggle, tile-error fallback) but for
- * dropping + browsing door-knock pins instead of tracing a roof outline.
+ * plotting NOAA hail/wind/tornado point reports instead of canvass pins.
  */
-export default function CanvassMap({
-  pins,
-  selectedPinId,
-  onSelectPin,
-  onMapDrop,
+export default function StormMap({
+  reports,
+  selectedReportId,
+  onSelectReport,
+  userLocation,
   center,
+  fitSignal,
+  clusters,
+  showDamageZones,
   className = '',
-  height = 480,
-}: CanvassMapProps) {
+  height = 520,
+}: StormMapProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<import('leaflet').Map | null>(null);
   const groupRef = useRef<import('leaflet').FeatureGroup | null>(null);
+  const zoneGroupRef = useRef<import('leaflet').FeatureGroup | null>(null);
+  const locateGroupRef = useRef<import('leaflet').LayerGroup | null>(null);
   const satRef = useRef<import('leaflet').TileLayer | null>(null);
   const streetRef = useRef<import('leaflet').TileLayer | null>(null);
   const LRef = useRef<typeof import('leaflet') | null>(null);
-  const pinsRef = useRef<CanvassPin[]>(pins);
-  const selectedIdRef = useRef<number | null>(selectedPinId);
-  const onSelectPinRef = useRef(onSelectPin);
-  const onMapDropRef = useRef(onMapDrop);
+  const reportsRef = useRef<StormReport[]>(reports);
+  const selectedIdRef = useRef<string | null>(selectedReportId);
+  const onSelectReportRef = useRef(onSelectReport);
+  const userLocationRef = useRef<LatLngPoint | null | undefined>(userLocation);
+  const clustersRef = useRef<StormCluster[]>(clusters ?? []);
+  const showDamageZonesRef = useRef<boolean>(showDamageZones ?? false);
   const initGen = useRef(0);
 
   const [ready, setReady] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
-  const [basemap, setBasemap] = useState<BasemapMode>('satellite');
+  // Street is the default basemap here (unlike CanvassMap) — city/road labels
+  // matter more than roof-level satellite detail when scanning a wide storm area.
+  const [basemap, setBasemap] = useState<BasemapMode>('street');
   const [tileHint, setTileHint] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
 
   useEffect(() => {
-    pinsRef.current = pins;
-    selectedIdRef.current = selectedPinId;
-    onSelectPinRef.current = onSelectPin;
-    onMapDropRef.current = onMapDrop;
-  }, [pins, selectedPinId, onSelectPin, onMapDrop]);
+    reportsRef.current = reports;
+    selectedIdRef.current = selectedReportId;
+    onSelectReportRef.current = onSelectReport;
+    userLocationRef.current = userLocation;
+    clustersRef.current = clusters ?? [];
+    showDamageZonesRef.current = showDamageZones ?? false;
+  }, [reports, selectedReportId, onSelectReport, userLocation, clusters, showDamageZones]);
 
   const safeInvalidate = useCallback((map: import('leaflet').Map | null) => {
     if (!map) return;
@@ -89,29 +116,80 @@ export default function CanvassMap({
     }
   }, []);
 
+  const redrawLocate = useCallback(() => {
+    const group = locateGroupRef.current;
+    const L = LRef.current;
+    if (!group || !L) return;
+    group.clearLayers();
+    const loc = userLocationRef.current;
+    if (!loc) return;
+    const icon = L.divIcon({
+      className: '',
+      html: '<div class="locate-marker"><div class="locate-marker__pulse"></div><div class="locate-marker__dot"></div></div>',
+      iconSize: [18, 18],
+      iconAnchor: [9, 9],
+    });
+    L.marker([loc.lat, loc.lng], { icon, zIndexOffset: 1000, interactive: false })
+      .bindTooltip('You are here', { permanent: false, direction: 'top' })
+      .addTo(group);
+  }, []);
+
+  const redrawZones = useCallback(() => {
+    const group = zoneGroupRef.current;
+    const L = LRef.current;
+    if (!group || !L) return;
+    group.clearLayers();
+    if (!showDamageZonesRef.current) return;
+    clustersRef.current.forEach((cluster) => {
+      const style = CLUSTER_SEVERITY_STYLES[cluster.severity];
+      const layer = L.geoJSON(cluster.polygon, {
+        style: {
+          color: zoneStrokeColor(cluster.category),
+          weight: style.weight,
+          opacity: 0.55,
+          fillColor: zoneFillColor(cluster.category),
+          fillOpacity: style.fillOpacity,
+        },
+      });
+      const magText = cluster.maxMagnitudeLabel ? ` · up to ${cluster.maxMagnitudeLabel}` : '';
+      layer.bindTooltip(
+        `${style.label} ${eventStyle(cluster.category).label.toLowerCase()} zone · ${cluster.reportCount} reports${magText}`,
+        { sticky: true }
+      );
+      layer.addTo(group);
+    });
+  }, []);
+
   const redraw = useCallback(() => {
     const group = groupRef.current;
     const L = LRef.current;
     if (!group || !L) return;
     group.clearLayers();
     const selectedId = selectedIdRef.current;
-    pinsRef.current.forEach((pin) => {
-      const style = dispositionStyle(pin.disposition);
-      const isSelected = pin.id === selectedId;
-      const marker = L.circleMarker([pin.lat, pin.lng], {
-        radius: isSelected ? 12 : 9,
-        color: isSelected ? '#111827' : style.markerStroke,
-        weight: isSelected ? 3 : 2,
-        fillColor: style.marker,
-        fillOpacity: 0.95,
+    reportsRef.current.forEach((report) => {
+      const style = eventStyle(report.category);
+      const isSelected = report.id === selectedId;
+      const radius = markerRadiusFor(report.category, report.magnitude);
+      const size = radius * 2 + (isSelected ? 6 : 0);
+      const icon = L.divIcon({
+        className: '',
+        html: `<div class="storm-marker${isSelected ? ' storm-marker--selected' : ''}" style="width:${size}px;height:${size}px;background:${style.marker};border-color:${isSelected ? '#111827' : style.markerStroke};font-size:${Math.max(9, size * 0.42)}px;">${style.shortLabel}</div>`,
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2],
       });
-      marker.bindTooltip(pin.address || style.label, {
+      const marker = L.marker([report.lat, report.lng], {
+        icon,
+        riseOnHover: true,
+      });
+      const magText = report.magnitude
+        ? ` · ${report.magnitude}${report.units ? ` ${report.units}` : ''}`
+        : '';
+      marker.bindTooltip(`${style.label}${magText} — ${report.locDesc || report.state || ''}`, {
         permanent: false,
         direction: 'top',
       });
-      marker.on('click', (e) => {
-        e.originalEvent?.stopPropagation();
-        onSelectPinRef.current(pin.id);
+      marker.on('click', () => {
+        onSelectReportRef.current(report.id);
       });
       marker.addTo(group);
     });
@@ -119,7 +197,15 @@ export default function CanvassMap({
 
   useEffect(() => {
     redraw();
-  }, [pins, selectedPinId, redraw]);
+  }, [reports, selectedReportId, redraw]);
+
+  useEffect(() => {
+    redrawLocate();
+  }, [userLocation, redrawLocate]);
+
+  useEffect(() => {
+    redrawZones();
+  }, [clusters, showDamageZones, redrawZones]);
 
   useEffect(() => {
     const gen = ++initGen.current;
@@ -190,9 +276,9 @@ export default function CanvassMap({
         delete node._leaflet_id;
       }
 
-      const startCenter = center || pins[0] || null;
+      const startCenter = center || userLocation || reports[0] || null;
       const start = startCenter || DEFAULT_CENTER;
-      const zoom = startCenter ? 17 : 11;
+      const zoom = startCenter ? 10 : 6;
 
       let created: import('leaflet').Map;
       try {
@@ -200,7 +286,7 @@ export default function CanvassMap({
           center: [start.lat, start.lng],
           zoom,
           minZoom: 3,
-          maxZoom: 22,
+          maxZoom: 20,
           zoomControl: true,
           attributionControl: true,
           preferCanvas: false,
@@ -224,7 +310,7 @@ export default function CanvassMap({
         'https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
         {
           subdomains: ['0', '1', '2', '3'],
-          maxZoom: 22,
+          maxZoom: 20,
           maxNativeZoom: 21,
           tileSize: 256,
           zoomOffset: 0,
@@ -237,7 +323,7 @@ export default function CanvassMap({
       const esriSat = L.tileLayer(
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
         {
-          maxZoom: 22,
+          maxZoom: 20,
           maxNativeZoom: 19,
           tileSize: 256,
           attribution: 'Tiles &copy; Esri',
@@ -255,14 +341,14 @@ export default function CanvassMap({
 
       satRef.current = googleSat;
       streetRef.current = street;
-      googleSat.addTo(created);
+      street.addTo(created);
 
       L.control
         .layers(
           {
+            Street: street,
             'Satellite (hi-res)': googleSat,
             'Satellite (Esri)': esriSat,
-            Street: street,
           },
           {},
           { position: 'topright', collapsed: false }
@@ -315,14 +401,20 @@ export default function CanvassMap({
 
       created.zoomControl.setPosition('topleft');
 
+      const zoneGroup = L.featureGroup().addTo(created);
       const group = L.featureGroup().addTo(created);
+      const locateGroup = L.layerGroup().addTo(created);
+      zoneGroupRef.current = zoneGroup;
       groupRef.current = group;
+      locateGroupRef.current = locateGroup;
       mapRef.current = created;
 
       created.whenReady(() => {
         if (cancelled || initGen.current !== gen || !mapRef.current) return;
         scheduleInvalidate(created);
+        redrawZones();
         redraw();
+        redrawLocate();
         created.setView([start.lat, start.lng], zoom, { animate: false });
         created.eachLayer((layer) => {
           try {
@@ -332,11 +424,6 @@ export default function CanvassMap({
           }
         });
         setReady(true);
-      });
-
-      created.on('click', (e: import('leaflet').LeafletMouseEvent) => {
-        if (!mapRef.current) return;
-        onMapDropRef.current({ lat: e.latlng.lat, lng: e.latlng.lng });
       });
 
       if (typeof ResizeObserver !== 'undefined' && mapEl.current) {
@@ -363,6 +450,8 @@ export default function CanvassMap({
       if (mapRef.current === map) {
         mapRef.current = null;
         groupRef.current = null;
+        zoneGroupRef.current = null;
+        locateGroupRef.current = null;
         satRef.current = null;
         streetRef.current = null;
       }
@@ -371,19 +460,33 @@ export default function CanvassMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [retryToken, height]);
 
-  // Fly to a new center (locate-me / address search / pin selected) without remounting.
+  // Fly to a new center (report selected / "show my location") without remounting.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !center || !ready) return;
     if (!Number.isFinite(center.lat) || !Number.isFinite(center.lng)) return;
     try {
-      map.setView([center.lat, center.lng], Math.max(map.getZoom(), 18), {
+      map.setView([center.lat, center.lng], Math.max(map.getZoom(), 11), {
         animate: true,
       });
     } catch {
       /* not ready */
     }
   }, [center, ready]);
+
+  // Fit to all currently plotted reports on demand.
+  useEffect(() => {
+    if (fitSignal == null) return;
+    const map = mapRef.current;
+    const group = groupRef.current;
+    if (!map || !group || !ready) return;
+    try {
+      const bounds = group.getBounds();
+      if (bounds.isValid()) map.fitBounds(bounds.pad(0.15), { maxZoom: 12 });
+    } catch {
+      /* no reports yet */
+    }
+  }, [fitSignal, ready]);
 
   const switchToStreet = () => {
     const map = mapRef.current;
@@ -397,6 +500,7 @@ export default function CanvassMap({
       map.eachLayer((layer) => {
         if (
           layer !== groupRef.current &&
+          layer !== locateGroupRef.current &&
           layer !== street &&
           'getTileUrl' in (layer as object)
         ) {
@@ -427,7 +531,7 @@ export default function CanvassMap({
     <div ref={wrapRef} className={className}>
       <div
         ref={mapEl}
-        className="canvass-map w-full rounded-3xl overflow-hidden bg-slate-100 relative z-0 ring-1 ring-slate-200/80"
+        className="storm-map w-full rounded-3xl overflow-hidden bg-slate-100 relative z-0 ring-1 ring-slate-200/80"
         style={{ height, minHeight: height, width: '100%' }}
       />
 
@@ -445,21 +549,17 @@ export default function CanvassMap({
       )}
 
       <div className="mt-3 flex items-center justify-between gap-2 px-0.5">
-        <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500">
-          <svg className="w-3.5 h-3.5 text-zinc-400" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24" aria-hidden>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 21c-4.5-4.2-7-7.9-7-11a7 7 0 1 1 14 0c0 3.1-2.5 6.8-7 11Z" />
-            <circle cx="12" cy="10" r="2.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+        <span className="text-xs text-slate-400">
           {!ready
             ? 'Loading…'
-            : `${pins.length} pin${pins.length === 1 ? '' : 's'} · tap the map to drop one`}
+            : `${reports.length} report${reports.length === 1 ? '' : 's'} plotted`}
           {tileHint ? ` · ${tileHint}` : ''}
         </span>
         <button
           type="button"
           onClick={switchToStreet}
           disabled={!ready}
-          className="text-xs font-medium text-zinc-600 hover:text-zinc-900 disabled:opacity-30 rounded-full border border-zinc-200 px-2.5 py-1 transition-colors"
+          className="text-xs font-medium text-slate-600 disabled:opacity-30"
         >
           {basemap === 'street' ? 'Satellite' : 'Street'}
         </button>

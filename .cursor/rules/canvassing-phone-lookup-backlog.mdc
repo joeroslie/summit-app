@@ -1,0 +1,51 @@
+---
+description: Backlog — homeowner phone number lookup for canvassing (skip-tracing, not built yet)
+alwaysApply: true
+---
+
+# Canvassing homeowner phone lookup (planned — not built yet)
+
+Product backlog — **not built yet**. Do not implement unless Joe asks, or you are continuing an active phone-lookup task.
+
+## Why this isn't just an extension of the current lookup
+
+`app/api/property-lookup/route.ts` today calls **free, no-key Maricopa/Pima County AZ assessor ArcGIS parcel endpoints** to pull owner name, year built, assessed value, and site address for a pin. That data is public property-tax/assessor record — it does **not** include phone numbers, and never will, because assessor records aren't a phone-number source; that's a privacy/PII category entirely outside public tax records.
+
+Getting a phone number tied to a name/address requires a **separate, paid "skip tracing" / reverse-address-append data service** — a different vendor category from the free assessor APIs currently wired in.
+
+## Providers researched (approximate — re-verify pricing/API terms before committing, market shifts fast)
+
+- **BatchLeads / BatchSkipTracing** — real-estate-investor-focused skip tracing. Monthly subscription tiers bundling skip-trace credits, plus pay-as-you-go bulk skip tracing (roughly dimes per record at volume). Has a REST API.
+- **PropStream** — mainly a monthly-subscription property data platform (~$100+/mo) with a phone/skip-trace append marketplace add-on priced per record. Primarily a portal/CSV-upload workflow; API access is limited/enterprise-tier, not a simple self-serve REST key.
+- **TLOxp (TransUnion) / IDI Data (TransUnion)** — enterprise-grade skip tracing used by collections/insurance/investigators. Requires FCRA/GLBA "permissible purpose" credentialing and an approved subscriber account; per-search cost is comparatively high and onboarding is not self-serve. Overkill/friction-heavy for this use case.
+- **Melissa Data** — address verification + phone/property data append, has a documented REST API, subscription or per-record pricing.
+- **Data Axle (USA Data / Data Axle Genie)** — consumer contact data append (phone/email), subscription-based list licensing, enterprise API available.
+- **Whitepages Pro API** — reverse address/phone lookup with a clean pay-as-you-go REST API; historically cents-per-lookup at low volume with tiered pricing, but higher tiers can carry minimum monthly commitments.
+- **PeopleDataLabs** — general-purpose person/data enrichment API, credit-based per-match pricing, free trial credits, clean REST API — not real-estate-specific but usable for reverse owner→contact lookups.
+- **Endato / REISkip** — real-estate-investor-targeted skip tracing competitors to BatchSkipTracing, subscription + pay-per-skip plans, API available, positioned as cheaper/less-credentialing-heavy than TLOxp.
+
+**Hail Recon / Interactive Hail Maps** almost certainly sources their "on-demand homeowner contact data" canvassing feature from a provider in this same skip-tracing/data-append category — no public documentation was found confirming which specific vendor they partner with, so treat that as an open question, not a confirmed lead.
+
+## TCPA / compliance heads-up (not legal advice — practical flag only)
+
+- Skip-traced phone numbers are **not opt-in/consented** numbers. Autodialed calls, batch SMS/text blasts, or prerecorded-voice calls to these numbers carry real TCPA exposure (statutory damages are per-violation and add up fast).
+- **Manual, one-at-a-time human dialing** (no autodialer, no prerecorded message) is generally lower legal risk under TCPA, but is still subject to state "mini-TCPA" laws, National/state Do-Not-Call registry scrubbing, and calling-hour restrictions.
+- **Door-knocking itself has zero TCPA exposure** — TCPA only governs calls/texts, not in-person visits. The safest use of a skip-traced number may be "have it on file for a callback after an in-person visit," not "cold call/text it first."
+- Bottom line: before using any appended number for outbound calling/texting, get real legal sign-off on the specific provider's data-sourcing/consent claims and DNC-scrubbing process — this is not something to wing.
+
+## Recommendation for lowest-risk trial (when Joe revisits)
+
+Look for a **pay-per-lookup option with no subscription/minimum commitment** to test cheaply before committing — Whitepages Pro API (per-lookup, no bulk contract at low tiers) and PeopleDataLabs (credit-based, free trial credits) are the best candidates for a cheap trial run since neither presumes an ongoing bulk subscription. Avoid starting with PropStream/BatchLeads-style monthly-subscription products or TLOxp-style enterprise credentialing until a cheap trial confirms the hit-rate/accuracy is actually good enough for AZ residential addresses to justify a bigger commitment.
+
+## Integration effort estimate (once Joe picks a provider + has an API key)
+
+Small, self-contained addition to the existing pattern in `app/api/property-lookup/route.ts`:
+
+- Add one more lookup function (parallel to `lookupMaricopa`/`lookupPima`) that takes the resolved site address/owner name and calls the chosen provider's REST endpoint with the API key (env var).
+- Extend `PropertyLookupResult` with optional `phoneNumber`/`phoneSource` fields.
+- Wire the new field into the canvassing UI card wherever owner name/assessed value are currently displayed.
+- Estimate: **half a day to a day** of work for a provider with a clean REST API (Whitepages Pro, Melissa, PeopleDataLabs style) — mostly API-key plumbing + response-field mapping, following the exact shape of the existing county lookups. Longer if the chosen provider only offers portal/CSV workflows (PropStream, TLOxp) instead of a real API, since that would need a different integration shape entirely (manual export/import, not live lookup).
+
+## Agent reminder
+
+Do not implement until Joe asks, or you are continuing an active phone-lookup task.

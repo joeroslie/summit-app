@@ -27,6 +27,8 @@ Material · Labor · Sell.
 | IKO Hip & Ridge (standard) | bundle | $99.50/bdl | in package |  |
 | IKO Ultra Hip & Ridge (high-profile) | bundle | $104.00/bdl | in package |  |
 | Owens Corning DecoRidge (high-profile) | bundle | $116.00/bdl | in package |  |
+| GAF hip & ridge (standard) | bundle |  | in package |  |
+| Malarkey RidgeFlex (standard) | bundle |  | in package |  |
 
 ## Starter
 
@@ -206,6 +208,7 @@ Material · Labor · Sell.
 
 | Product | Unit | Material cost | Labor cost | Sell price |
 | --- | --- | --- | --- | --- |
+| Modified bitumen (package) | sq | see Mod-bit SA mats | see crew list | $600 PHX · $600 TUC |
 | Acrylic elastomeric coating (3 gal/100sq ft, two coats) | sq |  | see crew list (~$150–190 PHX) | $425 PHX · $450 TUC · $450 NORTH |
 | Silicone coating system | sq |  |  |  |
 | Urethane coating system | sq |  |  |  |
@@ -302,12 +305,13 @@ Labor base replaces $100/$110. Steep sell = labor cost increase only (cover, no 
 | HD Skylight cut-in / no curb | /each |  | $75/each | $500–550 |
 | D&R HVAC unit | /each |  | $900/each | $1300 PHX · $1600 TUC · $1600 NORTH |
 | Remove additional layer (double layer) | /sq |  | $20/sq | $20 PHX · $25 TUC · $25 NORTH |
-| R&R shingle mold | /LF |  | $4/LF |  |
+| R&R shingle mold | /LF |  | $4/LF | $5 PHX · $6 TUC · $6 NORTH |
 | R&R Fascia 2x6 / 2x8 | /LF |  | $4/LF | $15–18/LF |
-| Install ridge vent | /LF |  | ~$2/LF | $12–14/LF |
+| Install ridge vent | /LF |  | ~$2/LF | $13 PHX · $14 TUC · $14 NORTH |
+| High profile hip & ridge | /job |  | in package | $250 PHX · $250 TUC · $250 NORTH |
 | Steep 8/12–9/12 | /sq |  | $125/sq (labor base; +$25 vs $100) | +$25/sq |
-| Steep 9/12–11/12 | /sq |  | $175/sq (labor base; +$75 vs $100) | +$75/sq |
-| Steep 11/12–12/12 | /sq |  | $250/sq (labor base; +$150 vs $100) | +$150/sq |
+| Steep 10/12–11/12 | /sq |  | $175/sq (labor base; +$75 vs $100) | +$75/sq |
+| Steep 12/12 | /sq |  | $250/sq (labor base; +$150 vs $100) | +$150/sq |
 | Two-story adder | /sq |  | ~$10/sq |  |
 | Base mod-bit labor | /sq |  | see crew list |  |
 | Base tile labor | /sq |  | see crew list (D&R / R&R) |  |

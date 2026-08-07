@@ -21,7 +21,6 @@ body {
   font-size: 9pt;
 }
 .wrap { max-width: 900px; margin: 0 auto; padding: 1rem 1.25rem 3rem; }
-
 .panel { display: block; background: var(--bg); padding: 0; border: none; }
 .panel > h1 {
   margin: 0;
@@ -45,6 +44,7 @@ body {
   padding-bottom: 0.1rem;
   page-break-after: avoid;
 }
+.sec > p.note { margin: 0 0 0.28rem; color: var(--muted); font-size: 8pt; }
 table {
   width: 100%;
   border-collapse: collapse;
@@ -66,6 +66,11 @@ th {
 .cols-3 th:nth-child(1), .cols-3 td:nth-child(1) { width: 52%; }
 .cols-3 th:nth-child(2), .cols-3 td:nth-child(2) { width: 18%; }
 .cols-3 th:nth-child(3), .cols-3 td:nth-child(3) { width: 30%; }
+.cols-5 th:nth-child(1), .cols-5 td:nth-child(1) { width: 34%; }
+.cols-5 th:nth-child(2), .cols-5 td:nth-child(2) { width: 12%; }
+.cols-5 th:nth-child(3), .cols-5 td:nth-child(3) { width: 20%; }
+.cols-5 th:nth-child(4), .cols-5 td:nth-child(4) { width: 18%; }
+.cols-5 th:nth-child(5), .cols-5 td:nth-child(5) { width: 16%; }
 
 @media print {
   body { background: #fff; font-size: 8.5pt; }
@@ -77,359 +82,317 @@ th {
   tr { break-inside: avoid; page-break-inside: avoid; }
   @page { margin: 0.5in; size: letter; }
 }
+
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="panel cols-3">
     <h1>Supplier Price List · 2026</h1>
-    <p class="sub">Materials only · Roofing</p>
+    <p class="sub">Materials only · Roofing · Blank costs first — please fill and return.</p>
 
     <section class="sec">
-      <h2>Please fill — blank costs</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>BUR system (full package)</td><td>sq</td><td></td></tr>
-          <tr><td>Valley liner (membrane)</td><td>LF or roll</td><td></td></tr>
-          <tr><td>Clay tile material</td><td>per tile</td><td></td></tr>
-        </tbody>
-      </table>
+    <h2>Please fill — blank costs</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>BUR system (full package)</td><td>sq</td><td></td></tr>
+    <tr><td>Valley liner (membrane)</td><td>LF or roll</td><td></td></tr>
+    <tr><td>Clay tile material</td><td>per tile</td><td></td></tr>
+    <tr><td>GAF hip &amp; ridge (standard)</td><td>bundle</td><td></td></tr>
+    <tr><td>Malarkey RidgeFlex (standard)</td><td>bundle</td><td></td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Shingles</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>CertainTeed Landmark</td><td>bdl / sq</td><td>$39.00/bdl · $117.00/sq</td></tr>
-          <tr><td>CertainTeed Patriot XL</td><td>bdl / sq</td><td>$34.33/bdl · $103.00/sq</td></tr>
-          <tr><td>GAF Natural Shadow</td><td>bdl / sq</td><td>$43.00/bdl · $129.00/sq</td></tr>
-          <tr><td>GAF Timberline HDZ</td><td>bdl / sq</td><td>$43.33/bdl · $130.00/sq</td></tr>
-          <tr><td>IKO Armourshake</td><td>bdl / sq</td><td>$46.00/bdl · $230.00/sq</td></tr>
-          <tr><td>IKO Cambridge</td><td>bdl / sq</td><td>$29.67/bdl · $89.00/sq</td></tr>
-          <tr><td>IKO Dynasty</td><td>bdl / sq</td><td>$31.33/bdl · $94.00/sq</td></tr>
-          <tr><td>Malarkey Highlander</td><td>bdl / sq</td><td>$51.33/bdl · $154.00/sq</td></tr>
-          <tr><td>Malarkey Vista</td><td>bdl / sq</td><td>$53.33/bdl · $160.00/sq</td></tr>
-          <tr><td>Owens Corning Duration</td><td>bdl / sq</td><td>$39.33/bdl · $118.00/sq</td></tr>
-          <tr><td>Owens Corning Duration Designer</td><td>bdl / sq</td><td>$39.33/bdl · $118.00/sq</td></tr>
-          <tr><td>Owens Corning Oakridge</td><td>bdl / sq</td><td>$36.67/bdl · $110.00/sq</td></tr>
-        </tbody>
-      </table>
+    <h2>Shingles</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>CertainTeed Landmark</td><td>bdl / sq</td><td>$39.00/bdl · $117.00/sq</td></tr>
+    <tr><td>CertainTeed Patriot XL</td><td>bdl / sq</td><td>$34.33/bdl · $103.00/sq</td></tr>
+    <tr><td>GAF Natural Shadow</td><td>bdl / sq</td><td>$43.00/bdl · $129.00/sq</td></tr>
+    <tr><td>GAF Timberline HDZ</td><td>bdl / sq</td><td>$43.33/bdl · $130.00/sq</td></tr>
+    <tr><td>IKO Armourshake</td><td>bdl / sq</td><td>$46.00/bdl · $230.00/sq</td></tr>
+    <tr><td>IKO Cambridge</td><td>bdl / sq</td><td>$29.67/bdl · $89.00/sq</td></tr>
+    <tr><td>IKO Dynasty</td><td>bdl / sq</td><td>$31.33/bdl · $94.00/sq</td></tr>
+    <tr><td>Malarkey Highlander</td><td>bdl / sq</td><td>$51.33/bdl · $154.00/sq</td></tr>
+    <tr><td>Malarkey Vista</td><td>bdl / sq</td><td>$53.33/bdl · $160.00/sq</td></tr>
+    <tr><td>Owens Corning Duration</td><td>bdl / sq</td><td>$39.33/bdl · $118.00/sq</td></tr>
+    <tr><td>Owens Corning Duration Designer</td><td>bdl / sq</td><td>$39.33/bdl · $118.00/sq</td></tr>
+    <tr><td>Owens Corning Oakridge</td><td>bdl / sq</td><td>$36.67/bdl · $110.00/sq</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Hip &amp; Ridge</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>CertainTeed Shadow Ridge</td><td>bundle</td><td>$85.00/bdl</td></tr>
-          <tr><td>IKO Hip &amp; Ridge (standard)</td><td>bundle</td><td>$99.50/bdl</td></tr>
-          <tr><td>IKO Ultra Hip &amp; Ridge (high-profile)</td><td>bundle</td><td>$104.00/bdl</td></tr>
-          <tr><td>Owens Corning DecoRidge (high-profile)</td><td>bundle</td><td>$116.00/bdl</td></tr>
-        </tbody>
-      </table>
+    <h2>Hip &amp; Ridge</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>CertainTeed Shadow Ridge</td><td>bundle</td><td>$85.00/bdl</td></tr>
+    <tr><td>IKO Hip &amp; Ridge (standard)</td><td>bundle</td><td>$99.50/bdl</td></tr>
+    <tr><td>IKO Ultra Hip &amp; Ridge (high-profile)</td><td>bundle</td><td>$104.00/bdl</td></tr>
+    <tr><td>Owens Corning DecoRidge (high-profile)</td><td>bundle</td><td>$116.00/bdl</td></tr>
+    <tr><td>GAF hip &amp; ridge (standard)</td><td>bundle</td><td></td></tr>
+    <tr><td>Malarkey RidgeFlex (standard)</td><td>bundle</td><td></td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Starter</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>CertainTeed Starter</td><td>bundle</td><td>$75.00/bdl</td></tr>
-          <tr><td>GAF Pro-Start Starter</td><td>bundle</td><td>$73.00/bdl</td></tr>
-          <tr><td>IKO Armour Starter</td><td>bdl (70 LF)</td><td>$137.00/bdl · $1.96/LF</td></tr>
-          <tr><td>IKO Starter</td><td>bundle</td><td>$72.00/bdl</td></tr>
-          <tr><td>Malarkey Starter</td><td>bundle</td><td>$92.50/bdl</td></tr>
-          <tr><td>Owens Corning Starter Shingle Strip</td><td>bundle</td><td>$84.50/bdl</td></tr>
-          <tr><td>Tamko Starter</td><td>bundle</td><td>$74.00/bdl</td></tr>
-          <tr><td>TopShield Starter</td><td>bundle</td><td>$70.50/bdl</td></tr>
-        </tbody>
-      </table>
+    <h2>Starter</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>CertainTeed Starter</td><td>bundle</td><td>$75.00/bdl</td></tr>
+    <tr><td>GAF Pro-Start Starter</td><td>bundle</td><td>$73.00/bdl</td></tr>
+    <tr><td>IKO Armour Starter</td><td>bdl (70 LF)</td><td>$137.00/bdl · $1.96/LF</td></tr>
+    <tr><td>IKO Starter</td><td>bundle</td><td>$72.00/bdl</td></tr>
+    <tr><td>Malarkey Starter</td><td>bundle</td><td>$92.50/bdl</td></tr>
+    <tr><td>Owens Corning Starter Shingle Strip</td><td>bundle</td><td>$84.50/bdl</td></tr>
+    <tr><td>Tamko Starter</td><td>bundle</td><td>$74.00/bdl</td></tr>
+    <tr><td>TopShield Starter</td><td>bundle</td><td>$70.50/bdl</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Shingle system underlayment — Felt</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>15#/30# Felt ASTM D226</td><td>roll</td><td>$39.00</td></tr>
-          <tr><td>15#/30# Felt ASTM D4869</td><td>roll</td><td>$32.25</td></tr>
-          <tr><td>Tarah 40# Organic Felt</td><td>roll (2 sq)</td><td>$38.00</td></tr>
-        </tbody>
-      </table>
+    <h2>Shingle system underlayment — Felt</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>15#/30# Felt ASTM D226</td><td>roll</td><td>$39.00</td></tr>
+    <tr><td>15#/30# Felt ASTM D4869</td><td>roll</td><td>$32.25</td></tr>
+    <tr><td>Tarah 40# Organic Felt</td><td>roll (2 sq)</td><td>$38.00</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Shingle system underlayment — Synthetic</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>APOC CXL</td><td>roll (4.5 sq)</td><td>$95.00</td></tr>
-          <tr><td>CMI Ranger Synthetic</td><td>roll (10 sq)</td><td>$58.00</td></tr>
-          <tr><td>GAF FeltBuster</td><td>roll (10 sq)</td><td>$119.00</td></tr>
-          <tr><td>Prowest One Solutions Synthetic</td><td>roll</td><td>$71.00</td></tr>
-          <tr><td>Rhino Synthetic Underlayment</td><td>roll (10 sq)</td><td>$94.50</td></tr>
-          <tr><td>Swiftguard</td><td>roll (10 sq)</td><td>$206.00</td></tr>
-          <tr><td>TopShield Synthetic</td><td>roll (10 sq)</td><td>$67.00</td></tr>
-        </tbody>
-      </table>
+    <h2>Shingle system underlayment — Synthetic</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>APOC CXL</td><td>roll (4.5 sq)</td><td>$95.00</td></tr>
+    <tr><td>CMI Ranger Synthetic</td><td>roll (10 sq)</td><td>$58.00</td></tr>
+    <tr><td>GAF FeltBuster</td><td>roll (10 sq)</td><td>$119.00</td></tr>
+    <tr><td>Prowest One Solutions Synthetic</td><td>roll (~10 sq)</td><td>$71.00</td></tr>
+    <tr><td>Rhino Synthetic Underlayment</td><td>roll (10 sq)</td><td>$94.50</td></tr>
+    <tr><td>Swiftguard</td><td>roll (10 sq)</td><td>$206.00</td></tr>
+    <tr><td>TopShield Synthetic</td><td>roll (10 sq)</td><td>$67.00</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Shingle system underlayment — Synthetic HT</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>Titanium UDL 50 Synthetic</td><td>roll (10 sq)</td><td>$233.00</td></tr>
-          <tr><td>TopShield 100HT</td><td>roll</td><td>$108.00</td></tr>
-          <tr><td>TopShield SG Max MTS Synthetic</td><td>roll (10 sq)</td><td>$133.00</td></tr>
-        </tbody>
-      </table>
+    <h2>Shingle system underlayment — Synthetic HT</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>Titanium UDL 50 Synthetic</td><td>roll (10 sq)</td><td>$233.00</td></tr>
+    <tr><td>TopShield 100HT</td><td>roll (~10 sq HT)</td><td>$108.00</td></tr>
+    <tr><td>TopShield SG Max MTS Synthetic</td><td>roll (10 sq)</td><td>$133.00</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Tile system underlayment</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>Boral Organic Ply 40</td><td>roll (2 sq)</td><td>$41.50</td></tr>
-          <tr><td>Boral Ply 40</td><td>roll (2 sq)</td><td>$54.50</td></tr>
-          <tr><td>Boral Tile Seal</td><td>roll (2 sq)</td><td>$123.00</td></tr>
-          <tr><td>Eagle Tru-2</td><td>roll (2 sq)</td><td>$41.75</td></tr>
-        </tbody>
-      </table>
+    <h2>Tile system underlayment</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>Boral Organic Ply 40</td><td>roll (2 sq)</td><td>$41.50</td></tr>
+    <tr><td>Boral Ply 40</td><td>roll (2 sq)</td><td>$54.50</td></tr>
+    <tr><td>Boral Tile Seal</td><td>roll (2 sq)</td><td>$123.00</td></tr>
+    <tr><td>Eagle Tru-2</td><td>roll (2 sq)</td><td>$41.75</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Shingle eaves/valleys + low-slope — Ice &amp; water / SA</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>IKO StormShield</td><td>roll (~2 sq)</td><td>$96.50</td></tr>
-          <tr><td>Polyglass Polyflex SA V</td><td>roll (2 sq)</td><td>$152.00</td></tr>
-          <tr><td>TopShield Defender Ice / CMI Securegrip Ice</td><td>roll (2 sq)</td><td>$89.50</td></tr>
-          <tr><td>TopShield SG PS Max 2.0 HT Ice &amp; Water</td><td>roll (2 sq)</td><td>$113.00</td></tr>
-        </tbody>
-      </table>
+    <h2>Shingle eaves/valleys + low-slope — Ice &amp; water / SA</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>IKO StormShield</td><td>roll (~2 sq)</td><td>$96.50</td></tr>
+    <tr><td>Polyglass Polyflex SA V</td><td>roll (2 sq)</td><td>$152.00</td></tr>
+    <tr><td>TopShield Defender Ice / CMI Securegrip Ice</td><td>roll (2 sq)</td><td>$89.50</td></tr>
+    <tr><td>TopShield SG PS Max 2.0 HT Ice &amp; Water</td><td>roll (2 sq)</td><td>$113.00</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Low-slope / flat — Mod-bit SA</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>Polyglass Elastoflex SA V Flashing Strip 9&quot;</td><td>roll</td><td>$52.00</td></tr>
-          <tr><td>Polyglass SA Cap Sheet</td><td>square</td><td>$128.00</td></tr>
-          <tr><td>TopShield SA Base Sheet</td><td>square</td><td>$126.00</td></tr>
-          <tr><td>TopShield SA Cap Sheet</td><td>square</td><td>$123.00</td></tr>
-        </tbody>
-      </table>
+    <h2>Low-slope / flat — Mod-bit SA</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>Polyglass Elastoflex SA V Flashing Strip 9&quot;</td><td>roll</td><td>$52.00</td></tr>
+    <tr><td>Polyglass SA Cap Sheet</td><td>square</td><td>$128.00</td></tr>
+    <tr><td>TopShield SA Base Sheet</td><td>square</td><td>$126.00</td></tr>
+    <tr><td>TopShield SA Cap Sheet</td><td>square</td><td>$123.00</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Low-slope / flat — BUR base</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>CertainTeed Glasbase #75 Base Sheet</td><td>roll (3 sq)</td><td>$61.00</td></tr>
-        </tbody>
-      </table>
+    <h2>Low-slope / flat — BUR base</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>CertainTeed Glasbase #75 Base Sheet</td><td>roll (3 sq)</td><td>$61.00</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Valleys</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>24&quot;×10&#x27; 3-Rib W-Valley</td><td>each</td><td>$33.10</td></tr>
-        </tbody>
-      </table>
+    <h2>Valleys</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>24&quot;×10&#x27; 3-Rib W-Valley</td><td>each</td><td>$33.10</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Flashing</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>#1 Counter Flashing</td><td>each</td><td>$10.90</td></tr>
-          <tr><td>2&quot;×1-1/2&quot;×2&quot; Z-Bar</td><td>each</td><td>$9.45</td></tr>
-          <tr><td>2&quot;×4&quot; Low Rise Gravel Stop</td><td>each</td><td>$12.90</td></tr>
-          <tr><td>2&quot;×6&quot; Roof to Wall</td><td>each</td><td>$11.20</td></tr>
-          <tr><td>3-in-1</td><td>each</td><td>$12.80</td></tr>
-          <tr><td>4&quot;×4&quot;×8&quot; Step Flashing</td><td>box</td><td>$54.50</td></tr>
-          <tr><td>Pan Flashing</td><td>each</td><td>$16.50</td></tr>
-        </tbody>
-      </table>
+    <h2>Flashing</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>#1 Counter Flashing</td><td>each</td><td>$10.90</td></tr>
+    <tr><td>2&quot;×1-1/2&quot;×2&quot; Z-Bar</td><td>each</td><td>$9.45</td></tr>
+    <tr><td>2&quot;×4&quot; Low Rise Gravel Stop</td><td>each</td><td>$12.90</td></tr>
+    <tr><td>2&quot;×6&quot; Roof to Wall</td><td>each</td><td>$11.20</td></tr>
+    <tr><td>3-in-1</td><td>each</td><td>$12.80</td></tr>
+    <tr><td>4&quot;×4&quot;×8&quot; Step Flashing</td><td>box (~100 pcs)</td><td>$54.50</td></tr>
+    <tr><td>Pan Flashing</td><td>each</td><td>$16.50</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Drip Edge</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>2&quot;×2&quot; Edge Color</td><td>each (piece)</td><td>$9.10</td></tr>
-          <tr><td>2&quot;×2&quot; Edge Mill</td><td>each (piece)</td><td>$6.50</td></tr>
-          <tr><td>2&quot;×4&quot; Edge Color</td><td>each (piece)</td><td>$12.90</td></tr>
-          <tr><td>2&quot;×4&quot; Edge Mill</td><td>each (piece)</td><td>$11.80</td></tr>
-          <tr><td>3&quot;×3&quot; Edge Color</td><td>each (piece)</td><td>$14.15</td></tr>
-          <tr><td>3&quot;×3&quot; Edge Mill</td><td>each (piece)</td><td>$11.80</td></tr>
-        </tbody>
-      </table>
+    <h2>Drip Edge</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>2&quot;×2&quot; Edge Color</td><td>each (piece)</td><td>$9.10</td></tr>
+    <tr><td>2&quot;×2&quot; Edge Mill</td><td>each (piece)</td><td>$6.50</td></tr>
+    <tr><td>2&quot;×4&quot; Edge Color</td><td>each (piece)</td><td>$12.90</td></tr>
+    <tr><td>2&quot;×4&quot; Edge Mill</td><td>each (piece)</td><td>$11.80</td></tr>
+    <tr><td>3&quot;×3&quot; Edge Color</td><td>each (piece)</td><td>$14.15</td></tr>
+    <tr><td>3&quot;×3&quot; Edge Mill</td><td>each (piece)</td><td>$11.80</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Pipe Jacks</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>1.5&quot; Pipe Flash Aluminum</td><td>each</td><td>$18.65</td></tr>
-          <tr><td>1.5&quot; Pipe Flash Galvanized</td><td>each</td><td>$7.00</td></tr>
-          <tr><td>2&quot; Pipe Flash Aluminum</td><td>each</td><td>$18.65</td></tr>
-          <tr><td>2&quot; Pipe Flash Galvanized</td><td>each</td><td>$8.00</td></tr>
-          <tr><td>3&quot; Pipe Flash Aluminum</td><td>each</td><td>$17.35</td></tr>
-          <tr><td>3&quot; Pipe Flash Galvanized</td><td>each</td><td>$9.00</td></tr>
-          <tr><td>4&quot; Pipe Flash Aluminum</td><td>each</td><td>$21.30</td></tr>
-          <tr><td>4&quot; Pipe Flash Galvanized</td><td>each</td><td>$10.00</td></tr>
-          <tr><td>4&quot; T-Top Aluminum</td><td>each</td><td>$18.00</td></tr>
-          <tr><td>4&quot; T-Top Galvanized</td><td>each</td><td>$9.70</td></tr>
-          <tr><td>7&quot; T-Top Aluminum</td><td>each</td><td>$22.50</td></tr>
-          <tr><td>7&quot; T-Top Galvanized</td><td>each</td><td>$11.60</td></tr>
-        </tbody>
-      </table>
+    <h2>Pipe Jacks</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>1.5&quot; Pipe Flash Aluminum</td><td>each</td><td>$18.65</td></tr>
+    <tr><td>1.5&quot; Pipe Flash Galvanized</td><td>each</td><td>$7.00</td></tr>
+    <tr><td>2&quot; Pipe Flash Aluminum</td><td>each</td><td>$18.65</td></tr>
+    <tr><td>2&quot; Pipe Flash Galvanized</td><td>each</td><td>$8.00</td></tr>
+    <tr><td>3&quot; Pipe Flash Aluminum</td><td>each</td><td>$17.35</td></tr>
+    <tr><td>3&quot; Pipe Flash Galvanized</td><td>each</td><td>$9.00</td></tr>
+    <tr><td>4&quot; Pipe Flash Aluminum</td><td>each</td><td>$21.30</td></tr>
+    <tr><td>4&quot; Pipe Flash Galvanized</td><td>each</td><td>$10.00</td></tr>
+    <tr><td>4&quot; T-Top Aluminum</td><td>each</td><td>$18.00</td></tr>
+    <tr><td>4&quot; T-Top Galvanized</td><td>each</td><td>$9.70</td></tr>
+    <tr><td>7&quot; T-Top Aluminum</td><td>each</td><td>$22.50</td></tr>
+    <tr><td>7&quot; T-Top Galvanized</td><td>each</td><td>$11.60</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Vents &amp; Turbines</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>BRV34 Bath Vent</td><td>each</td><td>$35.00</td></tr>
-          <tr><td>DA-4 Vent</td><td>each</td><td>$19.80</td></tr>
-          <tr><td>KV68 Kitchen Vent</td><td>each</td><td>$53.00</td></tr>
-          <tr><td>Lomanco 12&quot; Turbine</td><td>each</td><td>$82.50</td></tr>
-          <tr><td>Lomanco 550</td><td>each</td><td>$22.30</td></tr>
-          <tr><td>Lomanco 750 Mill</td><td>each</td><td>$33.00</td></tr>
-          <tr><td>Lomanco LOR Ridgevent 12&quot;×4&#x27;</td><td>each (4 LF)</td><td>$16.10</td></tr>
-          <tr><td>Lomanco OR-30 Ridge Vent</td><td>each</td><td>$131.00</td></tr>
-          <tr><td>Lomanco OR9-4 Ridgevent 9&quot;×4&#x27;</td><td>each (4 LF)</td><td>$17.35</td></tr>
-          <tr><td>Ohagin Galvanized Tile Vent</td><td>each</td><td>$45.00</td></tr>
-          <tr><td>Ohagin Shingle Vent</td><td>each</td><td>$39.00</td></tr>
-          <tr><td>Pro-4 Vent</td><td>each</td><td>$15.60</td></tr>
-        </tbody>
-      </table>
+    <h2>Vents &amp; Turbines</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>BRV34 Bath Vent</td><td>each</td><td>$35.00</td></tr>
+    <tr><td>DA-4 Vent</td><td>each</td><td>$19.80</td></tr>
+    <tr><td>KV68 Kitchen Vent</td><td>each</td><td>$53.00</td></tr>
+    <tr><td>Lomanco 12&quot; Turbine</td><td>each</td><td>$82.50</td></tr>
+    <tr><td>Lomanco 550</td><td>each</td><td>$22.30</td></tr>
+    <tr><td>Lomanco 750 Mill</td><td>each</td><td>$33.00</td></tr>
+    <tr><td>Lomanco LOR Ridgevent 12&quot;×4&#x27;</td><td>each (4 LF)</td><td>$16.10</td></tr>
+    <tr><td>Lomanco OR-30 Ridge Vent</td><td>each</td><td>$131.00</td></tr>
+    <tr><td>Lomanco OR9-4 Ridgevent 9&quot;×4&#x27;</td><td>each (4 LF)</td><td>$17.35</td></tr>
+    <tr><td>Ohagin Galvanized Tile Vent</td><td>each</td><td>$45.00</td></tr>
+    <tr><td>Ohagin Shingle Vent</td><td>each</td><td>$39.00</td></tr>
+    <tr><td>Pro-4 Vent</td><td>each</td><td>$15.60</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Fasteners</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>1&quot; Metal Cap Nails 5#</td><td>box</td><td>$18.85</td></tr>
-          <tr><td>1&quot; Metal Cap Nails 50#</td><td>box</td><td>$102.00</td></tr>
-          <tr><td>1&quot; Plastic Cap Nails</td><td>box</td><td>$18.00</td></tr>
-          <tr><td>1-1/2&quot; N-17 Staples</td><td>box</td><td>$59.00</td></tr>
-          <tr><td>1-3/4&quot; Coil Nails</td><td>box</td><td>$56.00</td></tr>
-          <tr><td>1.25&quot; Coil Nails</td><td>box</td><td>$49.00</td></tr>
-          <tr><td>3/8&quot; A11 Staples</td><td>box</td><td>$5.90</td></tr>
-          <tr><td>5/8&quot; P-10 Staples</td><td>box</td><td>$57.00</td></tr>
-          <tr><td>Roofing Nails 50#</td><td>box</td><td>$76.50</td></tr>
-          <tr><td>Tile Nails 50#</td><td>box</td><td>$76.50</td></tr>
-        </tbody>
-      </table>
+    <h2>Fasteners</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>1&quot; Metal Cap Nails 5#</td><td>box</td><td>$18.85</td></tr>
+    <tr><td>1&quot; Metal Cap Nails 50#</td><td>box</td><td>$102.00</td></tr>
+    <tr><td>1&quot; Plastic Cap Nails</td><td>box</td><td>$18.00</td></tr>
+    <tr><td>1-1/2&quot; N-17 Staples</td><td>box</td><td>$59.00</td></tr>
+    <tr><td>1-3/4&quot; Coil Nails</td><td>box</td><td>$56.00</td></tr>
+    <tr><td>1.25&quot; Coil Nails</td><td>box</td><td>$49.00</td></tr>
+    <tr><td>3/8&quot; A11 Staples</td><td>box</td><td>$5.90</td></tr>
+    <tr><td>5/8&quot; P-10 Staples</td><td>box</td><td>$57.00</td></tr>
+    <tr><td>Roofing Nails 50#</td><td>box</td><td>$76.50</td></tr>
+    <tr><td>Tile Nails 50#</td><td>box</td><td>$76.50</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Cements &amp; Mastics</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>Tropical #101 Plastic Cement 3 gal</td><td>pail</td><td>$35.00</td></tr>
-          <tr><td>Tropical #101 Plastic Cement 5 gal</td><td>pail</td><td>$47.00</td></tr>
-          <tr><td>Tropical #509 Modified Mastic 3 gal</td><td>pail</td><td>$39.00</td></tr>
-          <tr><td>Tropical #509 Modified Mastic 5 gal</td><td>pail</td><td>$61.00</td></tr>
-        </tbody>
-      </table>
+    <h2>Cements &amp; Mastics</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>Tropical #101 Plastic Cement 3 gal</td><td>pail</td><td>$35.00</td></tr>
+    <tr><td>Tropical #101 Plastic Cement 5 gal</td><td>pail</td><td>$47.00</td></tr>
+    <tr><td>Tropical #509 Modified Mastic 3 gal</td><td>pail</td><td>$39.00</td></tr>
+    <tr><td>Tropical #509 Modified Mastic 5 gal</td><td>pail</td><td>$61.00</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Coatings (Cans) &amp; Flashing Paint</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>Karnak 405 5 gal</td><td>pail</td><td>$103.00</td></tr>
-          <tr><td>Karnak 505 5 gal</td><td>pail</td><td>$112.00</td></tr>
-          <tr><td>Karnak 505 WB 3.5 gal</td><td>pail</td><td>$124.00</td></tr>
-          <tr><td>Polyglass PG700 5 gal</td><td>pail</td><td>$87.50</td></tr>
-          <tr><td>TopShield Shingle Flashing Paint 12 oz</td><td>can</td><td>$10.00</td></tr>
-          <tr><td>Tropical #901 HS White</td><td>pail</td><td>$81.00</td></tr>
-        </tbody>
-      </table>
+    <h2>Coatings (Cans) &amp; Flashing Paint</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>Karnak 405 5 gal</td><td>pail</td><td>$103.00</td></tr>
+    <tr><td>Karnak 505 5 gal</td><td>pail</td><td>$112.00</td></tr>
+    <tr><td>Karnak 505 WB 3.5 gal</td><td>pail</td><td>$124.00</td></tr>
+    <tr><td>Polyglass PG700 5 gal</td><td>pail</td><td>$87.50</td></tr>
+    <tr><td>TopShield Shingle Flashing Paint 12 oz</td><td>can</td><td>$10.00</td></tr>
+    <tr><td>Tropical #901 HS White</td><td>pail</td><td>$81.00</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Tile</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>Eagle Concrete Tile</td><td>sq</td><td>$116.67</td></tr>
-          <tr><td>Westlake Concrete Tile</td><td>sq</td><td>$114.35</td></tr>
-        </tbody>
-      </table>
+    <h2>Tile</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>Eagle Concrete Tile</td><td>sq</td><td>$116.67</td></tr>
+    <tr><td>Westlake Concrete Tile</td><td>sq</td><td>$114.35</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Tile Accessories</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>Birdstop &quot;S&quot;</td><td>each</td><td>$9.60</td></tr>
-          <tr><td>Birdstop &quot;W&quot;</td><td>each</td><td>$9.60</td></tr>
-          <tr><td>Eagle Trim</td><td>each</td><td>$3.95</td></tr>
-          <tr><td>Verde Split Flashing 1-1/2&quot;</td><td>each</td><td>$25.00</td></tr>
-          <tr><td>Verde Split Flashing 2&quot;</td><td>each</td><td>$25.00</td></tr>
-          <tr><td>Verde Split Flashing 3/4&quot;</td><td>each</td><td>$26.90</td></tr>
-          <tr><td>Westile L-Style Eave Riser</td><td>each</td><td>$8.40</td></tr>
-          <tr><td>Westlake Trim</td><td>each</td><td>$3.99</td></tr>
-        </tbody>
-      </table>
+    <h2>Tile Accessories</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>Birdstop &quot;S&quot;</td><td>each</td><td>$9.60</td></tr>
+    <tr><td>Birdstop &quot;W&quot;</td><td>each</td><td>$9.60</td></tr>
+    <tr><td>Eagle Trim</td><td>each</td><td>$3.95</td></tr>
+    <tr><td>Verde Split Flashing 1-1/2&quot;</td><td>each</td><td>$25.00</td></tr>
+    <tr><td>Verde Split Flashing 2&quot;</td><td>each</td><td>$25.00</td></tr>
+    <tr><td>Verde Split Flashing 3/4&quot;</td><td>each</td><td>$26.90</td></tr>
+    <tr><td>Westile L-Style Eave Riser</td><td>each</td><td>$8.40</td></tr>
+    <tr><td>Westlake Trim</td><td>each</td><td>$3.99</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Tile Hip &amp; Ridge</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>Verde P10/P20 Hip</td><td>each</td><td>$45.00</td></tr>
-          <tr><td>Verde P15/P25 Ridge</td><td>each</td><td>$90.00</td></tr>
-          <tr><td>Verde P30 Hip</td><td>each</td><td>$53.00</td></tr>
-          <tr><td>Verde P35 Ridge</td><td>each</td><td>$92.00</td></tr>
-          <tr><td>Verde P50 Hip</td><td>each</td><td>$49.75</td></tr>
-          <tr><td>Verde P55 Ridge</td><td>each</td><td>$92.00</td></tr>
-          <tr><td>Verde PF7 Flat</td><td>each</td><td>$99.00</td></tr>
-        </tbody>
-      </table>
+    <h2>Tile Hip &amp; Ridge</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>Verde P10/P20 Hip</td><td>each</td><td>$45.00</td></tr>
+    <tr><td>Verde P15/P25 Ridge</td><td>each</td><td>$90.00</td></tr>
+    <tr><td>Verde P30 Hip</td><td>each</td><td>$53.00</td></tr>
+    <tr><td>Verde P35 Ridge</td><td>each</td><td>$92.00</td></tr>
+    <tr><td>Verde P50 Hip</td><td>each</td><td>$49.75</td></tr>
+    <tr><td>Verde P55 Ridge</td><td>each</td><td>$92.00</td></tr>
+    <tr><td>Verde PF7 Flat</td><td>each</td><td>$99.00</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Tile Mortar</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>Kwikmix Mortar Pre-Mix</td><td>bag</td><td>$14.60</td></tr>
-        </tbody>
-      </table>
+    <h2>Tile Mortar</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>Kwikmix Mortar Pre-Mix</td><td>bag</td><td>$14.60</td></tr>
+    </tbody></table>
     </section>
-
     <section class="sec">
-      <h2>Accessories</h2>
-      <table>
-        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
-        <tbody>
-          <tr><td>Caulking</td><td>tube</td><td>$10.00</td></tr>
-          <tr><td>Furring Strips 1&quot;×2&quot;×4&quot;</td><td>bundle</td><td>$13.50</td></tr>
-        </tbody>
-      </table>
+    <h2>Accessories</h2>
+    <table>
+    <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+    <tbody>
+    <tr><td>Caulking</td><td>tube</td><td>$10.00</td></tr>
+    <tr><td>Furring Strips 1&quot;×2&quot;×4&#x27;</td><td>bundle</td><td>$13.50</td></tr>
+    </tbody></table>
     </section>
   </div>
 </div>

@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Bold + Simple Hybrids — Index</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #121214;
+    --surface: #1a1b1e;
+    --border: rgba(255,255,255,0.08);
+    --text-primary: #f2f1ef;
+    --text-secondary: #a3a4a8;
+    --text-muted: #6c6d72;
+    --accent: #ff7a1a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--text-primary);
+    font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 72px 32px 100px; }
+  .kicker { font-size: 12px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); margin-bottom: 14px; }
+  h1 { font-size: 36px; font-weight: 800; letter-spacing: -0.02em; margin: 0 0 12px; }
+  .intro { font-size: 15px; color: var(--text-secondary); max-width: 620px; line-height: 1.55; margin-bottom: 48px; }
+  .cards { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  a.card {
+    display: flex; align-items: center; gap: 20px; text-decoration: none; color: inherit;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 18px 22px; transition: border-color 0.15s ease;
+  }
+  a.card:hover { border-color: rgba(255,122,26,0.4); }
+  .swatch { width: 56px; height: 56px; border-radius: 12px; flex-shrink: 0; position: relative; }
+  .swatch .dot { position: absolute; bottom: 8px; right: 8px; width: 12px; height: 12px; border-radius: 50%; }
+  .card-letter { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--text-muted); text-transform: uppercase; margin-bottom: 4px; }
+  .card-title { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
+  .card-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.4; }
+  .swatch.a { background: #141416; } .swatch.a .dot { background: #ff7a1a; }
+  .swatch.b { background: #0e0e10; } .swatch.b .dot { background: #ff7a1a; }
+  .swatch.c { background: #eceef1; } .swatch.c .dot { background: #ff7a1a; }
+  .swatch.d { background: #121214; } .swatch.d .dot { background: #ffb020; }
+  .swatch.e { background: #16181d; } .swatch.e .dot { background: #ff6a00; }
+  .back { margin-top: 40px; font-size: 13px; }
+  .back a { color: var(--text-muted); }
+  @media (max-width: 600px) { a.card { flex-direction: column; align-items: flex-start; } }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="kicker">Bold + Simple</div>
+    <h1>Five charcoal / orange hybrids</h1>
+    <p class="intro">
+      Same dashboard. Charcoal + safety orange. Apple/Tesla/Cursor calm — no linen, no terracotta, no fall cozy.
+    </p>
+    <div class="cards">
+      <a class="card" href="04-hybrid-a-ember-linen.html">
+        <div class="swatch a"><span class="dot"></span></div>
+        <div>
+          <div class="card-letter">A</div>
+          <div class="card-title">Apple-Clean Dark</div>
+          <div class="card-desc">Max whitespace, solid orange CTA, muted zinc stage dots</div>
+        </div>
+      </a>
+      <a class="card" href="04-hybrid-b-charcoal-ember.html">
+        <div class="swatch b"><span class="dot"></span></div>
+        <div>
+          <div class="card-letter">B</div>
+          <div class="card-title">Dense Graphite Trade</div>
+          <div class="card-desc">Near-black, tighter spacing, structural icon-chip New Lead</div>
+        </div>
+      </a>
+      <a class="card" href="04-hybrid-c-copper-stone.html">
+        <div class="swatch c"><span class="dot"></span></div>
+        <div>
+          <div class="card-letter">C</div>
+          <div class="card-title">Zinc Light + Orange</div>
+          <div class="card-desc">Cool gray light mode (not cream) + bold orange CTAs</div>
+        </div>
+      </a>
+      <a class="card" href="04-hybrid-d-driftwood-flare.html">
+        <div class="swatch d"><span class="dot"></span></div>
+        <div>
+          <div class="card-letter">D</div>
+          <div class="card-title">Amber-Only Charcoal</div>
+          <div class="card-desc">Deep charcoal, amber accent only, zinc stage markers</div>
+        </div>
+      </a>
+      <a class="card" href="04-hybrid-e-sunset-craft.html">
+        <div class="swatch e"><span class="dot"></span></div>
+        <div>
+          <div class="card-letter">E</div>
+          <div class="card-title">Slate Calm + Electric Orange</div>
+          <div class="card-desc">Cooler slate, huge type, outline CTA, minimal chrome</div>
+        </div>
+      </a>
+    </div>
+    <div class="back"><a href="00-index.html">← Back to main directions</a></div>
+  </div>
+</body>
+</html>
