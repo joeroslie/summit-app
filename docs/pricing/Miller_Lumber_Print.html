@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lumber · Decking &amp; Fascia · 2026</title>
+<style>
+:root {
+  --ink: #111;
+  --muted: #666;
+  --line: #999;
+  --bg: #fff;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: Helvetica, Arial, system-ui, sans-serif;
+  color: var(--ink);
+  background: #fff;
+  line-height: 1.35;
+  font-size: 9pt;
+}
+.wrap { max-width: 900px; margin: 0 auto; padding: 1rem 1.25rem 3rem; }
+
+.panel { display: block; background: var(--bg); padding: 0; border: none; }
+.panel > h1 {
+  margin: 0;
+  font-size: 14pt;
+  font-weight: 700;
+  color: var(--ink);
+  padding: 0 0 0.3rem;
+  border-bottom: 1px solid #111;
+}
+.panel > .sub {
+  margin: 0.3rem 0 0.9rem;
+  color: var(--muted);
+  font-size: 8.5pt;
+}
+.sec { break-inside: avoid; page-break-inside: avoid; margin: 0 0 0.9rem; }
+.sec h2 {
+  margin: 0 0 0.28rem;
+  font-size: 9.5pt;
+  font-weight: 700;
+  border-bottom: 1px solid #111;
+  padding-bottom: 0.1rem;
+  page-break-after: avoid;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 8.5pt;
+  table-layout: fixed;
+}
+th, td {
+  border: 0.5pt solid #999;
+  padding: 0.14rem 0.22rem;
+  vertical-align: top;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+th {
+  background: #fff;
+  text-align: left;
+  font-weight: 700;
+}
+.cols-3 th:nth-child(1), .cols-3 td:nth-child(1) { width: 52%; }
+.cols-3 th:nth-child(2), .cols-3 td:nth-child(2) { width: 18%; }
+.cols-3 th:nth-child(3), .cols-3 td:nth-child(3) { width: 30%; }
+
+@media print {
+  body { background: #fff; font-size: 8.5pt; }
+  .screen-only { display: none !important; }
+  .wrap { max-width: none; padding: 0; margin: 0; }
+  .panel { border: none; padding: 0; }
+  .sec { break-inside: avoid; page-break-inside: avoid; }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; page-break-inside: avoid; }
+  @page { margin: 0.5in; size: letter; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="panel cols-3">
+    <h1>Lumber · Decking &amp; Fascia · 2026</h1>
+    <p class="sub">Miller Wholesale Lumber Company · Jacob Wayne · 480-459-9887 · Book costs</p>
+
+    <section class="sec">
+      <h2>Decking</h2>
+      <table>
+        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+        <tbody>
+          <tr><td>CDX 4×8 1/2&quot;</td><td>sheet</td><td>$31.00</td></tr>
+          <tr><td>CDX 4×8 7/16&quot;</td><td>sheet</td><td>$20.50</td></tr>
+          <tr><td>OSB 4×8 1/2&quot;</td><td>sheet</td><td>$11.50</td></tr>
+          <tr><td>OSB 4×8 7/16&quot;</td><td>sheet</td><td>$11.00</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="sec">
+      <h2>Fascia</h2>
+      <table>
+        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+        <tbody>
+          <tr><td>Prime combed fascia 2×6 × 16&#x27;</td><td>each (16&#x27;)</td><td>$27.00</td></tr>
+          <tr><td>Prime combed fascia 2×6 × 20&#x27;</td><td>each (20&#x27;)</td><td>$33.50</td></tr>
+          <tr><td>Prime combed fascia 2×8 × 16&#x27;</td><td>each (16&#x27;)</td><td>$36.00</td></tr>
+          <tr><td>Prime combed fascia 2×8 × 20&#x27;</td><td>each (20&#x27;)</td><td>$45.00</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="sec">
+      <h2>Shingle Mold</h2>
+      <table>
+        <thead><tr><th>Product</th><th>Unit</th><th>Cost</th></tr></thead>
+        <tbody>
+          <tr><td>Shingle mold 1×2 × 16&#x27;</td><td>pair (16&#x27;)</td><td>$10.50</td></tr>
+          <tr><td>Shingle mold 1×3 × 16&#x27;</td><td>pair (16&#x27;)</td><td>$16.00</td></tr>
+          <tr><td>Shingle mold 1×4 × 16&#x27;</td><td>pair (16&#x27;)</td><td>$21.00</td></tr>
+          <tr><td>Shingle mold 1×6 × 16&#x27;</td><td>pair (16&#x27;)</td><td>$31.50</td></tr>
+          <tr><td>Shingle mold 1×8 × 16&#x27;</td><td>pair (16&#x27;)</td><td>$42.00</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </div>
+</div>
+</body>
+</html>

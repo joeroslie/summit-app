@@ -119,12 +119,24 @@ import { geocodeAddress as geocodeAddressApi } from '@/lib/geocode';
 import { displayPhoneUS } from '@/lib/phone';
 import PhoneInput from '@/components/PhoneInput';
 import AddressAutocomplete from '@/components/AddressAutocomplete';
+import type { CreatedLeadInfo } from '@/lib/canvassing';
 
 const RoofTracer = dynamic(() => import('@/components/RoofTracer'), {
   ssr: false,
   loading: () => (
     <div className="h-[min(56vh,520px)] min-h-[420px] rounded-2xl border border-zinc-200 bg-zinc-100 flex items-center justify-center text-sm text-zinc-400">
       Loading map…
+    </div>
+  ),
+});
+
+const CanvassingTool = dynamic(() => import('@/components/CanvassingTool'), {
+  ssr: false,
+  loading: () => (
+    <div className="page-shell page-fade">
+      <div className="h-[60vh] min-h-[420px] rounded-3xl border border-zinc-200 bg-zinc-50 flex items-center justify-center text-sm text-zinc-400">
+        Loading canvassing…
+      </div>
     </div>
   ),
 });
@@ -137,9 +149,13 @@ type AppTab =
   | 'calendar'
   | 'tasks'
   | 'performance'
+  | 'orders'
   | 'tools'
+  | 'canvassing' // Tools → Canvassing (door-knocking pin tracker), not in sidebar
   | 'documents'
   | 'settings';
+/** Material Order → Labor crew/job packet (inside Orders workspace). */
+type OrdersStep = 'material' | 'labor';
 /** Customer estimate form vs internal financials (inside lead profile). */
 type EstimateWorkspace = 'estimate' | 'internal';
 /** Mitigation invoice form vs internal margin calc (no buffer). */
@@ -154,7 +170,9 @@ const APP_TABS: AppTab[] = [
   'calendar',
   'tasks',
   'performance',
+  'orders',
   'tools',
+  'canvassing',
   'documents',
   'settings',
 ];
@@ -351,6 +369,8 @@ function readStoredTab(): AppTab {
   if (typeof window === 'undefined') return 'home';
   try {
     const t = localStorage.getItem('summitActiveTab');
+    // Labor is no longer a top-level tab — open Orders instead
+    if (t === 'labor') return 'orders';
     if (t && (APP_TABS as string[]).includes(t)) return t as AppTab;
   } catch {
     /* ignore */
@@ -396,6 +416,11 @@ type ShingleType =
   | 'gaf_natural_shadow'
   | 'owens_oakridge'
   | 'owens_duration'
+  | 'owens_duration_designer'
+  | 'certainteed_landmark'
+  | 'certainteed_patriot_xl'
+  | 'malarkey_highlander'
+  | 'malarkey_vista'
   | 'tile_dr'
   | 'tile_rr'
   | 'sa_underlayment'
@@ -408,6 +433,31 @@ type ShingleType =
   | 'mod_bitumen'
   | 'bur'
   | '';
+
+type HipRidgeChoice = 'standard' | 'high_profile' | '';
+type StarterChoice = 'brand' | 'armour' | '';
+type IceWaterChoice =
+  | 'topshield_defender'
+  | 'topshield_sg_ps_max'
+  | 'iko_stormshield'
+  | 'polyflex_sa_v'
+  | '';
+
+/** Book material $/sq (3 bdl/sq except Armourshake 5). */
+const SHINGLE_COST_PER_SQ: Partial<Record<ShingleType, number>> = {
+  cambridge: 89,
+  dynasty: 94,
+  armourshake: 230,
+  gaf_hdz: 130,
+  gaf_natural_shadow: 129,
+  owens_oakridge: 110,
+  owens_duration: 118,
+  owens_duration_designer: 118,
+  certainteed_landmark: 117,
+  certainteed_patriot_xl: 103,
+  malarkey_highlander: 154,
+  malarkey_vista: 160,
+};
 
 const SHINGLE_PRODUCTS: {
   key: ShingleType;
@@ -517,6 +567,319 @@ const SHINGLE_PRODUCTS: {
       'Williamswood',
     ],
   },
+  {
+    key: 'owens_duration_designer',
+    label: 'Owens Corning Duration Designer',
+    description:
+      'Duration Series shingle with SureNail® Technology in exclusive designer color blends for a richer, more distinctive curb appeal.',
+    colors: [
+      'Summer Harvest',
+      'Mountain Terrace',
+      'Brownwood',
+      'Estate Gray',
+      'Teak',
+      'Driftwood',
+      'Onyx Black',
+    ],
+  },
+  {
+    key: 'certainteed_landmark',
+    label: 'CertainTeed Landmark',
+    description:
+      'America’s #1-selling architectural shingle. Laminated design with NailTrak® wider nailing area for faster, more accurate fastening and strong wind performance.',
+    colors: [
+      'Moire Black',
+      'Georgetown Gray',
+      'Weathered Wood',
+      'Burnt Sienna',
+      'Colonial Slate',
+      'Resawn Shake',
+      'Driftwood',
+      'Pewter',
+    ],
+  },
+  {
+    key: 'certainteed_patriot_xl',
+    label: 'CertainTeed Patriot XL',
+    description:
+      'Value-focused architectural laminate with an oversized XL format for efficient coverage. Solid performance and classic CertainTeed color blends.',
+    colors: [
+      'Moire Black',
+      'Georgetown Gray',
+      'Weathered Wood',
+      'Burnt Sienna',
+      'Colonial Slate',
+      'Driftwood',
+    ],
+  },
+  {
+    key: 'malarkey_highlander',
+    label: 'Malarkey Highlander',
+    description:
+      'Architectural shingle built with NEX® rubberized asphalt for all-weather resilience and Class 3 hail impact resistance. Includes smog-reducing granules.',
+    colors: [
+      'Antique Brown',
+      'Black Oak',
+      'Heather',
+      'Midnight Black',
+      'Natural Wood',
+      'Sienna Blend',
+      'Storm Grey',
+      'Weathered Wood',
+    ],
+  },
+  {
+    key: 'malarkey_vista',
+    label: 'Malarkey Vista',
+    description:
+      'Mid-tier architectural shingle with NEX® rubberized asphalt and The Zone® wider nailing area for dependable wind hold and weather performance.',
+    colors: [
+      'Antique Brown',
+      'Black Oak',
+      'Heather',
+      'Midnight Black',
+      'Natural Wood',
+      'Sienna Blend',
+      'Silverwood',
+      'Storm Grey',
+      'Weathered Wood',
+    ],
+  },
+];
+
+/** Locked sell adder for high-profile hip & ridge (customer estimate). */
+const HIGH_PROFILE_RIDGE_SELL = 250;
+
+const HIP_RIDGE_OPTIONS: { key: Exclude<HipRidgeChoice, ''>; label: string }[] = [
+  { key: 'standard', label: 'Standard / brand-matched ridge' },
+  { key: 'high_profile', label: 'High profile ridge' },
+];
+
+function shingleBrandFamily(
+  key: ShingleType
+): 'iko' | 'oc' | 'gaf' | 'ct' | 'malarkey' | 'other' {
+  if (key === 'cambridge' || key === 'dynasty' || key === 'armourshake') return 'iko';
+  if (
+    key === 'owens_oakridge' ||
+    key === 'owens_duration' ||
+    key === 'owens_duration_designer'
+  ) {
+    return 'oc';
+  }
+  if (key === 'gaf_hdz' || key === 'gaf_natural_shadow') return 'gaf';
+  if (key === 'certainteed_landmark' || key === 'certainteed_patriot_xl') return 'ct';
+  if (key === 'malarkey_highlander' || key === 'malarkey_vista') return 'malarkey';
+  return 'other';
+}
+
+/** Customer-facing hip & ridge label (no material $/bdl). */
+function hipRidgeOptionLabel(
+  choice: HipRidgeChoice,
+  shingle: ShingleType
+): string {
+  if (choice === 'standard') {
+    const brand = shingleBrandFamily(shingle);
+    if (brand === 'iko') return 'IKO Hip & Ridge (standard)';
+    if (brand === 'oc') return 'Owens Corning hip & ridge (standard)';
+    if (brand === 'gaf') return 'GAF hip & ridge (standard)';
+    if (brand === 'ct') return 'CertainTeed Shadow Ridge';
+    if (brand === 'malarkey') return 'Malarkey RidgeFlex (standard)';
+    return 'Standard hip & ridge';
+  }
+  if (choice === 'high_profile') {
+    const brand = shingleBrandFamily(shingle);
+    if (brand === 'iko') return 'IKO Ultra Hip & Ridge (high profile)';
+    if (brand === 'oc') return 'Owens Corning DecoRidge (high profile)';
+    return 'High profile ridge';
+  }
+  return '';
+}
+
+type UnderlaymentSystem = 'shingle' | 'tile' | 'flat';
+type UnderlaymentTier = 'felt' | 'synthetic' | 'high-temp' | 'sa' | 'tile';
+
+type UnderlaymentOption = {
+  key: string;
+  label: string;
+  systems: UnderlaymentSystem[];
+  tier: UnderlaymentTier;
+};
+
+/** Book underlayment / I&W / SA products for estimate pick (no material $ shown). */
+const UNDERLAYMENT_OPTIONS: UnderlaymentOption[] = [
+  // Legacy category keys (older estimates)
+  {
+    key: 'standard',
+    label: 'Standard Synthetic',
+    systems: ['shingle'],
+    tier: 'synthetic',
+  },
+  {
+    key: 'high-temp',
+    label: 'High-Temp Synthetic',
+    systems: ['shingle'],
+    tier: 'high-temp',
+  },
+  {
+    key: 'sa-high-temp',
+    label: 'Self-Adhered High-Temp',
+    systems: ['shingle', 'tile', 'flat'],
+    tier: 'sa',
+  },
+  // Felt
+  {
+    key: 'felt_d226',
+    label: '15#/30# Felt ASTM D226',
+    systems: ['shingle'],
+    tier: 'felt',
+  },
+  {
+    key: 'felt_d4869',
+    label: '15#/30# Felt ASTM D4869',
+    systems: ['shingle'],
+    tier: 'felt',
+  },
+  {
+    key: 'tarah_40',
+    label: 'Tarah 40# Organic Felt (2 sq)',
+    systems: ['shingle'],
+    tier: 'felt',
+  },
+  // Synthetic
+  {
+    key: 'apoc_cxl',
+    label: 'APOC CXL (4.5 sq)',
+    systems: ['shingle'],
+    tier: 'synthetic',
+  },
+  {
+    key: 'cmi_ranger',
+    label: 'CMI Ranger Synthetic (10 sq)',
+    systems: ['shingle'],
+    tier: 'synthetic',
+  },
+  {
+    key: 'gaf_feltbuster',
+    label: 'GAF FeltBuster (10 sq)',
+    systems: ['shingle'],
+    tier: 'synthetic',
+  },
+  {
+    key: 'prowest_synthetic',
+    label: 'Prowest One Solutions Synthetic (~10 sq)',
+    systems: ['shingle'],
+    tier: 'synthetic',
+  },
+  {
+    key: 'rhino_synthetic',
+    label: 'Rhino Synthetic Underlayment (10 sq)',
+    systems: ['shingle'],
+    tier: 'synthetic',
+  },
+  {
+    key: 'swiftguard',
+    label: 'Swiftguard (10 sq)',
+    systems: ['shingle'],
+    tier: 'synthetic',
+  },
+  {
+    key: 'topshield_synthetic',
+    label: 'TopShield Synthetic (10 sq)',
+    systems: ['shingle'],
+    tier: 'synthetic',
+  },
+  // Synthetic HT
+  {
+    key: 'titanium_udl_50',
+    label: 'Titanium UDL 50 Synthetic (10 sq)',
+    systems: ['shingle'],
+    tier: 'high-temp',
+  },
+  {
+    key: 'topshield_100ht',
+    label: 'TopShield 100HT (~10 sq HT)',
+    systems: ['shingle'],
+    tier: 'high-temp',
+  },
+  {
+    key: 'topshield_sg_max_mts',
+    label: 'TopShield SG Max MTS Synthetic (10 sq)',
+    systems: ['shingle'],
+    tier: 'high-temp',
+  },
+  // Tile underlayment
+  {
+    key: 'boral_organic_ply_40',
+    label: 'Boral Organic Ply 40 (2 sq)',
+    systems: ['tile'],
+    tier: 'tile',
+  },
+  {
+    key: 'boral_ply_40',
+    label: 'Boral Ply 40 (2 sq)',
+    systems: ['tile'],
+    tier: 'tile',
+  },
+  {
+    key: 'boral_tile_seal',
+    label: 'Boral TileSeal (2 sq)',
+    systems: ['tile'],
+    tier: 'tile',
+  },
+  {
+    key: 'eagle_tru_2',
+    label: 'Eagle Tru-2 (2 sq)',
+    systems: ['tile'],
+    tier: 'tile',
+  },
+  // Ice & water / SA (shingle eaves/valleys + low-slope)
+  {
+    key: 'iko_stormshield',
+    label: 'IKO StormShield (~2 sq)',
+    systems: ['shingle', 'flat'],
+    tier: 'sa',
+  },
+  {
+    key: 'polyflex_sa_v',
+    label: 'Polyglass Polyflex SA V (2 sq)',
+    systems: ['shingle', 'flat'],
+    tier: 'sa',
+  },
+  {
+    key: 'topshield_defender',
+    label: 'TopShield Defender Ice / CMI Securegrip Ice (2 sq)',
+    systems: ['shingle', 'flat'],
+    tier: 'sa',
+  },
+  {
+    key: 'topshield_sg_ps_max',
+    label: 'TopShield SG PS Max 2.0 HT Ice & Water (2 sq)',
+    systems: ['shingle', 'flat'],
+    tier: 'sa',
+  },
+];
+
+function underlaymentTier(key: string): UnderlaymentTier | '' {
+  return UNDERLAYMENT_OPTIONS.find((o) => o.key === key)?.tier || '';
+}
+
+function underlaymentLabel(key: string): string {
+  return UNDERLAYMENT_OPTIONS.find((o) => o.key === key)?.label || '';
+}
+
+function underlaymentOptionsForSystem(
+  system: UnderlaymentSystem
+): UnderlaymentOption[] {
+  return UNDERLAYMENT_OPTIONS.filter((o) => o.systems.includes(system));
+}
+
+const MB_CAP_OPTIONS: { key: string; label: string }[] = [
+  { key: 'topshield_sa_cap', label: 'TopShield SA Cap Sheet' },
+  { key: 'polyglass_sa_cap', label: 'Polyglass SA Cap Sheet' },
+];
+
+const MB_BASE_OPTIONS: { key: string; label: string }[] = [
+  { key: 'topshield_sa_base', label: 'TopShield SA Base Sheet' },
 ];
 
 const TILE_PRODUCTS: { key: string; label: string; description: string }[] = [
@@ -545,12 +908,21 @@ const TILE_PRODUCTS: { key: string; label: string; description: string }[] = [
   },
 ];
 
-/** Brands per tile type — fill later from suppliers */
+/** Brands per tile type — from Full Price Book (Eagle / Westlake + clay). */
 const TILE_BRANDS: Record<string, { key: string; label: string }[]> = {
-  concrete: [],
-  clay: [],
-  concrete_s: [],
-  concrete_flat: [],
+  concrete: [
+    { key: 'eagle', label: 'Eagle Concrete Tile' },
+    { key: 'westlake', label: 'Westlake Concrete Tile' },
+  ],
+  clay: [{ key: 'clay', label: 'Clay tile' }],
+  concrete_s: [
+    { key: 'eagle', label: 'Eagle Concrete Tile' },
+    { key: 'westlake', label: 'Westlake Concrete Tile' },
+  ],
+  concrete_flat: [
+    { key: 'eagle', label: 'Eagle Concrete Tile' },
+    { key: 'westlake', label: 'Westlake Concrete Tile' },
+  ],
 };
 
 const LOW_SLOPE_TYPES: { key: string; label: string; description: string }[] = [
@@ -621,7 +993,8 @@ const MOD_BITUMEN_CAP_COLORS = [
 type FasciaMode = 'repair' | 'full' | '';
 type DeckingMode = 'repair' | 'full' | '';
 type FasciaType = '2x6' | '2x8' | '';
-type Underlayment = 'standard' | 'high-temp' | 'sa-high-temp' | '';
+/** Book product key or legacy category (`standard` / `high-temp` / `sa-high-temp`). */
+type Underlayment = string;
 
 type Estimate = {
   id: number;
@@ -654,12 +1027,18 @@ type Estimate = {
   cambridgeColor: string;
   dynastyColor: string;
   armourshakeColor: string;
+  hipRidgeChoice?: HipRidgeChoice;
+  starterChoice?: StarterChoice;
+  iceWaterChoice?: IceWaterChoice;
   selectedUnderlayment: Underlayment;
   fasciaMode: FasciaMode;
   deckingMode: DeckingMode;
   fasciaType: FasciaType;
   modifiedBitumenSquares: string;
   modifiedBitumenColor: string;
+  /** Mod-bit SA cap / base product picks (estimate SOW; costs stay on Material Order). */
+  mbCapChoice?: string;
+  mbBaseChoice?: string;
   dripEdgeColor: string;
   notes: string;
   total: number;
@@ -683,117 +1062,154 @@ type LeadNote = {
 };
 
 /** Field guide for Company pricing document (sell + known costs + crews/contacts). */
-const PRICING_GUIDE: {
+type PricingGuideRow = {
+  label: string;
+  unit: string;
+  cost?: number;
+  sellPhx?: number;
+  sellTuc?: number;
+  sellNorth?: number;
+  key?: string;
+  note?: string;
+};
+
+type PricingGuideSection = {
   title: string;
-  rows: {
-    label: string;
-    unit: string;
-    cost?: number;
-    sellPhx?: number;
-    sellTuc?: number;
-    key?: string;
-    note?: string;
-  }[];
-}[] = [
+  /** Labor = package/crew/sells/adders · Materials = SRS + Miller book costs */
+  pane: 'labor' | 'materials';
+  supplier?: 'SRS' | 'Miller';
+  rows: PricingGuideRow[];
+};
+
+const PRICING_GUIDE: PricingGuideSection[] = [
   {
-    title: 'Shingle systems — sell',
+    title: 'Shingle package sells',
+    pane: 'labor',
     rows: [
-      { key: 'cambridge', label: 'IKO Cambridge', unit: '/sq', cost: 89, sellPhx: 485, sellTuc: 485, note: '$29.67/bdl × 3' },
-      { key: 'dynasty', label: 'IKO Dynasty', unit: '/sq', cost: 94, sellPhx: 500, sellTuc: 500, note: '$31.33/bdl × 3' },
-      { key: 'armourshake', label: 'IKO Armourshake', unit: '/sq', cost: 240, sellPhx: 785, sellTuc: 785, note: '$48/bdl × 5' },
-      { key: 'gaf_hdz', label: 'GAF HDZ', unit: '/sq', sellPhx: 500, sellTuc: 525 },
-      { key: 'gaf_natural_shadow', label: 'GAF Natural Shadow', unit: '/sq', sellPhx: 475, sellTuc: 500 },
-      { key: 'owens_oakridge', label: 'Owens Oakridge', unit: '/sq', sellPhx: 500, sellTuc: 525 },
-      { key: 'owens_duration', label: 'Owens Duration', unit: '/sq', sellPhx: 525, sellTuc: 550 },
+      { key: 'cambridge', label: 'IKO Cambridge', unit: '/sq', cost: 89, sellPhx: 450, sellTuc: 475, sellNorth: 500 },
+      { key: 'dynasty', label: 'IKO Dynasty', unit: '/sq', cost: 94, sellPhx: 475, sellTuc: 500, sellNorth: 525 },
+      { key: 'armourshake', label: 'IKO Armourshake', unit: '/sq', cost: 230, sellPhx: 610, sellTuc: 635, sellNorth: 660 },
+      { key: 'gaf_hdz', label: 'GAF Timberline HDZ', unit: '/sq', cost: 130, sellPhx: 475, sellTuc: 500, sellNorth: 525 },
+      { key: 'gaf_natural_shadow', label: 'GAF Natural Shadow', unit: '/sq', cost: 129, sellPhx: 450, sellTuc: 475, sellNorth: 500 },
+      { key: 'owens_oakridge', label: 'Owens Corning Oakridge', unit: '/sq', cost: 110, sellPhx: 475, sellTuc: 500, sellNorth: 525 },
+      { key: 'owens_duration', label: 'Owens Corning Duration', unit: '/sq', cost: 118, sellPhx: 500, sellTuc: 525, sellNorth: 550 },
+      { key: 'owens_duration_designer', label: 'Owens Corning Duration Designer', unit: '/sq', cost: 118, sellPhx: 500, sellTuc: 525, sellNorth: 550, note: 'Same as Duration' },
+      { key: 'certainteed_landmark', label: 'CertainTeed Landmark', unit: '/sq', cost: 117, sellPhx: 500, sellTuc: 525, sellNorth: 550 },
+      { key: 'certainteed_patriot_xl', label: 'CertainTeed Patriot XL', unit: '/sq', cost: 103, sellPhx: 485, sellTuc: 510, sellNorth: 535 },
+      { key: 'malarkey_highlander', label: 'Malarkey Highlander', unit: '/sq', cost: 154, sellPhx: 535, sellTuc: 560, sellNorth: 585 },
+      { key: 'malarkey_vista', label: 'Malarkey Vista', unit: '/sq', cost: 160, sellPhx: 540, sellTuc: 565, sellNorth: 590 },
     ],
   },
   {
-    title: 'Shingle adders — sell',
+    title: 'Adders — sell',
+    pane: 'labor',
     rows: [
-      { label: 'Remove additional layer', unit: '/sq', sellPhx: 20, sellTuc: 25 },
-      { label: 'R&R OSB', unit: '/sheet', cost: 0, sellPhx: 80, sellTuc: 90 },
-      { label: 'R&R Fascia 2x6', unit: '/LF', sellPhx: 15, sellTuc: 18 },
-      { label: 'R&R Fascia 2x8', unit: '/LF', sellPhx: 18, sellTuc: 18 },
-      { label: 'Install ridge vent', unit: '/LF', cost: 6, sellPhx: 13, sellTuc: 14 },
-      { label: 'HD Skylight', unit: '/each', sellPhx: 525, sellTuc: 550 },
-      { label: 'R&R Shingle mold', unit: '/LF', sellPhx: 5, sellTuc: 6 },
-      { label: 'D&R Gutters', unit: '/LF', sellPhx: 18, sellTuc: 20 },
-      { label: 'R&R Gutters', unit: '/LF', sellPhx: 25, sellTuc: 30 },
+      { key: 'remove_layer', label: 'Remove additional layer', unit: '/sq', sellPhx: 20, sellTuc: 25, sellNorth: 25 },
+      { key: 'osb', label: 'R&R OSB', unit: '/sheet', cost: 11, sellPhx: 80, sellTuc: 90, sellNorth: 90 },
+      { key: 'fascia', label: 'R&R Fascia', unit: '/LF', sellPhx: 15, sellTuc: 18, sellNorth: 18 },
+      { key: 'fascia_2x6', label: 'R&R Fascia 2x6', unit: '/LF', sellPhx: 15, sellTuc: 18, sellNorth: 18 },
+      { key: 'fascia_2x8', label: 'R&R Fascia 2x8', unit: '/LF', sellPhx: 18, sellTuc: 18, sellNorth: 18 },
+      { key: 'ridge_vent', label: 'Install ridge vent', unit: '/LF', cost: 6, sellPhx: 13, sellTuc: 14, sellNorth: 14 },
+      { key: 'skylight', label: 'HD Skylight', unit: '/ea', sellPhx: 525, sellTuc: 550, sellNorth: 550 },
+      { key: 'shingle_mold', label: 'R&R Shingle mold', unit: '/LF', sellPhx: 5, sellTuc: 6, sellNorth: 6 },
+      { key: 'gutters_dr', label: 'D&R Gutters', unit: '/LF', sellPhx: 18, sellTuc: 20, sellNorth: 20 },
+      { key: 'gutters_rr', label: 'R&R Gutters', unit: '/LF', sellPhx: 25, sellTuc: 30, sellNorth: 30 },
       { label: 'Roof repairs minimum', unit: '/job', sellPhx: 1500, sellTuc: 1750 },
-      { label: 'Steep charge', unit: '/sq', note: 'Depends on pitch / crew · $100–250' },
+      { key: 'steep_8_9', label: 'Steep 8/12–9/12', unit: '/sq', sellPhx: 25, sellTuc: 25, sellNorth: 25 },
+      { key: 'steep_9_11', label: 'Steep 10/12–11/12', unit: '/sq', sellPhx: 75, sellTuc: 75, sellNorth: 75 },
+      { key: 'steep_11_12', label: 'Steep 12/12', unit: '/sq', sellPhx: 150, sellTuc: 150, sellNorth: 150 },
+      {
+        key: 'hip_ridge_high_profile',
+        label: 'High profile hip & ridge',
+        unit: '/job',
+        sellPhx: HIGH_PROFILE_RIDGE_SELL,
+        sellTuc: HIGH_PROFILE_RIDGE_SELL,
+        sellNorth: HIGH_PROFILE_RIDGE_SELL,
+      },
     ],
   },
   {
     title: 'Tile — sell',
+    pane: 'labor',
     rows: [
-      { key: 'tile_dr', label: 'Detach & Reset', unit: '/sq', sellPhx: 525, sellTuc: 550 },
-      { key: 'tile_rr', label: 'Remove & Replace', unit: '/sq', sellPhx: 925, sellTuc: 950 },
+      { key: 'tile_dr', label: 'Detach & Reset', unit: '/sq', sellPhx: 500, sellTuc: 550, sellNorth: 550 },
+      { key: 'tile_rr', label: 'Remove & Replace', unit: '/sq', sellPhx: 900, sellTuc: 950, sellNorth: 950 },
       { label: 'SA / upgraded underlayment', unit: '/sq', sellPhx: 85, sellTuc: 100 },
     ],
   },
   {
-    title: 'Low slope / foam / coating — sell',
+    title: 'Foam / coating / flat — sell',
+    pane: 'labor',
     rows: [
-      { key: 'mod_bitumen', label: 'Modified bitumen', unit: '/sq', cost: 375, sellPhx: 600, sellTuc: 600, note: 'Cost ~cap+base ply' },
-      { key: 'elastomeric', label: 'Elastomeric coating', unit: '/sq', sellPhx: 275, sellTuc: 300 },
-      { key: 'silicone', label: 'Silicone coating', unit: '/sq', sellPhx: 325, sellTuc: 350 },
-      { key: 'urethane', label: 'Urethane coating', unit: '/sq', sellPhx: 350, sellTuc: 375 },
-      { key: 'coating', label: 'Coating (legacy)', unit: '/sq', sellPhx: 275, sellTuc: 300, note: 'Prefer kind keys' },
-      { key: 'full_foam', label: 'Full foam', unit: '/sq', sellPhx: 600, sellTuc: 650 },
-      { key: 'foam_overlay', label: 'Foam overlay', unit: '/sq', sellPhx: 575, sellTuc: 615 },
-      { key: 'bur', label: 'Built-up (BUR)', unit: '/sq', note: 'Set sell in price_sheet' },
-      { key: 'iso_board', label: 'ISO board (fallback)', unit: '/sheet', note: 'Prefer iso_4x8 / iso_4x4' },
-      { key: 'iso_4x8', label: 'ISO 4×8 sheet', unit: '/sheet', note: '32 sq ft' },
-      { key: 'iso_4x4', label: 'ISO 4×4 sheet', unit: '/sheet', note: '16 sq ft' },
-      { key: 'granules', label: 'Granules adder', unit: '/sq', note: 'Foam adder' },
-      { key: 'extra_spf', label: 'Extra inch SPF', unit: '/sq', note: 'Foam adder' },
-      { key: 'scarify', label: 'Scarify', unit: '/sq', note: 'Foam adder' },
-      { key: 'extra_pass', label: 'Additional coat', unit: '/sq', note: 'Coating adder' },
-      { key: 'pressure_wash', label: 'Pressure wash & clean', unit: '/sq', note: 'Coating adder' },
+      { key: 'mod_bitumen', label: 'Modified bitumen', unit: '/sq', sellPhx: 600, sellTuc: 600 },
+      { key: 'elastomeric', label: 'Elastomeric coating', unit: '/sq', sellPhx: 425, sellTuc: 450, sellNorth: 450, note: 'Mat cost TBD' },
+      { key: 'silicone', label: 'Silicone coating', unit: '/sq', note: 'Sell + mat cost TBD' },
+      { key: 'urethane', label: 'Urethane coating', unit: '/sq', note: 'Sell + mat cost TBD' },
+      { key: 'coating', label: 'Coating (legacy)', unit: '/sq', sellPhx: 425, sellTuc: 450, sellNorth: 450 },
+      { key: 'full_foam', label: 'Full foam', unit: '/sq', sellPhx: 650, sellTuc: 700, sellNorth: 700, note: 'Mat cost TBD' },
+      { key: 'foam_overlay', label: 'Foam overlay', unit: '/sq', sellPhx: 575, sellTuc: 625, sellNorth: 625, note: 'Mat cost TBD' },
+      { key: 'bur', label: 'Built-up (BUR)', unit: '/sq', note: 'Sell + mat cost TBD' },
+      { key: 'iso_board', label: 'ISO board (fallback)', unit: '/sheet', note: 'Mat cost TBD' },
+      { key: 'iso_4x8', label: 'ISO 4×8 sheet', unit: '/sheet', note: 'Covers 32 sq ft · mat cost TBD' },
+      { key: 'iso_4x4', label: 'ISO 4×4 sheet', unit: '/sheet', note: 'Covers 16 sq ft · mat cost TBD' },
+      { key: 'granules', label: 'Granules adder', unit: '/sq', note: 'Mat cost TBD' },
+      { key: 'extra_spf', label: 'Extra inch SPF', unit: '/sq' },
+      { key: 'scarify', label: 'Scarify', unit: '/sq' },
+      { key: 'extra_pass', label: 'Additional coat', unit: '/sq' },
+      { key: 'pressure_wash', label: 'Pressure wash & clean', unit: '/sq' },
     ],
   },
   {
     title: 'HVAC — sell',
+    pane: 'labor',
     rows: [
-      { key: 'hvac', label: 'D&R HVAC unit', unit: '/each', sellPhx: 1500, sellTuc: 1600 },
+      { key: 'hvac', label: 'D&R HVAC unit', unit: '/ea', sellPhx: 1300, sellTuc: 1600, sellNorth: 1600 },
     ],
   },
   {
-    title: 'Known material / labor cost',
+    title: 'Labor costs & adders',
+    pane: 'labor',
     rows: [
-      { label: 'Dynasty material', unit: '/sq', cost: 94, note: '$31.33/bdl × 3' },
-      { label: 'Cambridge material', unit: '/sq', cost: 89, note: '$29.67/bdl × 3' },
-      { label: 'Armourshake material', unit: '/sq', cost: 240, note: '$48/bdl × 5' },
-      { label: 'Ridge vent material', unit: '/LF', cost: 6 },
-      { label: 'MB cap sheet', unit: '/sq', cost: 123 },
-      { label: 'MB base ply', unit: '/sq/ply', cost: 126 },
-      { label: 'Base labor (shingle)', unit: '/sq', cost: 100, note: 'Phoenix' },
+      { key: 'base_shingle', label: 'Base crew labor (shingle)', unit: '/sq', cost: 100 },
+      { key: 'fascia_labor', label: 'Fascia labor', unit: '/LF', cost: 4 },
+      { key: 'shingle_mold_labor', label: 'Shingle mold labor', unit: '/LF', cost: 4 },
+      { key: 'cut_in_vent', label: 'Cut in vent labor', unit: '/ea', cost: 20 },
+      { key: 'hvac_labor', label: 'D&R HVAC labor', unit: '/ea', cost: 900 },
+      { key: 'steep_8_9', label: 'Steep labor 8/12–9/12', unit: '/sq', cost: 125 },
+      { key: 'steep_10_11', label: 'Steep labor 10/12–11/12', unit: '/sq', cost: 175 },
+      { key: 'steep_12', label: 'Steep labor 12/12', unit: '/sq', cost: 250 },
+      { key: 'double_layer', label: 'Double layer', unit: '/sq', cost: 20 },
+      { key: 'ridge_vent_labor', label: 'Ridge vent install', unit: '/LF', cost: 2 },
     ],
   },
   {
-    title: 'Sub labor — Phoenix',
+    title: 'Crew rates — Phoenix',
+    pane: 'labor',
     rows: [
       { label: 'Maldonado', unit: '/sq', cost: 100 },
-      { label: 'Delgado', unit: '/sq', cost: 110, note: '100–120' },
-      { label: 'Mile High', unit: '/sq', cost: 100, note: '95–110' },
-      { label: 'EZ', unit: '/sq', cost: 105, note: '100–110' },
-      { label: 'TRC', unit: '/sq', cost: 120, note: '110–130' },
-      { label: 'Crew', unit: '/sq', cost: 110, note: '105–120' },
-      { label: 'JJ', unit: '/sq', cost: 105, note: '100–115' },
+      { label: 'Crown Royal', unit: '/sq', cost: 100 },
+      { label: 'Delgado', unit: '/sq', cost: 110 },
+      { label: 'Mile High', unit: '/sq', cost: 100 },
+      { label: 'EZ', unit: '/sq', cost: 105 },
+      { label: 'TRC', unit: '/sq', cost: 120 },
+      { label: 'Crew', unit: '/sq', cost: 110 },
+      { label: 'JJ', unit: '/sq', cost: 105 },
       { label: 'Blueprint', unit: '/sq', cost: 130 },
-      { label: 'G&M', unit: '/sq', cost: 120, note: '100–140' },
-      { label: 'Spearhead', unit: '/sq', cost: 110, note: '95–130' },
+      { label: 'G&M', unit: '/sq', cost: 120 },
+      { label: 'Spearhead', unit: '/sq', cost: 110 },
       { label: 'My Way', unit: '/sq', cost: 100 },
-      { label: 'Gleason', unit: '/sq', cost: 110, note: '100–125' },
-      { label: 'Rosales', unit: '/sq', cost: 115, note: '110–120' },
-      { label: 'ACI', unit: '/sq', cost: 110, note: '105–120' },
-      { label: 'Nailed It', unit: '/sq', cost: 120, note: '110–130' },
+      { label: 'Gleason', unit: '/sq', cost: 110 },
+      { label: 'Rosales', unit: '/sq', cost: 115 },
+      { label: 'ACI', unit: '/sq', cost: 110 },
+      { label: 'Nailed It', unit: '/sq', cost: 120 },
     ],
   },
   {
     title: 'Crew contacts',
+    pane: 'labor',
     rows: [
       { label: 'Manuel Maldonado', unit: '', note: '915-252-2646 · Maldonado' },
+      { label: 'Sammy — Crown Royal', unit: '', note: '626-679-7194' },
       { label: 'Jesus Delgado', unit: '', note: '573-281-9441 · Delgado' },
       { label: 'Pancho Raigoza', unit: '', note: '303-995-6983 · Mile High' },
       { label: 'Sergio Quintanar', unit: '', note: '623-349-2515 · EZ' },
@@ -813,7 +1229,346 @@ const PRICING_GUIDE: {
       { label: 'Travis Witt', unit: '', note: '602-908-6884 · Next Gen' },
     ],
   },
+  {
+    title: 'Shingles — book cost',
+    pane: 'materials',
+    supplier: 'SRS',
+    rows: [
+      { key: 'cambridge', label: 'IKO Cambridge', unit: '/sq', cost: 89 },
+      { key: 'dynasty', label: 'IKO Dynasty', unit: '/sq', cost: 94 },
+      { key: 'armourshake', label: 'IKO Armourshake', unit: '/sq', cost: 230 },
+      { key: 'gaf_hdz', label: 'GAF Timberline HDZ', unit: '/sq', cost: 130 },
+      { key: 'gaf_natural_shadow', label: 'GAF Natural Shadow', unit: '/sq', cost: 129 },
+      { key: 'owens_oakridge', label: 'Owens Corning Oakridge', unit: '/sq', cost: 110 },
+      { key: 'owens_duration', label: 'Owens Corning Duration', unit: '/sq', cost: 118 },
+      { key: 'owens_duration_designer', label: 'Owens Corning Duration Designer', unit: '/sq', cost: 118 },
+      { key: 'certainteed_landmark', label: 'CertainTeed Landmark', unit: '/sq', cost: 117 },
+      { key: 'certainteed_patriot_xl', label: 'CertainTeed Patriot XL', unit: '/sq', cost: 103 },
+      { key: 'malarkey_highlander', label: 'Malarkey Highlander', unit: '/sq', cost: 154 },
+      { key: 'malarkey_vista', label: 'Malarkey Vista', unit: '/sq', cost: 160 },
+    ],
+  },
+  {
+    title: 'Miller — decking',
+    pane: 'materials',
+    supplier: 'Miller',
+    rows: [
+      { key: 'osb', label: 'OSB 4×8 7/16"', unit: '/sheet', cost: 11 },
+      { key: 'osb_1_2', label: 'OSB 4×8 1/2"', unit: '/sheet', cost: 11.5 },
+      { key: 'cdx', label: 'CDX 4×8 7/16"', unit: '/sheet', cost: 20.5 },
+      { key: 'cdx_1_2', label: 'CDX 4×8 1/2"', unit: '/sheet', cost: 31 },
+    ],
+  },
+  {
+    title: 'Miller — fascia & mold',
+    pane: 'materials',
+    supplier: 'Miller',
+    rows: [
+      { key: 'fascia_2x6_16', label: 'Prime combed fascia 2×6 × 16\'', unit: '/ea', cost: 27 },
+      { key: 'fascia_2x6_20', label: 'Prime combed fascia 2×6 × 20\'', unit: '/ea', cost: 33.5 },
+      { key: 'fascia_2x8_16', label: 'Prime combed fascia 2×8 × 16\'', unit: '/ea', cost: 36 },
+      { key: 'fascia_2x8_20', label: 'Prime combed fascia 2×8 × 20\'', unit: '/ea', cost: 45 },
+      { key: 'mold_1x2_16', label: 'Shingle mold 1×2 × 16\'', unit: '/pair', cost: 10.5, note: 'Order even qty' },
+      { key: 'mold_1x3_16', label: 'Shingle mold 1×3 × 16\'', unit: '/pair', cost: 16 },
+      { key: 'mold_1x4_16', label: 'Shingle mold 1×4 × 16\'', unit: '/pair', cost: 21 },
+      { key: 'mold_1x6_16', label: 'Shingle mold 1×6 × 16\'', unit: '/pair', cost: 31.5 },
+      { key: 'mold_1x8_16', label: 'Shingle mold 1×8 × 16\'', unit: '/pair', cost: 42 },
+    ],
+  },
+  {
+    title: 'SRS — drip edge',
+    pane: 'materials',
+    supplier: 'SRS',
+    rows: [
+      { key: 'drip_2x2_color', label: '2"×2" Edge Color', unit: '/ea', cost: 9.1 },
+      { key: 'drip_2x2_mill', label: '2"×2" Edge Mill', unit: '/ea', cost: 6.5 },
+      { key: 'drip_2x4_color', label: '2"×4" Edge Color', unit: '/ea', cost: 12.9 },
+      { key: 'drip_2x4_mill', label: '2"×4" Edge Mill', unit: '/ea', cost: 11.8 },
+      { key: 'drip_3x3_color', label: '3"×3" Edge Color', unit: '/ea', cost: 14.15 },
+      { key: 'drip_3x3_mill', label: '3"×3" Edge Mill', unit: '/ea', cost: 11.8 },
+    ],
+  },
+  {
+    title: 'SRS — pipe jacks',
+    pane: 'materials',
+    supplier: 'SRS',
+    rows: [
+      { key: 'pipe_flash_1_5_al', label: '1.5" Pipe Flash Aluminum', unit: '/ea', cost: 18.65 },
+      { key: 'pipe_flash_1_5_gal', label: '1.5" Pipe Flash Galvanized', unit: '/ea', cost: 7 },
+      { key: 'pipe_flash_2_al', label: '2" Pipe Flash Aluminum', unit: '/ea', cost: 18.65 },
+      { key: 'pipe_flash_2_gal', label: '2" Pipe Flash Galvanized', unit: '/ea', cost: 8 },
+      { key: 'pipe_flash_3_al', label: '3" Pipe Flash Aluminum', unit: '/ea', cost: 17.35 },
+      { key: 'pipe_flash_3_gal', label: '3" Pipe Flash Galvanized', unit: '/ea', cost: 9 },
+      { key: 'pipe_flash_4_al', label: '4" Pipe Flash Aluminum', unit: '/ea', cost: 21.3 },
+      { key: 'pipe_flash_4_gal', label: '4" Pipe Flash Galvanized', unit: '/ea', cost: 10 },
+      { key: 'ttop_4_al', label: '4" T-Top Aluminum', unit: '/ea', cost: 18 },
+      { key: 'ttop_4_gal', label: '4" T-Top Galvanized', unit: '/ea', cost: 9.7 },
+      { key: 'ttop_7_al', label: '7" T-Top Aluminum', unit: '/ea', cost: 22.5 },
+      { key: 'ttop_7_gal', label: '7" T-Top Galvanized', unit: '/ea', cost: 11.6 },
+    ],
+  },
+  {
+    title: 'SRS — vents',
+    pane: 'materials',
+    supplier: 'SRS',
+    rows: [
+      { key: 'vent_brv34', label: 'BRV34 Bath Vent', unit: '/ea', cost: 35 },
+      { key: 'vent_da4', label: 'DA-4 Vent', unit: '/ea', cost: 19.8 },
+      { key: 'vent_kv68', label: 'KV68 Kitchen Vent', unit: '/ea', cost: 53 },
+      { key: 'vent_lomanco_550', label: 'Lomanco 550', unit: '/ea', cost: 22.3 },
+      { key: 'vent_lomanco_750', label: 'Lomanco 750 Mill', unit: '/ea', cost: 33 },
+      { key: 'vent_ohagin_shingle', label: 'Ohagin Shingle Vent', unit: '/ea', cost: 39 },
+      { key: 'vent_ohagin_tile', label: 'Ohagin Galvanized Tile Vent', unit: '/ea', cost: 45 },
+      { key: 'vent_pro4', label: 'Pro-4 Vent', unit: '/ea', cost: 15.6 },
+      { key: 'vent_lomanco_turbine_12', label: 'Lomanco 12" Turbine', unit: '/ea', cost: 82.5 },
+      { key: 'vent_lomanco_lor', label: 'Lomanco LOR Ridgevent 12"×4\' (4 LF)', unit: '/ea', cost: 16.1, note: '~$4.03/LF' },
+      { key: 'vent_lomanco_or9', label: 'Lomanco OR9-4 Ridgevent 9"×4\' (4 LF)', unit: '/ea', cost: 17.35, note: '~$4.34/LF' },
+      { key: 'vent_lomanco_or30', label: 'Lomanco OR-30 Ridge Vent', unit: '/ea', cost: 131 },
+      { key: 'ridge_vent', label: 'Ridge vent material', unit: '/LF', cost: 6, note: 'LOR/OR9-4 book ~$4/LF' },
+    ],
+  },
+  {
+    title: 'SRS — flat / MB',
+    pane: 'materials',
+    supplier: 'SRS',
+    rows: [
+      { key: 'mb_cap_sheet', label: 'TopShield SA Cap Sheet', unit: '/sq', cost: 123 },
+      { key: 'polyglass_sa_cap', label: 'Polyglass SA Cap Sheet', unit: '/sq', cost: 128 },
+      { key: 'mb_base_ply', label: 'TopShield SA Base Sheet', unit: '/sq', cost: 126 },
+      { key: 'glasbase_75', label: 'CertainTeed Glasbase #75 Base Sheet (3 sq)', unit: '/roll', cost: 61 },
+      { key: 'polyglass_elastoflex_9', label: 'Polyglass Elastoflex SA V Flashing Strip 9"', unit: '/roll', cost: 52 },
+    ],
+  },
+  {
+    title: 'SRS — hip & ridge',
+    pane: 'materials',
+    supplier: 'SRS',
+    rows: [
+      { key: 'hip_ridge_iko_std', label: 'IKO Hip & Ridge (standard)', unit: '/bdl', cost: 99.5 },
+      { key: 'hip_ridge_iko_ultra', label: 'IKO Ultra Hip & Ridge (high profile)', unit: '/bdl', cost: 104 },
+      { key: 'hip_ridge_oc_decoridge', label: 'Owens Corning DecoRidge (high profile)', unit: '/bdl', cost: 116 },
+      { key: 'hip_ridge_ct_shadow', label: 'CertainTeed Shadow Ridge', unit: '/bdl', cost: 85 },
+      { key: 'hip_ridge_gaf', label: 'GAF hip & ridge (standard)', unit: '/bdl', note: 'Cost TBD' },
+      { key: 'hip_ridge_malarkey', label: 'Malarkey RidgeFlex (standard)', unit: '/bdl', note: 'Cost TBD' },
+    ],
+  },
+  {
+    title: 'SRS — starter',
+    pane: 'materials',
+    supplier: 'SRS',
+    rows: [
+      { key: 'starter_iko', label: 'IKO Starter', unit: '/bdl', cost: 72 },
+      { key: 'starter_iko_armour', label: 'IKO Armour Starter (70 LF/bdl)', unit: '/bdl', cost: 137 },
+      { key: 'starter_gaf', label: 'GAF Pro-Start Starter', unit: '/bdl', cost: 73 },
+      { key: 'starter_oc', label: 'Owens Corning Starter Shingle Strip', unit: '/bdl', cost: 84.5 },
+      { key: 'starter_ct', label: 'CertainTeed Starter', unit: '/bdl', cost: 75 },
+      { key: 'starter_malarkey', label: 'Malarkey Starter', unit: '/bdl', cost: 92.5 },
+      { key: 'starter_topshield', label: 'TopShield Starter', unit: '/bdl', cost: 70.5 },
+      { key: 'starter_tamko', label: 'Tamko Starter', unit: '/bdl', cost: 74 },
+    ],
+  },
+  {
+    title: 'SRS — underlayment (shingle)',
+    pane: 'materials',
+    supplier: 'SRS',
+    rows: [
+      { key: 'felt_d4869', label: '15#/30# Felt ASTM D4869', unit: '/roll', cost: 32.25 },
+      { key: 'felt_d226', label: '15#/30# Felt ASTM D226', unit: '/roll', cost: 39 },
+      { key: 'tarah_40', label: 'Tarah 40# Organic Felt (2 sq)', unit: '/roll', cost: 38 },
+      { key: 'cmi_ranger', label: 'CMI Ranger Synthetic (10 sq)', unit: '/roll', cost: 58 },
+      { key: 'topshield_synthetic', label: 'TopShield Synthetic (10 sq)', unit: '/roll', cost: 67 },
+      { key: 'prowest_synthetic', label: 'Prowest One Solutions Synthetic (~10 sq)', unit: '/roll', cost: 71, note: 'Private-label — confirm sq/roll w/ SRS' },
+      { key: 'rhino_synthetic', label: 'Rhino Synthetic Underlayment (10 sq)', unit: '/roll', cost: 94.5 },
+      { key: 'apoc_cxl', label: 'APOC CXL (4.5 sq)', unit: '/roll', cost: 95 },
+      { key: 'topshield_100ht', label: 'TopShield 100HT (~10 sq HT)', unit: '/roll', cost: 108, note: 'Confirm SKU + sq/roll w/ SRS' },
+      { key: 'gaf_feltbuster', label: 'GAF FeltBuster (10 sq)', unit: '/roll', cost: 119 },
+      { key: 'topshield_sg_max_mts', label: 'TopShield SG Max MTS Synthetic (10 sq)', unit: '/roll', cost: 133 },
+      { key: 'swiftguard', label: 'Swiftguard (10 sq)', unit: '/roll', cost: 206 },
+      { key: 'titanium_udl_50', label: 'Titanium UDL 50 Synthetic (10 sq)', unit: '/roll', cost: 233 },
+    ],
+  },
+  {
+    title: 'SRS — ice & water / SA',
+    pane: 'materials',
+    supplier: 'SRS',
+    rows: [
+      { key: 'topshield_defender', label: 'TopShield Defender Ice / CMI Securegrip Ice (2 sq)', unit: '/roll', cost: 89.5 },
+      { key: 'iko_stormshield', label: 'IKO StormShield (~2 sq / 195 sf)', unit: '/roll', cost: 96.5 },
+      { key: 'topshield_sg_ps_max', label: 'TopShield SG PS Max 2.0 HT Ice & Water (2 sq)', unit: '/roll', cost: 113 },
+      { key: 'polyflex_sa_v', label: 'Polyglass Polyflex SA V (2 sq)', unit: '/roll', cost: 152 },
+    ],
+  },
+  {
+    title: 'SRS — tile field & underlay',
+    pane: 'materials',
+    supplier: 'SRS',
+    rows: [
+      { key: 'eagle_tile', label: 'Eagle Concrete Tile', unit: '/sq', cost: 116.67 },
+      { key: 'westlake_tile', label: 'Westlake Concrete Tile', unit: '/sq', cost: 114.35 },
+      { key: 'clay_tile', label: 'Clay tile', unit: '/sq', note: 'Mat cost TBD' },
+      { key: 'boral_organic_ply_40', label: 'Boral Organic Ply 40 (2 sq)', unit: '/roll', cost: 41.5 },
+      { key: 'eagle_tru_2', label: 'Eagle Tru-2 (2 sq)', unit: '/roll', cost: 41.75 },
+      { key: 'boral_ply_40', label: 'Boral Ply 40 (2 sq)', unit: '/roll', cost: 54.5 },
+      { key: 'boral_tile_seal', label: 'Boral TileSeal (2 sq)', unit: '/roll', cost: 123 },
+    ],
+  },
+  {
+    title: 'SRS — tile hip & ridge / accessories',
+    pane: 'materials',
+    supplier: 'SRS',
+    rows: [
+      { key: 'verde_p10_p20_hip', label: 'Verde P10/P20 Hip', unit: '/ea', cost: 45 },
+      { key: 'verde_p15_p25_ridge', label: 'Verde P15/P25 Ridge', unit: '/ea', cost: 90 },
+      { key: 'verde_p30_hip', label: 'Verde P30 Hip', unit: '/ea', cost: 53 },
+      { key: 'verde_p35_ridge', label: 'Verde P35 Ridge', unit: '/ea', cost: 92 },
+      { key: 'verde_p50_hip', label: 'Verde P50 Hip', unit: '/ea', cost: 49.75 },
+      { key: 'verde_p55_ridge', label: 'Verde P55 Ridge', unit: '/ea', cost: 92 },
+      { key: 'verde_pf7_flat', label: 'Verde PF7 Flat', unit: '/ea', cost: 99 },
+      { key: 'westile_l_eave', label: 'Westile L-Style Eave Riser', unit: '/ea', cost: 8.4 },
+      { key: 'birdstop_s', label: 'Birdstop "S"', unit: '/ea', cost: 9.6 },
+      { key: 'birdstop_w', label: 'Birdstop "W"', unit: '/ea', cost: 9.6 },
+      { key: 'verde_split_34', label: 'Verde Split Flashing 3/4"', unit: '/ea', cost: 26.9 },
+      { key: 'verde_split_1_5', label: 'Verde Split Flashing 1-1/2"', unit: '/ea', cost: 25 },
+      { key: 'verde_split_2', label: 'Verde Split Flashing 2"', unit: '/ea', cost: 25 },
+      { key: 'westlake_trim', label: 'Westlake Trim', unit: '/ea', cost: 3.99 },
+      { key: 'eagle_trim', label: 'Eagle Trim', unit: '/ea', cost: 3.95 },
+      { key: 'kwikmix_mortar', label: 'Kwikmix Mortar Pre-Mix', unit: '/bag', cost: 14.6 },
+    ],
+  },
+  {
+    title: 'SRS — fasteners',
+    pane: 'materials',
+    supplier: 'SRS',
+    rows: [
+      { key: 'fast_roof_nails_50', label: 'Roofing Nails 50#', unit: '/box', cost: 76.5 },
+      { key: 'fast_tile_nails_50', label: 'Tile Nails 50#', unit: '/box', cost: 76.5 },
+      { key: 'fast_coil_1_25', label: '1.25" Coil Nails', unit: '/box', cost: 49 },
+      { key: 'fast_coil_1_75', label: '1-3/4" Coil Nails', unit: '/box', cost: 56 },
+      { key: 'fast_cap_nails_1_5', label: '1" Metal Cap Nails 5#', unit: '/box', cost: 18.85 },
+      { key: 'fast_cap_nails_1_50', label: '1" Metal Cap Nails 50#', unit: '/box', cost: 102 },
+      { key: 'fast_plastic_cap', label: '1" Plastic Cap Nails', unit: '/box', cost: 18 },
+      { key: 'fast_n17', label: '1-1/2" N-17 Staples', unit: '/box', cost: 59 },
+      { key: 'fast_a11', label: '3/8" A11 Staples', unit: '/box', cost: 5.9 },
+      { key: 'fast_p10', label: '5/8" P-10 Staples', unit: '/box', cost: 57 },
+    ],
+  },
+  {
+    title: 'SRS — flashing & accessories',
+    pane: 'materials',
+    supplier: 'SRS',
+    rows: [
+      { key: 'w_valley_24x10', label: '24"×10\' 3-Rib W-Valley', unit: '/ea', cost: 33.1 },
+      { key: 'counter_flash_1', label: '#1 Counter Flashing', unit: '/ea', cost: 10.9 },
+      { key: 'z_bar_2x1_5x2', label: '2"×1-1/2"×2" Z-Bar', unit: '/ea', cost: 9.45 },
+      { key: 'gravel_stop_2x4', label: '2"×4" Low Rise Gravel Stop', unit: '/ea', cost: 12.9 },
+      { key: 'roof_to_wall_2x6', label: '2"×6" Roof to Wall', unit: '/ea', cost: 11.2 },
+      { key: 'flash_3in1', label: '3-in-1', unit: '/ea', cost: 12.8 },
+      { key: 'step_flash_4x4x8', label: '4"×4"×8" Step Flashing (~100/box)', unit: '/box', cost: 54.5, note: 'Confirm pcs/box w/ SRS' },
+      { key: 'pan_flashing', label: 'Pan Flashing', unit: '/ea', cost: 16.5 },
+      { key: 'cement_101_3', label: 'Tropical #101 Plastic Cement 3 gal', unit: '/pail', cost: 35 },
+      { key: 'cement_101_5', label: 'Tropical #101 Plastic Cement 5 gal', unit: '/pail', cost: 47 },
+      { key: 'mastic_509_3', label: 'Tropical #509 Modified Mastic 3 gal', unit: '/pail', cost: 39 },
+      { key: 'mastic_509_5', label: 'Tropical #509 Modified Mastic 5 gal', unit: '/pail', cost: 61 },
+      { key: 'flashing_paint', label: 'TopShield Shingle Flashing Paint 12 oz', unit: '/can', cost: 10 },
+      { key: 'caulking', label: 'Caulking', unit: '/tube', cost: 10 },
+      { key: 'furring_1x2x4', label: 'Furring Strips 1"×2"×4\'', unit: '/bundle', cost: 13.5, note: 'Confirm pcs/bundle w/ SRS' },
+      { key: 'karnak_405_5', label: 'Karnak 405 5 gal', unit: '/pail', cost: 103 },
+      { key: 'karnak_505_5', label: 'Karnak 505 5 gal', unit: '/pail', cost: 112 },
+      { key: 'karnak_505_wb_3_5', label: 'Karnak 505 WB 3.5 gal', unit: '/pail', cost: 124 },
+      { key: 'polyglass_pg700_5', label: 'Polyglass PG700 5 gal', unit: '/pail', cost: 87.5 },
+      { key: 'tropical_901_hs', label: 'Tropical #901 HS White', unit: '/pail', cost: 81 },
+      { key: 'foam_granules', label: 'Foam granules (~30 lb/sq)', unit: '/bag', note: 'Mat cost TBD' },
+      { key: 'foam_primer', label: 'Foam primer (~0.5 gal/sq)', unit: '/gal', note: 'Mat cost TBD' },
+      { key: 'foam_top_coating', label: 'Foam top coating', unit: '/gal', note: 'Mat cost TBD' },
+    ],
+  },
 ];
+
+/** Regional sell default from PRICING_GUIDE when price_sheet has no row. */
+function getPricingGuideSell(
+  itemKey: string,
+  region: PricingRegion = 'central'
+): number {
+  if (!itemKey) return 0;
+  for (const section of PRICING_GUIDE) {
+    const row = section.rows.find((r) => r.key === itemKey);
+    if (!row) continue;
+    if (region === 'southern') {
+      return row.sellTuc || row.sellPhx || 0;
+    }
+    if (region === 'northern') {
+      return row.sellNorth || row.sellTuc || row.sellPhx || 0;
+    }
+    return row.sellPhx || 0;
+  }
+  return 0;
+}
+
+/** Book material cost default from PRICING_GUIDE / SHINGLE_COST_PER_SQ. */
+function getPricingGuideCost(itemKey: string): number {
+  if (!itemKey) return 0;
+  const shingleCost = SHINGLE_COST_PER_SQ[itemKey as ShingleType];
+  if (shingleCost != null && shingleCost > 0) return shingleCost;
+  for (const section of PRICING_GUIDE) {
+    const row = section.rows.find((r) => r.key === itemKey);
+    if (row?.cost != null && row.cost > 0) return row.cost;
+  }
+  return 0;
+}
+
+/** Ingest Supabase cost rows into the regional map getCost() already uses. */
+function ingestCostSheetRows(
+  rows: Array<{
+    item_key?: string | null;
+    cost?: number | null;
+    region?: string | null;
+    active?: boolean | null;
+  }>,
+  into: Record<string, number> = {}
+): Record<string, number> {
+  const activeRows = rows.filter((row) => row.active !== false);
+  for (const row of activeRows) {
+    if (row.item_key == null || row.cost == null) continue;
+    const cost = Number(row.cost);
+    if (!Number.isFinite(cost)) continue;
+    const key = String(row.item_key);
+    const rawReg = String(row.region ?? 'all')
+      .toLowerCase()
+      .trim();
+    if (!rawReg || rawReg === 'all' || rawReg === '*') {
+      into[key] = cost;
+      into[`${key}__all`] = cost;
+      continue;
+    }
+    const reg = normalizePricingRegion(rawReg);
+    into[`${key}__${reg}`] = cost;
+    if (rawReg && rawReg !== reg) {
+      into[`${key}__${rawReg}`] = cost;
+    }
+    if (reg === 'central' || into[key] == null) {
+      into[key] = cost;
+    }
+  }
+  Object.keys(into).forEach((k) => {
+    if (k.endsWith('__all')) {
+      const plain = k.slice(0, -5);
+      if (into[plain] == null) into[plain] = into[k];
+    }
+  });
+  return into;
+}
+
+/** Alias labor keys so sheet + guide keys both resolve. */
+const COST_KEY_ALIASES: Record<string, string[]> = {
+  hvac_labor: ['hvac_dr'],
+  hvac_dr: ['hvac_labor'],
+  steep_9_11: ['steep_10_11'],
+  steep_10_11: ['steep_9_11'],
+  steep_11_12: ['steep_12'],
+  steep_12: ['steep_11_12'],
+  fascia_labor: ['fascia_mold_labor'],
+  shingle_mold_labor: ['fascia_mold_labor'],
+};
 
 const SYSTEM_DOCUMENTS = [
   {
@@ -969,23 +1724,56 @@ type EmergencyAgreementDraft = {
   clientSignedAt: string | null;
 };
 
+/** Structured takeoff line — price-book SKU + qty (not free-text). */
+type TakeoffSkuLine = {
+  id: string;
+  skuKey: string;
+  qty: string;
+};
+
+/** One skylight spec on the takeoff — size varies per job, no fixed catalog. */
+type TakeoffSkylightLine = {
+  id: string;
+  /** Free-text rough opening, e.g. 22"x46" — brand/model size varies per job */
+  size: string;
+  qty: string;
+};
+
 type TakeoffSheet = {
-  roofTypeLayers: string;
-  pipeJacks: string;
-  turtleVents: string;
-  powerAtticVents: string;
-  windTurbines: string;
+  /** shingle | tile | flat | mixed */
+  roofType: string;
+  /** 1 | 2 | 3+ */
+  roofLayers: string;
+  /** e.g. "6/12" — flows into the estimate's pitch field */
+  pitch: string;
+  /** 1 | 2 | 3 — flows into the estimate's stories field */
+  stories: string;
+  /** Pipe flash / T-Top selections from PIPE_JACK_CATALOG */
+  pipeJackLines: TakeoffSkuLine[];
+  /** Cut-in vents / turbines from VENT_CATALOG (not ridge LF) */
+  ventLines: TakeoffSkuLine[];
+  /** Ridge vent linear feet */
   ridgeVent: string;
   roofExhaustCap: string;
-  hvacVent: string;
+  /** HVAC unit count (D&R) */
+  hvacCount: string;
+  /** curb | elbow | free text */
   hvacMount: string;
+  /** None | Step flashing | Counter flashing | Both */
   chimneyFlashing: string;
+  /** Free-text size, e.g. "24x24" */
+  chimneyFlashingSize: string;
   soffitOverhang: string;
-  satelliteDish: string;
+  /** 'lf' | 'in' */
+  soffitOverhangUnit: string;
+  /** Number of satellite dishes present */
+  satelliteDishCount: string;
+  /** Detach & reset the dish(es)? Yes | No */
+  satelliteDishDr: string;
   electricalMast: string;
-  skylights: string;
+  /** Size + qty per skylight (sizes vary, no fixed catalog) */
+  skylightLines: TakeoffSkylightLine[];
   dripEdgeGutterApron: string;
-  iceAndWaterShield: string;
   valleyLiner: string;
   drywallSf: string;
   paintingSf: string;
@@ -994,23 +1782,781 @@ type TakeoffSheet = {
   notes: string;
 };
 
+type CatalogSku = {
+  key: string;
+  label: string;
+  cost: number;
+  /** Cut-in / install labor $/each — vents only; ridge stays LF */
+  cutInLabor?: number;
+  unit?: string;
+  category?: 'pipe_jack' | 'vent' | 'fastener' | 'accessory' | 'shingle';
+};
+
+const PIPE_JACK_CATALOG: CatalogSku[] = [
+  { key: 'pipe_flash_1_5_al', label: '1.5" Pipe Flash Aluminum', cost: 18.65, unit: '/ea', category: 'pipe_jack' },
+  { key: 'pipe_flash_1_5_gal', label: '1.5" Pipe Flash Galvanized', cost: 7, unit: '/ea', category: 'pipe_jack' },
+  { key: 'pipe_flash_2_al', label: '2" Pipe Flash Aluminum', cost: 18.65, unit: '/ea', category: 'pipe_jack' },
+  { key: 'pipe_flash_2_gal', label: '2" Pipe Flash Galvanized', cost: 8, unit: '/ea', category: 'pipe_jack' },
+  { key: 'pipe_flash_3_al', label: '3" Pipe Flash Aluminum', cost: 17.35, unit: '/ea', category: 'pipe_jack' },
+  { key: 'pipe_flash_3_gal', label: '3" Pipe Flash Galvanized', cost: 9, unit: '/ea', category: 'pipe_jack' },
+  { key: 'pipe_flash_4_al', label: '4" Pipe Flash Aluminum', cost: 21.3, unit: '/ea', category: 'pipe_jack' },
+  { key: 'pipe_flash_4_gal', label: '4" Pipe Flash Galvanized', cost: 10, unit: '/ea', category: 'pipe_jack' },
+  { key: 'ttop_4_al', label: '4" T-Top Aluminum', cost: 18, unit: '/ea', category: 'pipe_jack' },
+  { key: 'ttop_4_gal', label: '4" T-Top Galvanized', cost: 9.7, unit: '/ea', category: 'pipe_jack' },
+  { key: 'ttop_7_al', label: '7" T-Top Aluminum', cost: 22.5, unit: '/ea', category: 'pipe_jack' },
+  { key: 'ttop_7_gal', label: '7" T-Top Galvanized', cost: 11.6, unit: '/ea', category: 'pipe_jack' },
+];
+
+const VENT_CATALOG: CatalogSku[] = [
+  { key: 'vent_brv34', label: 'BRV34 Bath Vent', cost: 35, unit: '/ea', cutInLabor: 20, category: 'vent' },
+  { key: 'vent_da4', label: 'DA-4 Vent', cost: 19.8, unit: '/ea', cutInLabor: 20, category: 'vent' },
+  { key: 'vent_kv68', label: 'KV68 Kitchen Vent', cost: 53, unit: '/ea', cutInLabor: 20, category: 'vent' },
+  { key: 'vent_lomanco_550', label: 'Lomanco 550', cost: 22.3, unit: '/ea', cutInLabor: 20, category: 'vent' },
+  { key: 'vent_lomanco_750', label: 'Lomanco 750 Mill', cost: 33, unit: '/ea', cutInLabor: 20, category: 'vent' },
+  { key: 'vent_ohagin_shingle', label: 'Ohagin Shingle Vent', cost: 39, unit: '/ea', cutInLabor: 20, category: 'vent' },
+  { key: 'vent_ohagin_tile', label: 'Ohagin Galvanized Tile Vent', cost: 45, unit: '/ea', cutInLabor: 20, category: 'vent' },
+  { key: 'vent_pro4', label: 'Pro-4 Vent', cost: 15.6, unit: '/ea', cutInLabor: 20, category: 'vent' },
+  { key: 'vent_lomanco_turbine_12', label: 'Lomanco 12" Turbine', cost: 82.5, unit: '/ea', cutInLabor: 20, category: 'vent' },
+  { key: 'vent_lomanco_lor', label: 'Lomanco LOR Ridgevent 12"×4\' (4 LF)', cost: 16.1, unit: '/ea', category: 'vent' },
+  { key: 'vent_lomanco_or9', label: 'Lomanco OR9-4 Ridgevent 9"×4\' (4 LF)', cost: 17.35, unit: '/ea', category: 'vent' },
+  { key: 'vent_lomanco_or30', label: 'Lomanco OR-30 Ridge Vent', cost: 131, unit: '/ea', category: 'vent' },
+];
+
+/** Takeoff sheet — fixed option sets for fields converted from free text. */
+const TAKEOFF_ROOF_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'shingle', label: 'Shingle' },
+  { value: 'tile', label: 'Tile' },
+  { value: 'flat', label: 'Flat / low-slope' },
+  { value: 'mixed', label: 'Mixed' },
+];
+const TAKEOFF_ROOF_LAYERS_OPTIONS = ['1', '2', '3+'];
+const TAKEOFF_STORIES_OPTIONS = ['1', '2', '3'];
+const TAKEOFF_ROOF_EXHAUST_CAP_OPTIONS = ['Standard', 'Turbine', 'Power'];
+const TAKEOFF_VALLEY_LINER_OPTIONS = ['Open metal', 'Closed-cut', 'Membrane'];
+const TAKEOFF_DRIP_EDGE_OPTIONS = [
+  'Drip edge only',
+  'Drip edge + gutter apron',
+  'Gutter apron only',
+];
+const TAKEOFF_CHIMNEY_FLASHING_OPTIONS = [
+  'Step flashing',
+  'Counter flashing',
+  'Both',
+];
+const TAKEOFF_YES_NO_OPTIONS = ['Yes', 'No'];
+const TAKEOFF_SOFFIT_UNIT_OPTIONS: { value: string; label: string }[] = [
+  { value: 'lf', label: 'Linear feet' },
+  { value: 'in', label: 'Inches' },
+];
+
+function takeoffRoofTypeLabel(value: string): string {
+  return TAKEOFF_ROOF_TYPE_OPTIONS.find((o) => o.value === value)?.label || '';
+}
+
+/** Orders tab — order type twin of estimate roof system. */
+type MaterialOrderType = 'shingle' | 'tile' | 'flat';
+
+type MaterialOrderSku = {
+  key: string;
+  label: string;
+  /** Book cost when known; omit rather than invent. */
+  cost?: number;
+  unit?: string;
+};
+
+type MaterialOrderSection = {
+  key: string;
+  title: string;
+  orderTypes: MaterialOrderType[];
+  options: MaterialOrderSku[];
+  addLabel: string;
+};
+
+const MATERIAL_ORDER_FIELD_SHINGLES: MaterialOrderSku[] = SHINGLE_PRODUCTS.map(
+  (p) => ({
+    key: p.key,
+    label: p.label,
+    cost: SHINGLE_COST_PER_SQ[p.key],
+    unit: '/sq',
+  })
+);
+
+const MATERIAL_ORDER_HIP_RIDGE: MaterialOrderSku[] = [
+  { key: 'hip_ridge_iko_std', label: 'IKO Hip & Ridge (standard)', cost: 99.5, unit: '/bdl' },
+  { key: 'hip_ridge_iko_ultra', label: 'IKO Ultra Hip & Ridge (high profile)', cost: 104, unit: '/bdl' },
+  { key: 'hip_ridge_oc_decoridge', label: 'Owens Corning DecoRidge (high profile)', cost: 116, unit: '/bdl' },
+  { key: 'hip_ridge_ct_shadow', label: 'CertainTeed Shadow Ridge', cost: 85, unit: '/bdl' },
+  { key: 'hip_ridge_gaf', label: 'GAF hip & ridge (standard)', unit: '/bdl' },
+  { key: 'hip_ridge_malarkey', label: 'Malarkey RidgeFlex (standard)', unit: '/bdl' },
+];
+
+const MATERIAL_ORDER_STARTER: MaterialOrderSku[] = [
+  { key: 'starter_iko', label: 'IKO Starter', cost: 72, unit: '/bdl' },
+  { key: 'starter_iko_armour', label: 'IKO Armour Starter (70 LF/bdl)', cost: 137, unit: '/bdl' },
+  { key: 'starter_gaf', label: 'GAF Pro-Start Starter', cost: 73, unit: '/bdl' },
+  { key: 'starter_oc', label: 'Owens Corning Starter Shingle Strip', cost: 84.5, unit: '/bdl' },
+  { key: 'starter_ct', label: 'CertainTeed Starter', cost: 75, unit: '/bdl' },
+  { key: 'starter_malarkey', label: 'Malarkey Starter', cost: 92.5, unit: '/bdl' },
+  { key: 'starter_topshield', label: 'TopShield Starter', cost: 70.5, unit: '/bdl' },
+  { key: 'starter_tamko', label: 'Tamko Starter', cost: 74, unit: '/bdl' },
+];
+
+const MATERIAL_ORDER_ICE_WATER: MaterialOrderSku[] = [
+  { key: 'topshield_defender', label: 'TopShield Defender Ice / CMI Securegrip Ice (2 sq)', cost: 89.5, unit: '/roll' },
+  { key: 'topshield_sg_ps_max', label: 'TopShield SG PS Max 2.0 HT Ice & Water (2 sq)', cost: 113, unit: '/roll' },
+  { key: 'iko_stormshield', label: 'IKO StormShield (~2 sq / 195 sf)', cost: 96.5, unit: '/roll' },
+  { key: 'polyflex_sa_v', label: 'Polyglass Polyflex SA V (2 sq)', cost: 152, unit: '/roll' },
+];
+
+const MATERIAL_ORDER_UNDERLAY_SHINGLE: MaterialOrderSku[] = [
+  { key: 'felt_d4869', label: '15#/30# Felt ASTM D4869', cost: 32.25, unit: '/roll' },
+  { key: 'felt_d226', label: '15#/30# Felt ASTM D226', cost: 39, unit: '/roll' },
+  { key: 'tarah_40', label: 'Tarah 40# Organic Felt (2 sq)', cost: 38, unit: '/roll' },
+  { key: 'cmi_ranger', label: 'CMI Ranger Synthetic (10 sq)', cost: 58, unit: '/roll' },
+  { key: 'topshield_synthetic', label: 'TopShield Synthetic (10 sq)', cost: 67, unit: '/roll' },
+  { key: 'prowest_synthetic', label: 'Prowest One Solutions Synthetic (~10 sq)', cost: 71, unit: '/roll' },
+  { key: 'rhino_synthetic', label: 'Rhino Synthetic Underlayment (10 sq)', cost: 94.5, unit: '/roll' },
+  { key: 'apoc_cxl', label: 'APOC CXL (4.5 sq)', cost: 95, unit: '/roll' },
+  { key: 'topshield_100ht', label: 'TopShield 100HT (~10 sq HT)', cost: 108, unit: '/roll' },
+  { key: 'gaf_feltbuster', label: 'GAF FeltBuster (10 sq)', cost: 119, unit: '/roll' },
+  { key: 'topshield_sg_max_mts', label: 'TopShield SG Max MTS Synthetic (10 sq)', cost: 133, unit: '/roll' },
+  { key: 'swiftguard', label: 'Swiftguard (10 sq)', cost: 206, unit: '/roll' },
+  { key: 'titanium_udl_50', label: 'Titanium UDL 50 Synthetic (10 sq)', cost: 233, unit: '/roll' },
+];
+
+const MATERIAL_ORDER_UNDERLAY_TILE: MaterialOrderSku[] = [
+  { key: 'boral_organic_ply_40', label: 'Boral Organic Ply 40 (2 sq)', cost: 41.5, unit: '/roll' },
+  { key: 'eagle_tru_2', label: 'Eagle Tru-2 (2 sq)', cost: 41.75, unit: '/roll' },
+  { key: 'boral_ply_40', label: 'Boral Ply 40 (2 sq)', cost: 54.5, unit: '/roll' },
+  { key: 'boral_tile_seal', label: 'Boral TileSeal (2 sq)', cost: 123, unit: '/roll' },
+];
+
+const MATERIAL_ORDER_DRIP: MaterialOrderSku[] = [
+  { key: 'drip_2x2_mill', label: '2"×2" Edge Mill', cost: 6.5, unit: '/ea' },
+  { key: 'drip_2x2_color', label: '2"×2" Edge Color', cost: 9.1, unit: '/ea' },
+  { key: 'drip_2x4_mill', label: '2"×4" Edge Mill', cost: 11.8, unit: '/ea' },
+  { key: 'drip_2x4_color', label: '2"×4" Edge Color', cost: 12.9, unit: '/ea' },
+  { key: 'drip_3x3_mill', label: '3"×3" Edge Mill', cost: 11.8, unit: '/ea' },
+  { key: 'drip_3x3_color', label: '3"×3" Edge Color', cost: 14.15, unit: '/ea' },
+];
+
+const MATERIAL_ORDER_FASTENERS: MaterialOrderSku[] = [
+  { key: 'fast_roof_nails_50', label: 'Roofing Nails 50#', cost: 76.5, unit: '/box' },
+  { key: 'fast_tile_nails_50', label: 'Tile Nails 50#', cost: 76.5, unit: '/box' },
+  { key: 'fast_coil_1_25', label: '1.25" Coil Nails', cost: 49, unit: '/box' },
+  { key: 'fast_coil_1_75', label: '1-3/4" Coil Nails', cost: 56, unit: '/box' },
+  { key: 'fast_cap_nails_1_5', label: '1" Metal Cap Nails 5#', cost: 18.85, unit: '/box' },
+  { key: 'fast_cap_nails_1_50', label: '1" Metal Cap Nails 50#', cost: 102, unit: '/box' },
+  { key: 'fast_plastic_cap', label: '1" Plastic Cap Nails', cost: 18, unit: '/box' },
+  { key: 'fast_n17', label: '1-1/2" N-17 Staples', cost: 59, unit: '/box' },
+  { key: 'fast_a11', label: '3/8" A11 Staples', cost: 5.9, unit: '/box' },
+  { key: 'fast_p10', label: '5/8" P-10 Staples', cost: 57, unit: '/box' },
+];
+
+const MATERIAL_ORDER_DECKING: MaterialOrderSku[] = [
+  { key: 'osb', label: 'OSB 4×8 7/16"', cost: 11, unit: '/sheet' },
+  { key: 'osb_1_2', label: 'OSB 4×8 1/2"', cost: 11.5, unit: '/sheet' },
+  { key: 'cdx', label: 'CDX 4×8 7/16"', cost: 20.5, unit: '/sheet' },
+  { key: 'cdx_1_2', label: 'CDX 4×8 1/2"', cost: 31, unit: '/sheet' },
+];
+
+const MATERIAL_ORDER_FASCIA_MOLD: MaterialOrderSku[] = [
+  { key: 'fascia_2x6_16', label: 'Prime combed fascia 2×6 × 16\'', cost: 27, unit: '/ea' },
+  { key: 'fascia_2x6_20', label: 'Prime combed fascia 2×6 × 20\'', cost: 33.5, unit: '/ea' },
+  { key: 'fascia_2x8_16', label: 'Prime combed fascia 2×8 × 16\'', cost: 36, unit: '/ea' },
+  { key: 'fascia_2x8_20', label: 'Prime combed fascia 2×8 × 20\'', cost: 45, unit: '/ea' },
+  { key: 'mold_1x2_16', label: 'Shingle mold 1×2 × 16\' (pair)', cost: 10.5, unit: '/pair' },
+  { key: 'mold_1x3_16', label: 'Shingle mold 1×3 × 16\' (pair)', cost: 16, unit: '/pair' },
+  { key: 'mold_1x4_16', label: 'Shingle mold 1×4 × 16\' (pair)', cost: 21, unit: '/pair' },
+  { key: 'mold_1x6_16', label: 'Shingle mold 1×6 × 16\' (pair)', cost: 31.5, unit: '/pair' },
+  { key: 'mold_1x8_16', label: 'Shingle mold 1×8 × 16\' (pair)', cost: 42, unit: '/pair' },
+];
+
+const MATERIAL_ORDER_ACCESSORIES: MaterialOrderSku[] = [
+  { key: 'cement_101_3', label: 'Tropical #101 Plastic Cement 3 gal', cost: 35, unit: '/pail' },
+  { key: 'cement_101_5', label: 'Tropical #101 Plastic Cement 5 gal', cost: 47, unit: '/pail' },
+  { key: 'mastic_509_3', label: 'Tropical #509 Modified Mastic 3 gal', cost: 39, unit: '/pail' },
+  { key: 'mastic_509_5', label: 'Tropical #509 Modified Mastic 5 gal', cost: 61, unit: '/pail' },
+  { key: 'flashing_paint', label: 'TopShield Shingle Flashing Paint 12 oz', cost: 10, unit: '/can' },
+  { key: 'caulking', label: 'Caulking', cost: 10, unit: '/tube' },
+  { key: 'furring_1x2x4', label: 'Furring Strips 1"×2"×4\'', cost: 13.5, unit: '/bundle' },
+];
+
+/** Low-slope Orders — coating cans (book $) + foam mats (units only until Joe costs). */
+const MATERIAL_ORDER_COATING_FOAM: MaterialOrderSku[] = [
+  { key: 'karnak_405_5', label: 'Karnak 405 5 gal', cost: 103, unit: '/pail' },
+  { key: 'karnak_505_5', label: 'Karnak 505 5 gal', cost: 112, unit: '/pail' },
+  { key: 'karnak_505_wb_3_5', label: 'Karnak 505 WB 3.5 gal', cost: 124, unit: '/pail' },
+  { key: 'polyglass_pg700_5', label: 'Polyglass PG700 5 gal', cost: 87.5, unit: '/pail' },
+  { key: 'tropical_901_hs', label: 'Tropical #901 HS White', cost: 81, unit: '/pail' },
+  { key: 'foam_granules', label: 'Foam granules (~30 lb/sq)', unit: '/bag' },
+  { key: 'foam_primer', label: 'Foam primer (~0.5 gal/sq)', unit: '/gal' },
+  { key: 'foam_top_coating', label: 'Foam top coating', unit: '/gal' },
+];
+
+const MATERIAL_ORDER_FLASHING: MaterialOrderSku[] = [
+  { key: 'w_valley_24x10', label: '24"×10\' 3-Rib W-Valley', cost: 33.1, unit: '/ea' },
+  { key: 'counter_flash_1', label: '#1 Counter Flashing', cost: 10.9, unit: '/ea' },
+  { key: 'z_bar_2x1_5x2', label: '2"×1-1/2"×2" Z-Bar', cost: 9.45, unit: '/ea' },
+  { key: 'gravel_stop_2x4', label: '2"×4" Low Rise Gravel Stop', cost: 12.9, unit: '/ea' },
+  { key: 'roof_to_wall_2x6', label: '2"×6" Roof to Wall', cost: 11.2, unit: '/ea' },
+  { key: 'flash_3in1', label: '3-in-1', cost: 12.8, unit: '/ea' },
+  { key: 'step_flash_4x4x8', label: '4"×4"×8" Step Flashing (~100/box)', cost: 54.5, unit: '/box' },
+  { key: 'pan_flashing', label: 'Pan Flashing', cost: 16.5, unit: '/ea' },
+];
+
+const MATERIAL_ORDER_MB: MaterialOrderSku[] = [
+  { key: 'mb_base_ply', label: 'TopShield SA Base Sheet', cost: 126, unit: '/sq' },
+  { key: 'mb_cap_sheet', label: 'TopShield SA Cap Sheet', cost: 123, unit: '/sq' },
+  { key: 'polyglass_sa_cap', label: 'Polyglass SA Cap Sheet', cost: 128, unit: '/sq' },
+  { key: 'glasbase_75', label: 'CertainTeed Glasbase #75 Base Sheet (3 sq)', cost: 61, unit: '/roll' },
+  { key: 'polyglass_elastoflex_9', label: 'Polyglass Elastoflex SA V Flashing Strip 9"', cost: 52, unit: '/roll' },
+];
+
+const MATERIAL_ORDER_FIELD_TILE: MaterialOrderSku[] = [
+  { key: 'eagle_tile', label: 'Eagle Concrete Tile', cost: 116.67, unit: '/sq' },
+  { key: 'westlake_tile', label: 'Westlake Concrete Tile', cost: 114.35, unit: '/sq' },
+  { key: 'clay_tile', label: 'Clay tile', unit: '/sq' },
+];
+
+const MATERIAL_ORDER_TILE_HIP_RIDGE: MaterialOrderSku[] = [
+  { key: 'verde_p10_p20_hip', label: 'Verde P10/P20 Hip', cost: 45, unit: '/ea' },
+  { key: 'verde_p15_p25_ridge', label: 'Verde P15/P25 Ridge', cost: 90, unit: '/ea' },
+  { key: 'verde_p30_hip', label: 'Verde P30 Hip', cost: 53, unit: '/ea' },
+  { key: 'verde_p35_ridge', label: 'Verde P35 Ridge', cost: 92, unit: '/ea' },
+  { key: 'verde_p50_hip', label: 'Verde P50 Hip', cost: 49.75, unit: '/ea' },
+  { key: 'verde_p55_ridge', label: 'Verde P55 Ridge', cost: 92, unit: '/ea' },
+  { key: 'verde_pf7_flat', label: 'Verde PF7 Flat', cost: 99, unit: '/ea' },
+];
+
+const MATERIAL_ORDER_TILE_ACCESSORIES: MaterialOrderSku[] = [
+  { key: 'westile_l_eave', label: 'Westile L-Style Eave Riser', cost: 8.4, unit: '/ea' },
+  { key: 'birdstop_s', label: 'Birdstop "S"', cost: 9.6, unit: '/ea' },
+  { key: 'birdstop_w', label: 'Birdstop "W"', cost: 9.6, unit: '/ea' },
+  { key: 'verde_split_34', label: 'Verde Split Flashing 3/4"', cost: 26.9, unit: '/ea' },
+  { key: 'verde_split_1_5', label: 'Verde Split Flashing 1-1/2"', cost: 25, unit: '/ea' },
+  { key: 'verde_split_2', label: 'Verde Split Flashing 2"', cost: 25, unit: '/ea' },
+  { key: 'westlake_trim', label: 'Westlake Trim', cost: 3.99, unit: '/ea' },
+  { key: 'eagle_trim', label: 'Eagle Trim', cost: 3.95, unit: '/ea' },
+  { key: 'kwikmix_mortar', label: 'Kwikmix Mortar Pre-Mix', cost: 14.6, unit: '/bag' },
+];
+
+const MATERIAL_ORDER_VENTS: MaterialOrderSku[] = [
+  ...VENT_CATALOG.map((v) => ({
+    key: v.key,
+    label: v.label,
+    cost: v.cost,
+    unit: '/ea' as const,
+  })),
+  { key: 'ridge_vent', label: 'Ridge vent', cost: 6, unit: '/LF' },
+];
+
+const MATERIAL_ORDER_PIPE_JACKS: MaterialOrderSku[] = PIPE_JACK_CATALOG.map(
+  (p) => ({
+    key: p.key,
+    label: p.label,
+    cost: p.cost,
+    unit: '/ea',
+  })
+);
+
+/** Material Order — sectioned catalog (Orders tab; not on estimate). */
+const MATERIAL_ORDER_SECTIONS: MaterialOrderSection[] = [
+  {
+    key: 'ice_water',
+    title: 'Ice & water',
+    orderTypes: ['shingle', 'flat'],
+    options: MATERIAL_ORDER_ICE_WATER,
+    addLabel: 'ice & water',
+  },
+  {
+    key: 'underlay_shingle',
+    title: 'Underlayment',
+    orderTypes: ['shingle'],
+    options: MATERIAL_ORDER_UNDERLAY_SHINGLE,
+    addLabel: 'underlayment',
+  },
+  {
+    key: 'underlay_tile',
+    title: 'Tile underlayment',
+    orderTypes: ['tile'],
+    options: MATERIAL_ORDER_UNDERLAY_TILE,
+    addLabel: 'underlayment',
+  },
+  {
+    key: 'starter',
+    title: 'Starter',
+    orderTypes: ['shingle'],
+    options: MATERIAL_ORDER_STARTER,
+    addLabel: 'starter',
+  },
+  {
+    key: 'field_shingles',
+    title: 'Shingles',
+    orderTypes: ['shingle'],
+    options: MATERIAL_ORDER_FIELD_SHINGLES,
+    addLabel: 'shingle',
+  },
+  {
+    key: 'hip_ridge',
+    title: 'Hip & ridge',
+    orderTypes: ['shingle'],
+    options: MATERIAL_ORDER_HIP_RIDGE,
+    addLabel: 'hip & ridge',
+  },
+  {
+    key: 'field_tile',
+    title: 'Tile',
+    orderTypes: ['tile'],
+    options: MATERIAL_ORDER_FIELD_TILE,
+    addLabel: 'tile',
+  },
+  {
+    key: 'tile_hip_ridge',
+    title: 'Tile hip & ridge',
+    orderTypes: ['tile'],
+    options: MATERIAL_ORDER_TILE_HIP_RIDGE,
+    addLabel: 'tile hip & ridge',
+  },
+  {
+    key: 'tile_accessories',
+    title: 'Tile accessories & mortar',
+    orderTypes: ['tile'],
+    options: MATERIAL_ORDER_TILE_ACCESSORIES,
+    addLabel: 'tile accessory',
+  },
+  {
+    key: 'mb_sa',
+    title: 'Modified bitumen / SA',
+    orderTypes: ['flat'],
+    options: MATERIAL_ORDER_MB,
+    addLabel: 'MB / SA',
+  },
+  {
+    key: 'vents',
+    title: 'Vents',
+    orderTypes: ['shingle', 'tile', 'flat'],
+    options: MATERIAL_ORDER_VENTS,
+    addLabel: 'vent',
+  },
+  {
+    key: 'pipe_jacks',
+    title: 'Pipe jacks',
+    orderTypes: ['shingle', 'tile', 'flat'],
+    options: MATERIAL_ORDER_PIPE_JACKS,
+    addLabel: 'pipe jack',
+  },
+  {
+    key: 'flashing',
+    title: 'Flashing & valleys',
+    orderTypes: ['shingle', 'tile', 'flat'],
+    options: MATERIAL_ORDER_FLASHING,
+    addLabel: 'flashing',
+  },
+  {
+    key: 'drip',
+    title: 'Drip edge',
+    orderTypes: ['shingle', 'tile', 'flat'],
+    options: MATERIAL_ORDER_DRIP,
+    addLabel: 'drip edge',
+  },
+  {
+    key: 'fasteners',
+    title: 'Fasteners',
+    orderTypes: ['shingle', 'tile', 'flat'],
+    options: MATERIAL_ORDER_FASTENERS,
+    addLabel: 'fastener',
+  },
+  {
+    key: 'coating_foam',
+    title: 'Coatings & foam mats',
+    orderTypes: ['flat'],
+    options: MATERIAL_ORDER_COATING_FOAM,
+    addLabel: 'coating / foam',
+  },
+  {
+    key: 'accessories',
+    title: 'Cements & accessories',
+    orderTypes: ['shingle', 'tile', 'flat'],
+    options: MATERIAL_ORDER_ACCESSORIES,
+    addLabel: 'accessory',
+  },
+  {
+    key: 'decking',
+    title: 'Miller — decking',
+    orderTypes: ['shingle', 'tile', 'flat'],
+    options: MATERIAL_ORDER_DECKING,
+    addLabel: 'decking',
+  },
+  {
+    key: 'fascia_mold',
+    title: 'Miller — fascia & mold',
+    orderTypes: ['shingle', 'tile'],
+    options: MATERIAL_ORDER_FASCIA_MOLD,
+    addLabel: 'fascia / mold',
+  },
+];
+
+/**
+ * AccuLynx-style install / order template sequence per roof system.
+ * ice_water sits early on shingle but after MB layers on flat.
+ */
+const MATERIAL_ORDER_SEQUENCE: Record<MaterialOrderType, string[]> = {
+  shingle: [
+    'ice_water',
+    'underlay_shingle',
+    'starter',
+    'field_shingles',
+    'hip_ridge',
+    'vents',
+    'pipe_jacks',
+    'flashing',
+    'drip',
+    'fasteners',
+    'accessories',
+    'decking',
+    'fascia_mold',
+  ],
+  tile: [
+    'underlay_tile',
+    'field_tile',
+    'tile_hip_ridge',
+    'tile_accessories',
+    'vents',
+    'pipe_jacks',
+    'flashing',
+    'drip',
+    'fasteners',
+    'accessories',
+    'decking',
+    'fascia_mold',
+  ],
+  flat: [
+    'mb_sa',
+    'ice_water',
+    'drip',
+    'flashing',
+    'pipe_jacks',
+    'vents',
+    'fasteners',
+    'coating_foam',
+    'accessories',
+    'decking',
+  ],
+};
+
+const MATERIAL_ORDER_SKU_INDEX: MaterialOrderSku[] = (() => {
+  const map = new Map<string, MaterialOrderSku>();
+  for (const section of MATERIAL_ORDER_SECTIONS) {
+    for (const opt of section.options) {
+      if (!map.has(opt.key)) map.set(opt.key, opt);
+    }
+  }
+  return Array.from(map.values());
+})();
+
+function materialOrderSectionsFor(
+  orderType: MaterialOrderType
+): MaterialOrderSection[] {
+  const byKey = new Map(
+    MATERIAL_ORDER_SECTIONS.filter((s) =>
+      s.orderTypes.includes(orderType)
+    ).map((s) => [s.key, s])
+  );
+  const ordered: MaterialOrderSection[] = [];
+  for (const key of MATERIAL_ORDER_SEQUENCE[orderType]) {
+    const sec = byKey.get(key);
+    if (sec) {
+      ordered.push(sec);
+      byKey.delete(key);
+    }
+  }
+  // Any catalog section missing from the sequence still renders (append).
+  for (const sec of byKey.values()) ordered.push(sec);
+  return ordered;
+}
+
+function newTakeoffSkuLine(skuKey = '', qty = '1'): TakeoffSkuLine {
+  return {
+    id: `tl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+    skuKey,
+    qty,
+  };
+}
+
+function newTakeoffSkylightLine(size = '', qty = '1'): TakeoffSkylightLine {
+  return {
+    id: `sk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+    size,
+    qty,
+  };
+}
+
+function catalogLabel(skuKey: string): string {
+  if (!skuKey) return '';
+  return (
+    PIPE_JACK_CATALOG.find((p) => p.key === skuKey)?.label ||
+    VENT_CATALOG.find((v) => v.key === skuKey)?.label ||
+    MATERIAL_ORDER_SKU_INDEX.find((m) => m.key === skuKey)?.label ||
+    skuKey
+  );
+}
+
+function catalogFallbackCost(skuKey: string): number {
+  if (!skuKey) return 0;
+  const orderSku = MATERIAL_ORDER_SKU_INDEX.find((m) => m.key === skuKey);
+  return (
+    PIPE_JACK_CATALOG.find((p) => p.key === skuKey)?.cost ||
+    VENT_CATALOG.find((v) => v.key === skuKey)?.cost ||
+    (orderSku?.cost != null && orderSku.cost > 0 ? orderSku.cost : 0) ||
+    getPricingGuideCost(skuKey) ||
+    0
+  );
+}
+
+/** Order / pricing unit for a SKU (e.g. /sq, /bdl, /roll, /ea). Never "?". */
+function catalogUnit(skuKey: string): string {
+  if (!skuKey) return '';
+  const orderSku = MATERIAL_ORDER_SKU_INDEX.find((m) => m.key === skuKey);
+  if (orderSku?.unit) return orderSku.unit;
+  const pipe = PIPE_JACK_CATALOG.find((p) => p.key === skuKey);
+  if (pipe) return pipe.unit || '/ea';
+  const vent = VENT_CATALOG.find((v) => v.key === skuKey);
+  if (vent) {
+    if (skuKey === 'ridge_vent') return '/LF';
+    return vent.unit || '/ea';
+  }
+  for (const section of PRICING_GUIDE) {
+    const row = section.rows.find((r) => r.key === skuKey);
+    if (row?.unit) return row.unit;
+  }
+  return '';
+}
+
+type OrderCoverageKind =
+  | 'sq_to_bundle'
+  | 'lf_to_bundle'
+  | 'sq_to_roll'
+  | 'lf_to_piece';
+
+/**
+ * Coverage-calculator lookup — real-world measurement (squares or LF) →
+ * supplier ordering unit (bundle / roll / piece). `perUnit` meaning depends
+ * on `kind`: bundles-per-sq for `sq_to_bundle`; otherwise LF-or-sq consumed
+ * by ONE ordering unit (LF/bdl, sq/roll, LF/piece).
+ *
+ * `approx: true` = coverage is not manufacturer/supplier-confirmed for this
+ * exact SKU — the UI must show a "≈ confirm coverage" note so it's never
+ * mistaken for a locked, verified number.
+ */
+type OrderCoverage = {
+  kind: OrderCoverageKind;
+  perUnit: number;
+  approx?: boolean;
+};
+
+/**
+ * Bundles/sq. 3/sq confirmed manufacturer/industry standard for these
+ * architectural laminate lines. Armourshake 5/sq is derivable directly from
+ * app data ($46/bdl × 5 = $230/sq, matches SHINGLE_COST_PER_SQ.armourshake).
+ * Malarkey Vista confirmed via manufacturer TDS (SKU 251 — 66 shingles /
+ * 3 bundles per square).
+ */
+const FIELD_SHINGLE_BDL_PER_SQ: Partial<
+  Record<ShingleType, { perUnit: number; approx?: boolean }>
+> = {
+  cambridge: { perUnit: 3 },
+  dynasty: { perUnit: 3 },
+  armourshake: { perUnit: 5 },
+  gaf_hdz: { perUnit: 3 },
+  gaf_natural_shadow: { perUnit: 3 },
+  owens_oakridge: { perUnit: 3 },
+  owens_duration: { perUnit: 3 },
+  owens_duration_designer: { perUnit: 3 },
+  certainteed_landmark: { perUnit: 3 },
+  certainteed_patriot_xl: { perUnit: 3 },
+  malarkey_highlander: { perUnit: 3 },
+  malarkey_vista: { perUnit: 3 },
+};
+
+/** LF/bundle — manufacturer TDS-confirmed except where flagged approx. */
+const HIP_RIDGE_LF_PER_BDL: Record<
+  string,
+  { perUnit: number; approx?: boolean }
+> = {
+  // GAF Seal-A-Ridge: 4 bdl = 100 LF (TDS)
+  hip_ridge_gaf: { perUnit: 25 },
+  // CertainTeed Shadow Ridge, English 12"×36" (Metric version = 45 LF/bdl alt)
+  hip_ridge_ct_shadow: { perUnit: 30 },
+  // IKO Hip & Ridge 12: 26 shingles × 3 pieces = 78 caps (TDS)
+  hip_ridge_iko_std: { perUnit: 36.5 },
+  // Not independently confirmed — placeholder (typical high-profile range 20-25 LF)
+  hip_ridge_iko_ultra: { perUnit: 25, approx: true },
+  // Owens Corning DecoRidge, 30 pc/carton = 20 LF (8" and 10" versions, TDS)
+  hip_ridge_oc_decoridge: { perUnit: 20 },
+  // Malarkey RidgeFlex 12" (SKU 227) = 30'11"; 10" model (SKU 225) = 41.25 LF/bdl alt
+  hip_ridge_malarkey: { perUnit: 30.92 },
+};
+
+/**
+ * LF/bundle — GAF/IKO(base)/OC values are TDS-confirmed. IKO Armour Starter
+ * is Joe-confirmed from his own supplier price list (see
+ * docs/pricing/SRS_Supplier_Price_List_Combined_2026.md — $137/bdl · 70 LF/bdl).
+ * CT/Malarkey/TopShield/Tamko coverage isn't independently verified
+ * per-brand — flagged approx with an industry-neighborhood default.
+ */
+const STARTER_LF_PER_BDL: Record<
+  string,
+  { perUnit: number; approx?: boolean }
+> = {
+  // GAF Pro-Start (TDS)
+  starter_gaf: { perUnit: 120.33 },
+  // IKO Leading Edge, 16 shingles / 32 strips (TDS)
+  starter_iko: { perUnit: 109 },
+  // Joe-confirmed: $137/bdl · 70 LF/bdl (eaves only, Armourshake roofs)
+  starter_iko_armour: { perUnit: 70 },
+  // Owens Corning Starter Strip Plus (TDS)
+  starter_oc: { perUnit: 105 },
+  starter_ct: { perUnit: 105, approx: true },
+  starter_malarkey: { perUnit: 105, approx: true },
+  starter_topshield: { perUnit: 105, approx: true },
+  starter_tamko: { perUnit: 105, approx: true },
+};
+
+/** Drip edge — 10 LF/piece is a near-universal industry-standard stick length. */
+const DRIP_EDGE_LF_PER_PIECE = 10;
+
+/** Extracts roll coverage (sq) from a label like "TopShield Synthetic (10 sq)". */
+function parseSqFromLabel(label: string): number | null {
+  const m = label.match(/(\d+(?:\.\d+)?)\s*sq\b/i);
+  return m ? parseFloat(m[1]) : null;
+}
+
+/**
+ * Coverage-calculator lookup for a material order line. Returns null when
+ * the SKU has no real-world-measurement calculator (most SKUs — fasteners,
+ * flashing, vents, pipe jacks, etc. order directly in supplier units).
+ */
+function orderCoverageFor(skuKey: string): OrderCoverage | null {
+  if (!skuKey) return null;
+
+  const shingle = FIELD_SHINGLE_BDL_PER_SQ[skuKey as ShingleType];
+  if (shingle) {
+    return {
+      kind: 'sq_to_bundle',
+      perUnit: shingle.perUnit,
+      approx: shingle.approx,
+    };
+  }
+
+  const starter = STARTER_LF_PER_BDL[skuKey];
+  if (starter) {
+    return {
+      kind: 'lf_to_bundle',
+      perUnit: starter.perUnit,
+      approx: starter.approx,
+    };
+  }
+
+  const hipRidge = HIP_RIDGE_LF_PER_BDL[skuKey];
+  if (hipRidge) {
+    return {
+      kind: 'lf_to_bundle',
+      perUnit: hipRidge.perUnit,
+      approx: hipRidge.approx,
+    };
+  }
+
+  const underlay = [
+    ...MATERIAL_ORDER_UNDERLAY_SHINGLE,
+    ...MATERIAL_ORDER_UNDERLAY_TILE,
+    ...MATERIAL_ORDER_ICE_WATER,
+  ].find((u) => u.key === skuKey);
+  if (underlay) {
+    const parsedSq = parseSqFromLabel(underlay.label);
+    // Parsed values are Joe's real supplier sheet coverage — trust as-is.
+    // Fallback (no parseable coverage, e.g. plain felt) is a guess — flag approx.
+    return parsedSq != null
+      ? { kind: 'sq_to_roll', perUnit: parsedSq }
+      : { kind: 'sq_to_roll', perUnit: 10, approx: true };
+  }
+
+  if (MATERIAL_ORDER_DRIP.some((d) => d.key === skuKey)) {
+    return { kind: 'lf_to_piece', perUnit: DRIP_EDGE_LF_PER_PIECE };
+  }
+
+  return null;
+}
+
+/** Ordering-unit qty from a real-world measurement value, per `coverage`. */
+function coverageComputeQty(coverage: OrderCoverage, value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return coverage.kind === 'sq_to_bundle'
+    ? Math.ceil(value * coverage.perUnit)
+    : Math.ceil(value / coverage.perUnit);
+}
+
+/** Short label for the coverage-calculator toggle button. */
+function coverageCalcButtonLabel(kind: OrderCoverageKind): string {
+  return kind === 'sq_to_bundle' || kind === 'sq_to_roll'
+    ? 'Calc from sq'
+    : 'Calc from LF';
+}
+
+function normalizeTakeoffSkuLines(raw: unknown): TakeoffSkuLine[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((row) => {
+      if (!row || typeof row !== 'object') return null;
+      const r = row as Record<string, unknown>;
+      const skuKey = String(r.skuKey ?? r.key ?? '');
+      const qty = String(r.qty ?? r.quantity ?? '1');
+      const id =
+        typeof r.id === 'string' && r.id
+          ? r.id
+          : newTakeoffSkuLine(skuKey, qty).id;
+      return { id, skuKey, qty } as TakeoffSkuLine;
+    })
+    .filter(Boolean) as TakeoffSkuLine[];
+}
+
+function normalizeTakeoffSkylightLines(raw: unknown): TakeoffSkylightLine[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((row) => {
+      if (!row || typeof row !== 'object') return null;
+      const r = row as Record<string, unknown>;
+      const size = String(r.size ?? '');
+      const qty = String(r.qty ?? r.quantity ?? '1');
+      const id =
+        typeof r.id === 'string' && r.id
+          ? r.id
+          : newTakeoffSkylightLine(size, qty).id;
+      return { id, size, qty } as TakeoffSkylightLine;
+    })
+    .filter(Boolean) as TakeoffSkylightLine[];
+}
+
 const emptyTakeoff = (): TakeoffSheet => ({
-  roofTypeLayers: '',
-  pipeJacks: '',
-  turtleVents: '',
-  powerAtticVents: '',
-  windTurbines: '',
+  roofType: '',
+  roofLayers: '',
+  pitch: '',
+  stories: '',
+  pipeJackLines: [],
+  ventLines: [],
   ridgeVent: '',
   roofExhaustCap: '',
-  hvacVent: '',
+  hvacCount: '',
   hvacMount: '',
   chimneyFlashing: '',
+  chimneyFlashingSize: '',
   soffitOverhang: '',
-  satelliteDish: '',
+  soffitOverhangUnit: '',
+  satelliteDishCount: '',
+  satelliteDishDr: '',
   electricalMast: '',
-  skylights: '',
+  skylightLines: [],
   dripEdgeGutterApron: '',
-  iceAndWaterShield: '',
   valleyLiner: '',
   drywallSf: '',
   paintingSf: '',
@@ -1018,6 +2564,177 @@ const emptyTakeoff = (): TakeoffSheet => ({
   ceilingFans: '',
   notes: '',
 });
+
+/** Normalize persisted takeoff; migrate legacy free-text vent/pipe fields into notes. */
+function normalizeTakeoff(raw: unknown): TakeoffSheet {
+  const empty = emptyTakeoff();
+  if (!raw || typeof raw !== 'object') return empty;
+  const r = raw as Record<string, unknown>;
+
+  const pipeJackLines = normalizeTakeoffSkuLines(r.pipeJackLines);
+  const ventLines = normalizeTakeoffSkuLines(r.ventLines);
+
+  const legacyBits: string[] = [];
+  const pushLegacy = (label: string, value: unknown) => {
+    if (typeof value === 'string' && value.trim()) {
+      legacyBits.push(`${label}: ${value.trim()}`);
+    }
+  };
+
+  if (pipeJackLines.length === 0) pushLegacy('Pipe jacks (legacy)', r.pipeJacks);
+  if (ventLines.length === 0) {
+    pushLegacy('Turtle vents (legacy)', r.turtleVents);
+    pushLegacy('Power attic vents (legacy)', r.powerAtticVents);
+    pushLegacy('Wind turbines (legacy)', r.windTurbines);
+  }
+
+  const roofType = String(r.roofType ?? '');
+  const roofLayers = String(r.roofLayers ?? '');
+  if (!roofType.trim() && !roofLayers.trim()) {
+    pushLegacy('Roof type & layers (legacy)', r.roofTypeLayers);
+  }
+
+  let hvacCount = String(r.hvacCount ?? '');
+  if (!hvacCount.trim() && typeof r.hvacVent === 'string' && r.hvacVent.trim()) {
+    const n = parseFloat(r.hvacVent);
+    if (Number.isFinite(n) && n > 0) hvacCount = String(n);
+    else pushLegacy('HVAC vent (legacy)', r.hvacVent);
+  }
+
+  let skylightLines = normalizeTakeoffSkylightLines(r.skylightLines);
+  if (skylightLines.length === 0) {
+    const legacyCount = String(r.skylightCount ?? '');
+    const n = parseFloat(legacyCount);
+    if (Number.isFinite(n) && n > 0) {
+      skylightLines = [newTakeoffSkylightLine('', String(n))];
+    } else if (typeof r.skylights === 'string' && r.skylights.trim()) {
+      const n2 = parseFloat(r.skylights);
+      if (Number.isFinite(n2) && n2 > 0) {
+        skylightLines = [newTakeoffSkylightLine('', String(n2))];
+      } else {
+        pushLegacy('Skylights (legacy)', r.skylights);
+      }
+    }
+  }
+
+  let satelliteDishCount = String(r.satelliteDishCount ?? '');
+  let satelliteDishDr = String(r.satelliteDishDr ?? '');
+  if (!satelliteDishCount.trim() && !satelliteDishDr.trim()) {
+    const legacyDish = String(r.satelliteDish ?? '');
+    if (legacyDish === 'Yes') {
+      satelliteDishCount = '1';
+      satelliteDishDr = 'Yes';
+    } else if (legacyDish === 'No') {
+      satelliteDishDr = 'No';
+    }
+  }
+
+  pushLegacy('Ice & water shield (legacy)', r.iceAndWaterShield);
+
+  let notes = String(r.notes ?? '');
+  if (legacyBits.length > 0 && !notes.includes('(legacy)')) {
+    notes = [notes, ...legacyBits].filter(Boolean).join('\n');
+  }
+
+  return {
+    ...empty,
+    roofType,
+    roofLayers,
+    pitch: String(r.pitch ?? ''),
+    stories: String(r.stories ?? ''),
+    pipeJackLines,
+    ventLines,
+    ridgeVent: String(r.ridgeVent ?? ''),
+    roofExhaustCap: String(r.roofExhaustCap ?? ''),
+    hvacCount,
+    hvacMount: String(r.hvacMount ?? ''),
+    chimneyFlashing: String(r.chimneyFlashing ?? ''),
+    chimneyFlashingSize: String(r.chimneyFlashingSize ?? ''),
+    soffitOverhang: String(r.soffitOverhang ?? ''),
+    soffitOverhangUnit: String(r.soffitOverhangUnit ?? ''),
+    satelliteDishCount,
+    satelliteDishDr,
+    electricalMast: String(r.electricalMast ?? ''),
+    skylightLines,
+    dripEdgeGutterApron: String(r.dripEdgeGutterApron ?? ''),
+    valleyLiner: String(r.valleyLiner ?? ''),
+    drywallSf: String(r.drywallSf ?? ''),
+    paintingSf: String(r.paintingSf ?? ''),
+    ceilingHeight: String(r.ceilingHeight ?? ''),
+    ceilingFans: String(r.ceilingFans ?? ''),
+    notes,
+  };
+}
+
+function formatTakeoffFieldValue(
+  key: keyof TakeoffSheet,
+  sheet: TakeoffSheet
+): string {
+  if (key === 'roofType') {
+    const bits = [
+      takeoffRoofTypeLabel(sheet.roofType),
+      sheet.roofLayers
+        ? `${sheet.roofLayers} layer${sheet.roofLayers === '1' ? '' : 's'}`
+        : '',
+    ].filter(Boolean);
+    return bits.length ? bits.join(', ') : '—';
+  }
+  if (key === 'chimneyFlashing') {
+    const bits = [sheet.chimneyFlashing, sheet.chimneyFlashingSize].filter(
+      Boolean
+    );
+    return bits.length ? bits.join(' · ') : '—';
+  }
+  if (key === 'pipeJackLines') {
+    if (!sheet.pipeJackLines.length) return '—';
+    return sheet.pipeJackLines
+      .map((l) => {
+        const q = l.qty || '0';
+        const label = catalogLabel(l.skuKey) || '(no product)';
+        return `${q}× ${label}`;
+      })
+      .join('; ');
+  }
+  if (key === 'ventLines') {
+    if (!sheet.ventLines.length) return '—';
+    return sheet.ventLines
+      .map((l) => {
+        const q = l.qty || '0';
+        const label = catalogLabel(l.skuKey) || '(no product)';
+        return `${q}× ${label}`;
+      })
+      .join('; ');
+  }
+  if (key === 'skylightLines') {
+    if (!sheet.skylightLines.length) return '—';
+    return sheet.skylightLines
+      .map((l) => {
+        const q = l.qty || '0';
+        return l.size ? `${q}× ${l.size}` : `${q}×`;
+      })
+      .join('; ');
+  }
+  if (key === 'satelliteDishCount') {
+    const bits = [
+      sheet.satelliteDishCount ? `${sheet.satelliteDishCount} dish(es)` : '',
+      sheet.satelliteDishDr ? `D&R: ${sheet.satelliteDishDr}` : '',
+    ].filter(Boolean);
+    return bits.length ? bits.join(' · ') : '—';
+  }
+  if (key === 'soffitOverhang') {
+    if (!sheet.soffitOverhang.trim()) return '—';
+    const unit =
+      sheet.soffitOverhangUnit === 'in'
+        ? 'in'
+        : sheet.soffitOverhangUnit === 'lf'
+        ? 'LF'
+        : '';
+    return unit ? `${sheet.soffitOverhang} ${unit}` : sheet.soffitOverhang;
+  }
+  const v = sheet[key];
+  if (typeof v === 'string') return v.trim() || '—';
+  return '—';
+}
 
 /** Lead photos: prefer Supabase Storage `url`; legacy `dataUrl` still displays. */
 type LeadPhoto = {
@@ -1646,6 +3363,227 @@ const REGION_LABEL: Record<PricingRegion, string> = {
   northern: 'Northern',
 };
 
+/** Crew market rate — number, N/A (not offered), or CBC (call before commit). */
+type CrewMarketRate = number | 'N/A' | 'CBC';
+
+type CrewRosterEntry = {
+  id: string;
+  name: string;
+  contact: string;
+  phone: string;
+  preferred?: boolean;
+  /** Shingle / mod-bit labor $/sq by market (Phoenix / Tucson / North). */
+  shingle: Record<PricingRegion, CrewMarketRate>;
+  /** Known labor adders for this crew only — never invent foam. */
+  adders?: { label: string; value: string }[];
+  notes?: string;
+};
+
+/**
+ * Preferred + book crews from ProWest Crew Rates 2026 / PRICING_GUIDE.
+ * Foam crews omitted from picker rates (no invented foam costs).
+ */
+const CREW_ROSTER: CrewRosterEntry[] = [
+  {
+    id: 'maldonado',
+    name: 'Maldonado Roofing',
+    contact: 'Manuel Maldonado',
+    phone: '915-252-2646',
+    preferred: true,
+    shingle: { central: 100, southern: 'N/A', northern: 110 },
+    notes: 'Preferred default',
+  },
+  {
+    id: 'crown_royal',
+    name: 'Crown Royal Roofing',
+    contact: 'Sammy',
+    phone: '626-679-7194',
+    preferred: true,
+    shingle: { central: 100, southern: 100, northern: 100 },
+    adders: [
+      { label: 'Plywood', value: '$20/sheet' },
+      { label: 'Fascia & mold', value: '$4/LF' },
+      { label: 'Double layer', value: '+$20/sq' },
+    ],
+    notes: 'Sammy · preferred',
+  },
+  {
+    id: 'delgado',
+    name: 'Delgado',
+    contact: 'Jesus Delgado',
+    phone: '573-281-9441',
+    shingle: { central: 100, southern: 120, northern: 120 },
+  },
+  {
+    id: 'mile_high',
+    name: 'Mile High',
+    contact: 'Pancho Raigoza',
+    phone: '303-995-6983',
+    shingle: { central: 95, southern: 'N/A', northern: 110 },
+  },
+  {
+    id: 'ez',
+    name: 'EZ',
+    contact: 'Sergio Quintanar',
+    phone: '623-349-2515',
+    shingle: { central: 100, southern: 110, northern: 110 },
+  },
+  {
+    id: 'trc',
+    name: 'TRC',
+    contact: 'Josue Mtz',
+    phone: '520-313-1641',
+    shingle: { central: 110, southern: 110, northern: 130 },
+  },
+  {
+    id: 'crew_const',
+    name: 'Crew Const',
+    contact: 'George Galvin',
+    phone: '602-789-4358',
+    shingle: { central: 105, southern: 120, northern: 120 },
+  },
+  {
+    id: 'jj',
+    name: 'JJ',
+    contact: 'Joell Jaquez',
+    phone: '602-471-3715',
+    shingle: { central: 100, southern: 115, northern: 115 },
+  },
+  {
+    id: 'blueprint',
+    name: 'BluePrint',
+    contact: 'Daniel Romero',
+    phone: '520-548-9949',
+    shingle: { central: 'N/A', southern: 130, northern: 'N/A' },
+  },
+  {
+    id: 'gm',
+    name: 'G&M',
+    contact: 'Gerry Busta',
+    phone: '520-336-1261',
+    shingle: { central: 120, southern: 100, northern: 140 },
+  },
+  {
+    id: 'spearhead',
+    name: 'Spearhead',
+    contact: 'Joe Jasso',
+    phone: '480-979-2349',
+    shingle: { central: 95, southern: 130, northern: 'N/A' },
+    notes: 'Prefers per-job quote',
+  },
+  {
+    id: 'my_way',
+    name: 'My Way',
+    contact: 'Jesus Lugo',
+    phone: '520-260-3276',
+    shingle: { central: 'N/A', southern: 100, northern: 'N/A' },
+  },
+  {
+    id: 'gleason',
+    name: 'Gleason',
+    contact: 'Joshua Hardin',
+    phone: '336-306-3380',
+    shingle: { central: 100, southern: 120, northern: 125 },
+  },
+  {
+    id: 'rosales',
+    name: 'Rosales',
+    contact: 'Chris Rosales Jr',
+    phone: '480-749-8089',
+    shingle: { central: 110, southern: 120, northern: 120 },
+  },
+  {
+    id: 'aci',
+    name: 'ACI',
+    contact: '—',
+    phone: '',
+    shingle: { central: 105, southern: 120, northern: 120 },
+  },
+  {
+    id: 'nailed_it',
+    name: 'Nailed It',
+    contact: 'Hugo / Victor Rivera',
+    phone: '928-310-1710',
+    shingle: { central: 130, southern: 'N/A', northern: 110 },
+  },
+];
+
+const LABOR_ADDERS_SUMMARY: { label: string; value: string }[] = [
+  { label: 'Double layer', value: '$20/sq' },
+  { label: 'Plywood / OSB install', value: '$20/sheet' },
+  { label: 'Fascia labor', value: '$4/LF' },
+  { label: 'Shingle mold labor', value: '$4/LF' },
+  { label: 'Ridge vent', value: '$2/LF' },
+  { label: 'Two story', value: '$10/sq' },
+  { label: 'Steep 8/12–9/12', value: '$125/sq base' },
+  { label: 'Steep 10/12–11/12', value: '$175/sq base' },
+  { label: 'Steep 12/12', value: '$250/sq base' },
+];
+
+function formatCrewRate(rate: CrewMarketRate): string {
+  if (rate === 'N/A' || rate === 'CBC') return rate;
+  return `$${rate}/sq`;
+}
+
+function crewById(id: string | undefined | null): CrewRosterEntry | null {
+  if (!id) return null;
+  return CREW_ROSTER.find((c) => c.id === id) || null;
+}
+
+function estimateSystemLabel(est: Estimate): string {
+  const s = est.selectedShingle;
+  if (!s) return '—';
+  if (s === 'tile_dr') return 'Tile D&R';
+  if (s === 'tile_rr') return 'Tile R&R';
+  if (s === 'mod_bitumen') return 'Modified bitumen';
+  if (s === 'full_foam') return 'Full foam';
+  if (s === 'foam_overlay') return 'Foam overlay';
+  if (s === 'elastomeric') return 'Elastomeric coating';
+  if (s === 'silicone') return 'Silicone coating';
+  if (s === 'urethane') return 'Urethane coating';
+  if (s === 'coating') return 'Coating';
+  if (s === 'bur') return 'Built-up (BUR)';
+  if (s === 'sa_underlayment') return 'SA underlayment';
+  const prod = SHINGLE_PRODUCTS.find((p) => p.key === s);
+  return prod?.label || s;
+}
+
+function steepLabelFromPitch(pitch: string): string {
+  const pt = pitch || '';
+  if (pt === '8/12' || pt === '9/12') return '8/12–9/12 ($125/sq labor base)';
+  if (pt === '10/12' || pt === '11/12') return '10/12–11/12 ($175/sq labor base)';
+  if (pt === '12/12') return '12/12 ($250/sq labor base)';
+  return 'No';
+}
+
+function deckingLabel(est: Estimate): string {
+  if (est.deckingMode === 'full') {
+    const sheets =
+      est.deckingSheets ||
+      est.deckingOsbSheets ||
+      est.deckingCdxSheets ||
+      '';
+    return sheets ? `Full redeck · ${sheets} sheets` : 'Full redeck';
+  }
+  if (est.deckingMode === 'repair') {
+    const parts: string[] = ['Repair'];
+    if (est.deckingOsbSheets) parts.push(`${est.deckingOsbSheets} OSB`);
+    if (est.deckingCdxSheets) parts.push(`${est.deckingCdxSheets} CDX`);
+    if (
+      est.deckingSheets &&
+      !est.deckingOsbSheets &&
+      !est.deckingCdxSheets
+    ) {
+      parts.push(`${est.deckingSheets} sheets`);
+    }
+    return parts.join(' · ');
+  }
+  const sheets =
+    est.deckingSheets || est.deckingOsbSheets || est.deckingCdxSheets;
+  if (sheets) return `${sheets} sheets`;
+  return 'No';
+}
+
 /** Single 6-stage pipeline used on home, kanban, and lead profile. */
 type PipelineStage =
   | 'Lead'
@@ -1778,6 +3716,7 @@ type ProfileTab =
   | 'photos'
   | 'documents'
   | 'takeoff'
+  | 'orders'
   | 'financial';
 
 /** Extra people on a job (spouse, co-owner, etc.) beyond primary client. */
@@ -2061,6 +4000,8 @@ type Lead = {
   calendarSyncedAt?: string;
   /** Supabase `leads.id` (uuid) when synced to cloud */
   supabaseId?: string;
+  /** Assigned install crew id from CREW_ROSTER (Orders → Labor step) */
+  assignedCrew?: string;
 };
 
 /**
@@ -2142,7 +4083,7 @@ function normalizeLead(raw: Partial<Lead> & { clientJobNumber?: string }): Lead 
     trash: Array.isArray(raw.trash) ? (raw.trash as LeadTrashItem[]) : [],
     takeoff:
       raw.takeoff && typeof raw.takeoff === 'object'
-        ? { ...emptyTakeoff(), ...raw.takeoff }
+        ? normalizeTakeoff(raw.takeoff)
         : null,
     measurements: Array.isArray(raw.measurements)
       ? (raw.measurements
@@ -2156,6 +4097,10 @@ function normalizeLead(raw: Partial<Lead> & { clientJobNumber?: string }): Lead 
     calendarHtmlLink: raw.calendarHtmlLink,
     calendarSyncedAt: raw.calendarSyncedAt,
     supabaseId: raw.supabaseId,
+    assignedCrew:
+      typeof raw.assignedCrew === 'string' && raw.assignedCrew.trim()
+        ? raw.assignedCrew.trim()
+        : undefined,
   };
 }
 
@@ -2302,7 +4247,12 @@ function estimateContentKey(est: Partial<Estimate>): string {
     normEstimateField(est.cambridgeColor),
     normEstimateField(est.dynastyColor),
     normEstimateField(est.armourshakeColor),
+    normEstimateField(est.hipRidgeChoice),
+    normEstimateField(est.starterChoice),
+    normEstimateField(est.iceWaterChoice),
     normEstimateField(est.selectedUnderlayment),
+    normEstimateField(est.mbCapChoice),
+    normEstimateField(est.mbBaseChoice),
     normEstimateField(est.fasciaMode),
     normEstimateField(est.deckingMode),
     normEstimateField(est.fasciaType),
@@ -2501,6 +4451,7 @@ function mapAppLeadToDb(lead: Lead) {
     clientNumericId: lead.id,
     // estimates live in `estimates` table; keep a denormalized copy in details if useful
     estimates: lead.estimates || [],
+    assignedCrew: lead.assignedCrew || '',
   };
 
   return {
@@ -2760,7 +4711,7 @@ function mapDbLeadToApp(row: Record<string, unknown>): Lead {
     trash: Array.isArray(d.trash) ? (d.trash as LeadTrashItem[]) : [],
     takeoff:
       d.takeoff && typeof d.takeoff === 'object'
-        ? { ...emptyTakeoff(), ...(d.takeoff as TakeoffSheet) }
+        ? normalizeTakeoff(d.takeoff)
         : null,
     measurements: Array.isArray(row.measurements)
       ? (row.measurements as RoofMeasurement[])
@@ -2781,6 +4732,10 @@ function mapDbLeadToApp(row: Record<string, unknown>): Lead {
     calendarSyncedAt: d.calendarSyncedAt
       ? String(d.calendarSyncedAt)
       : undefined,
+    assignedCrew:
+      typeof d.assignedCrew === 'string' && d.assignedCrew.trim()
+        ? String(d.assignedCrew).trim()
+        : undefined,
     date: createdAt
       ? new Date(String(createdAt)).toLocaleDateString()
       : new Date().toLocaleDateString(),
@@ -2862,7 +4817,12 @@ export default function SummitApp() {
   const [cambridgeColor, setCambridgeColor] = useState('');
   const [dynastyColor, setDynastyColor] = useState('');
   const [armourshakeColor, setArmourshakeColor] = useState('');
+  const [hipRidgeChoice, setHipRidgeChoice] = useState<HipRidgeChoice>('');
+  const [starterChoice, setStarterChoice] = useState<StarterChoice>('');
+  const [iceWaterChoice, setIceWaterChoice] = useState<IceWaterChoice>('');
   const [selectedUnderlayment, setSelectedUnderlayment] = useState<Underlayment>('');
+  const [mbCapChoice, setMbCapChoice] = useState('');
+  const [mbBaseChoice, setMbBaseChoice] = useState('');
   const [tileMode, setTileMode] = useState<'dr' | 'rr' | ''>('');
   const [tileProduct, setTileProduct] = useState('');
   const [tileBrand, setTileBrand] = useState('');
@@ -2870,7 +4830,7 @@ export default function SummitApp() {
   const [fasciaMode, setFasciaMode] = useState<FasciaMode>('');
   const [deckingMode, setDeckingMode] = useState<DeckingMode>('');
   const [fasciaType, setFasciaType] = useState<FasciaType>('');
-  const [stories, setStories] = useState<'1' | '2' | ''>('');
+  const [stories, setStories] = useState<'1' | '2' | '3' | ''>('');
   const [squares, setSquares] = useState('');
   const [layers, setLayers] = useState('');
   const [waste, setWaste] = useState('');
@@ -2897,6 +4857,46 @@ export default function SummitApp() {
     null
   );
   const [takeoffForm, setTakeoffForm] = useState<TakeoffSheet>(emptyTakeoff());
+  /** Material Order — type chooser + dropdown lines by section (Orders tab) */
+  const [materialOrderType, setMaterialOrderType] =
+    useState<MaterialOrderType | null>(null);
+  const [materialOrderLines, setMaterialOrderLines] = useState<
+    Record<string, TakeoffSkuLine[]>
+  >({});
+  /** Coverage calculator (sq/LF → qty) — open panel + entered value, by line id */
+  const [materialOrderCoverageInputs, setMaterialOrderCoverageInputs] =
+    useState<Record<string, string>>({});
+  /** Orders workspace: Material Order → Labor (crew + job packet) */
+  const [ordersStep, setOrdersStep] = useState<OrdersStep>('material');
+  /** Labor step — job packet lead (seeded from currentLeadId when step opens) */
+  const [laborLeadId, setLaborLeadId] = useState<number | null>(null);
+  const [laborLeadSearch, setLaborLeadSearch] = useState('');
+  /** Lead profile → Orders tab: same flow as global Orders, job fixed to this lead */
+  const [profileOrderType, setProfileOrderType] =
+    useState<MaterialOrderType | null>(null);
+  const [profileOrderLines, setProfileOrderLines] = useState<
+    Record<string, TakeoffSkuLine[]>
+  >({});
+  const [profileOrderCoverageInputs, setProfileOrderCoverageInputs] =
+    useState<Record<string, string>>({});
+  const [profileOrdersStep, setProfileOrdersStep] =
+    useState<OrdersStep>('material');
+  /** Company Pricing workspace: Labor | Materials */
+  const [companyPricingPane, setCompanyPricingPane] = useState<
+    'labor' | 'materials'
+  >('labor');
+  /** Company Pricing section titles currently expanded (accordion — collapsed by default) */
+  const [expandedPricingSections, setExpandedPricingSections] = useState<
+    Set<string>
+  >(new Set());
+  const togglePricingSection = (title: string) => {
+    setExpandedPricingSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(title)) next.delete(title);
+      else next.add(title);
+      return next;
+    });
+  };
   const [photoDragOver, setPhotoDragOver] = useState(false);
   const [photosUploading, setPhotosUploading] = useState(false);
   const [docsUploading, setDocsUploading] = useState(false);
@@ -3058,7 +5058,7 @@ export default function SummitApp() {
   /** Live sell rates from Supabase `price_sheet` (item_key → price, or item_key__region) */
   const [priceSheet, setPriceSheet] = useState<Record<string, number>>({});
   const [pricesReady, setPricesReady] = useState(false);
-  /** Live cost rates from Supabase `cost_sheet` (item_key → cost) */
+  /** Live cost rates from Supabase cost_sheet_labor + cost_sheet_material */
   const [costSheet, setCostSheet] = useState<Record<string, number>>({});
   const [costsReady, setCostsReady] = useState(false);
   /** Mitigation price sheet (insurance / cash retail) */
@@ -3908,7 +5908,16 @@ export default function SummitApp() {
       setActiveTab('leads');
     }
     if (id === 'takeoff') {
-      setTakeoffForm(emptyTakeoff());
+      // Keep lead takeoff when opening from a lead — don't wipe saved SKUs
+      const lead =
+        currentLeadId != null
+          ? leads.find((l) => l.id === currentLeadId)
+          : null;
+      setTakeoffForm(
+        lead?.takeoff && typeof lead.takeoff === 'object'
+          ? normalizeTakeoff(lead.takeoff)
+          : emptyTakeoff()
+      );
       setTakeoffAssignOpen(false);
       setTakeoffAssignSearch('');
     }
@@ -5400,7 +7409,47 @@ export default function SummitApp() {
     // Legacy single-region rows (plain key)
     const vPlain = priceSheet[itemKey];
     if (vPlain != null && Number(vPlain) > 0) return Number(vPlain);
+    const guide = getPricingGuideSell(itemKey, r);
+    if (guide > 0) return guide;
     return fallback;
+  };
+
+  /**
+   * Steep customer sell = cover only (+$25 / +$75 / +$150).
+   * Ignores legacy price_sheet RFQ ($100/$175/$250) and 20% pad ($30/$90/$180).
+   */
+  const getSteepSellPerSq = (
+    itemKey: 'steep_8_9' | 'steep_9_11' | 'steep_11_12'
+  ): number => {
+    const cover =
+      itemKey === 'steep_8_9' ? 25 : itemKey === 'steep_9_11' ? 75 : 150;
+    const r: PricingRegion = activePricingRegion || 'central';
+    const candidates = [
+      priceSheet[`${itemKey}__${r}`],
+      priceSheet[`${itemKey}__central`],
+      priceSheet[`${itemKey}__phx`],
+      priceSheet[itemKey],
+    ];
+    for (const raw of candidates) {
+      const v = Number(raw);
+      if (!(v > 0)) continue;
+      if (v === 100 || v === 175 || v === 250 || v === 30 || v === 90 || v === 180) {
+        return cover;
+      }
+      return v;
+    }
+    return getPricingGuideSell(itemKey, r) || cover;
+  };
+
+  /**
+   * HVAC D&R sell price. Ignores a known-stale price_sheet override of
+   * $1,250 (pre-2026 rate) so estimates always reflect the current
+   * $1,300 PHX / $1,600 TUC+NORTH pricing unless intentionally re-priced
+   * to a different value.
+   */
+  const getHvacSellPrice = (fallback: number): number => {
+    const live = getSellPrice('hvac', fallback);
+    return live === 1250 ? fallback : live;
   };
 
   const getCost = (
@@ -5410,19 +7459,26 @@ export default function SummitApp() {
   ): number => {
     if (!itemKey) return fallback;
     const r: PricingRegion = region || activePricingRegion || 'central';
-    // Regional → central → all-market materials → plain key → fallback
+    const keys = [itemKey, ...(COST_KEY_ALIASES[itemKey] || [])];
+    // Regional → central → all-market materials → plain key → guide → fallback
     // Treat missing/0 as unknown (do not pretend free)
-    const candidates = [
-      `${itemKey}__${r}`,
-      `${itemKey}__central`,
-      `${itemKey}__all`,
-      itemKey,
-    ];
-    for (const k of candidates) {
-      const v = costSheet[k];
-      if (v != null && Number.isFinite(Number(v)) && Number(v) > 0) {
-        return Number(v);
+    for (const base of keys) {
+      const candidates = [
+        `${base}__${r}`,
+        `${base}__central`,
+        `${base}__all`,
+        base,
+      ];
+      for (const k of candidates) {
+        const v = costSheet[k];
+        if (v != null && Number.isFinite(Number(v)) && Number(v) > 0) {
+          return Number(v);
+        }
       }
+    }
+    for (const base of keys) {
+      const guide = getPricingGuideCost(base);
+      if (guide > 0) return guide;
     }
     return fallback;
   };
@@ -5491,9 +7547,45 @@ export default function SummitApp() {
     const pitchMultiplier = getPitchMultiplier(pt);
     const baseRoofArea = sq * (1 + ws);
     const roofAreaSqFt = sq * 100 * pitchMultiplier * (1 + ws);
-    // Prefer price_sheet keys matching shingle type (cambridge / dynasty / armourshake)
+    // Prefer price_sheet keys matching product; PRICING_GUIDE next.
+    // Never fall back across systems (flat/tile must not inherit Dynasty).
+    const isShingleFieldProduct = SHINGLE_PRODUCTS.some(
+      (p) => p.key === selectedShingle
+    );
+    const shingleSellFallback =
+      selectedShingle === 'armourshake'
+        ? activePricingRegion === 'southern'
+          ? 635
+          : activePricingRegion === 'northern'
+            ? 660
+            : 610
+        : isShingleFieldProduct
+          ? getSellPrice('dynasty', 0)
+          : selectedShingle === 'elastomeric' || selectedShingle === 'coating'
+            ? activePricingRegion === 'central'
+              ? 425
+              : 450
+            : selectedShingle === 'full_foam'
+              ? activePricingRegion === 'central'
+                ? 650
+                : 700
+              : selectedShingle === 'foam_overlay'
+                ? activePricingRegion === 'central'
+                  ? 575
+                  : 625
+                : selectedShingle === 'mod_bitumen'
+                  ? 600
+                  : selectedShingle === 'tile_dr'
+                    ? activePricingRegion === 'central'
+                      ? 500
+                      : 550
+                    : selectedShingle === 'tile_rr'
+                      ? activePricingRegion === 'central'
+                        ? 900
+                        : 950
+                      : 0; // silicone / urethane / bur — Joe / price_sheet only
     const basePerSq = selectedShingle
-      ? getSellPrice(selectedShingle, getSellPrice('dynasty', 0))
+      ? getSellPrice(selectedShingle, shingleSellFallback)
       : getSellPrice('dynasty', 0);
     // Extra layer: central $20/sq · southern/northern $25/sq per layer above 1
     const layerRate = getSellPrice(
@@ -5501,30 +7593,46 @@ export default function SummitApp() {
       activePricingRegion === 'central' ? 20 : 25
     );
     const layerAdder = ly > 1 ? (ly - 1) * layerRate : 0;
-    // Steep (all markets): 8-9 → $100 · 10-11 → $175 · 12 → $250 per sq
+    // Steep sell = cover only (labor delta): 8–9 → +$25 · 10–11 → +$75 · 12 → +$150
     let pitchAdder = 0;
     if (pt === '8/12' || pt === '9/12') {
-      pitchAdder = getSellPrice('steep_8_9', 100);
+      pitchAdder = getSteepSellPerSq('steep_8_9');
     } else if (pt === '10/12' || pt === '11/12') {
-      pitchAdder = getSellPrice('steep_9_11', 175);
+      pitchAdder = getSteepSellPerSq('steep_9_11');
     } else if (pt === '12/12') {
-      pitchAdder = getSellPrice('steep_11_12', 250);
+      pitchAdder = getSteepSellPerSq('steep_11_12');
     }
     let underlaymentAdder = 0;
     const isLowSlope = ['2/12', '3/12'].includes(pt);
+    const uTier = underlaymentTier(selectedUnderlayment);
     if (
       selectedUnderlayment &&
-      (selectedUnderlayment === 'high-temp' ||
-        selectedUnderlayment === 'sa-high-temp' ||
-        isLowSlope)
+      (uTier === 'high-temp' || uTier === 'sa' || isLowSlope)
     ) {
       underlaymentAdder = sq * 8;
       if (isLowSlope) underlaymentAdder += sq * 8;
     }
+    const hipRidgeAdder =
+      hipRidgeChoice === 'high_profile'
+        ? getSellPrice('hip_ridge_high_profile', HIGH_PROFILE_RIDGE_SELL)
+        : 0;
     let fasciaAdder = 0;
     let shingleMoldAdder = 0;
-    if (flf > 10 && (fasciaMode || fasciaType)) {
-      const fasciaRate = getSellPrice('fascia', activePricingRegion === 'central' ? 15 : 18);
+    // Require fasciaMode so sell matches scope-of-work (type alone does not bill)
+    if (flf > 10 && fasciaMode) {
+      const fasciaKey =
+        fasciaType === '2x8'
+          ? 'fascia_2x8'
+          : fasciaType === '2x6'
+            ? 'fascia_2x6'
+            : 'fascia';
+      const fasciaFallback =
+        fasciaKey === 'fascia_2x8'
+          ? 18
+          : activePricingRegion === 'central'
+            ? 15
+            : 18;
+      const fasciaRate = getSellPrice(fasciaKey, fasciaFallback);
       const freeFasciaLF = flf - 10; // 10' free
       fasciaAdder = freeFasciaLF * fasciaRate;
       // Shingle mold tracks free LF after 10' (comes with fascia, extra sell)
@@ -5590,18 +7698,19 @@ export default function SummitApp() {
     }
 
     const solarAdder = panels * 250;
-    const hvacAdder = hvac * getSellPrice('hvac', activePricingRegion === 'central' ? 1250 : 1600);
-    const skylightAdder = sky * getSellPrice('skylight', activePricingRegion === 'central' ? 500 : 550);
-    const ridgeAdder = ridge * getSellPrice('ridge_vent', 12);
+    const hvacAdder = hvac * getHvacSellPrice(activePricingRegion === 'central' ? 1300 : 1600);
+    const skylightAdder = sky * getSellPrice('skylight', activePricingRegion === 'central' ? 525 : 550);
+    const ridgeAdder = ridge * getSellPrice('ridge_vent', 13);
     const gLF = parseFloat(gutterLF) || 0;
     let gutterAdder = 0;
     if (gutterMode === 'dr' && gLF > 0) {
-      gutterAdder = gLF * getSellPrice('gutters_dr', activePricingRegion === 'central' ? 15 : 20);
+      gutterAdder = gLF * getSellPrice('gutters_dr', activePricingRegion === 'central' ? 18 : 20);
     } else if (gutterMode === 'rr' && gLF > 0) {
-      gutterAdder = gLF * getSellPrice('gutters_rr', activePricingRegion === 'central' ? 20 : 30);
+      gutterAdder = gLF * getSellPrice('gutters_rr', activePricingRegion === 'central' ? 25 : 30);
     }
 
-    // Low-slope / flat MB sell: price_sheet key, fallback $600/sq
+    // Low-slope / flat sell: price_sheet → PRICING_GUIDE. Never fall back across systems
+    // (e.g. silicone must not inherit mod-bitumen $600).
     const mbSellKey =
       lowSlopeMode !== 'none' && lowSlopeType !== 'none'
         ? lowSlopeType
@@ -5615,7 +7724,23 @@ export default function SummitApp() {
             selectedShingle === 'bur'
           ? selectedShingle
           : 'mod_bitumen';
-    const mbSellRate = getSellPrice(mbSellKey, getSellPrice('mod_bitumen', 600));
+    const mbSellFallback =
+      mbSellKey === 'elastomeric' || mbSellKey === 'coating'
+        ? activePricingRegion === 'central'
+          ? 425
+          : 450
+        : mbSellKey === 'full_foam'
+          ? activePricingRegion === 'central'
+            ? 650
+            : 700
+          : mbSellKey === 'foam_overlay'
+            ? activePricingRegion === 'central'
+              ? 575
+              : 625
+            : mbSellKey === 'mod_bitumen'
+              ? 600
+              : 0; // silicone / urethane / bur — Joe / price_sheet only
+    const mbSellRate = getSellPrice(mbSellKey, mbSellFallback);
     const mbAdder = mbSq > 0 ? Math.round(mbSq * mbSellRate) : 0;
 
     const baseRoofPrice = Math.round(
@@ -5632,7 +7757,8 @@ export default function SummitApp() {
       ridgeAdder +
       gutterAdder +
       flatExtraAdder +
-      mbAdder;
+      mbAdder +
+      hipRidgeAdder;
     // Wait for price_sheet (or cache) before treating estimate as
     const hasRealData =
       (sq > 0 || mbSq > 0) &&
@@ -5654,6 +7780,7 @@ export default function SummitApp() {
       gutterCost: gutterAdder,
       flatExtraCost: flatExtraAdder,
       mbCost: mbAdder,
+      hipRidgeCost: hipRidgeAdder,
       sheetsNeeded,
     };
   };
@@ -6413,8 +8540,27 @@ export default function SummitApp() {
                   cambridgeColor: String(rawData.cambridgeColor || ''),
                   dynastyColor: String(rawData.dynastyColor || ''),
                   armourshakeColor: String(rawData.armourshakeColor || ''),
+                  hipRidgeChoice:
+                    rawData.hipRidgeChoice === 'standard' ||
+                    rawData.hipRidgeChoice === 'high_profile'
+                      ? rawData.hipRidgeChoice
+                      : '',
+                  starterChoice:
+                    rawData.starterChoice === 'brand' ||
+                    rawData.starterChoice === 'armour'
+                      ? rawData.starterChoice
+                      : '',
+                  iceWaterChoice:
+                    rawData.iceWaterChoice === 'topshield_defender' ||
+                    rawData.iceWaterChoice === 'topshield_sg_ps_max' ||
+                    rawData.iceWaterChoice === 'iko_stormshield' ||
+                    rawData.iceWaterChoice === 'polyflex_sa_v'
+                      ? rawData.iceWaterChoice
+                      : '',
                   selectedUnderlayment:
                     (rawData.selectedUnderlayment as Underlayment) || '',
+                  mbCapChoice: String(rawData.mbCapChoice || ''),
+                  mbBaseChoice: String(rawData.mbBaseChoice || ''),
                   fasciaMode: (rawData.fasciaMode as FasciaMode) || '',
                   deckingMode: (rawData.deckingMode as DeckingMode) || '',
                   fasciaType: (rawData.fasciaType as FasciaType) || '',
@@ -6500,7 +8646,9 @@ export default function SummitApp() {
         /* ignore */
       }
       try {
-        const cachedCost = localStorage.getItem('summitCostSheet');
+        const cachedCost =
+          localStorage.getItem('summitCostSheet_v2') ||
+          localStorage.getItem('summitCostSheet');
         if (cachedCost) {
           const parsed = JSON.parse(cachedCost) as Record<string, number>;
           if (parsed && typeof parsed === 'object') {
@@ -6572,72 +8720,88 @@ export default function SummitApp() {
             }
           });
 
-        void supabase
-          .from('cost_sheet')
-          .select('item_key, cost, region, active')
-          .then(({ data, error }) => {
+        // cost_sheet_labor + cost_sheet_material (preferred). Fallbacks: old
+        // split names, then legacy cost_sheet view/table. PRICING_GUIDE via getCost.
+        void (async () => {
+          type CostRow = {
+            item_key?: string | null;
+            cost?: number | null;
+            region?: string | null;
+            active?: boolean | null;
+          };
+          const selectCols = 'item_key, cost, region, active';
+          const tryTable = async (table: string) => {
+            const { data, error } = await supabase
+              .from(table)
+              .select(selectCols);
             if (error) {
-              console.error(
-                'cost_sheet fetch error:',
+              console.warn(
+                `${table} fetch:`,
                 JSON.stringify(error, null, 2)
               );
-              setCostsReady(true);
-              return;
+              return null;
             }
-            const rows = (data || []).filter(
-              (row: { active?: boolean | null }) => row.active !== false
-            );
-            const map: Record<string, number> = {};
-            rows.forEach(
-              (row: {
-                item_key?: string;
-                cost?: number;
-                region?: string;
-              }) => {
-                if (row.item_key == null || row.cost == null) return;
-                const cost = Number(row.cost);
-                if (!Number.isFinite(cost)) return;
-                const key = String(row.item_key);
-                const rawReg = String(row.region ?? 'all')
-                  .toLowerCase()
-                  .trim();
-                // region all / blank → plain key (shared materials) + __all
-                if (!rawReg || rawReg === 'all' || rawReg === '*') {
-                  map[key] = cost;
-                  map[`${key}__all`] = cost;
-                  return;
-                }
-                const reg = normalizePricingRegion(rawReg);
-                map[`${key}__${reg}`] = cost;
-                if (rawReg && rawReg !== reg) {
-                  map[`${key}__${rawReg}`] = cost;
-                }
-                // Prefer central as plain key; else first-seen only
-                if (reg === 'central' || map[key] == null) {
-                  map[key] = cost;
-                }
+            return (data || []) as CostRow[];
+          };
+
+          try {
+            let laborRows =
+              (await tryTable('cost_sheet_labor')) ??
+              (await tryTable('labor_cost_sheet'));
+            let materialRows =
+              (await tryTable('cost_sheet_material')) ??
+              (await tryTable('material_cost_sheet'));
+
+            const laborOk = Array.isArray(laborRows) && laborRows.length > 0;
+            const materialOk =
+              Array.isArray(materialRows) && materialRows.length > 0;
+
+            // If both new/old split tables empty or missing, try legacy union
+            if (!laborOk && !materialOk) {
+              const legacy = await tryTable('cost_sheet');
+              if (legacy && legacy.length > 0) {
+                laborRows = legacy;
+                materialRows = [];
+                console.warn(
+                  'Using legacy cost_sheet fallback — run cost_sheets_cleanup_rename.sql'
+                );
               }
-            );
-            // Ensure __all materials always available as plain keys
-            Object.keys(map).forEach((k) => {
-              if (k.endsWith('__all')) {
-                const plain = k.slice(0, -5);
-                if (map[plain] == null) map[plain] = map[k];
-              }
-            });
-            setCostSheet(map);
-            try {
-              localStorage.setItem('summitCostSheet', JSON.stringify(map));
-            } catch {
-              /* ignore */
             }
+
+            const map = ingestCostSheetRows([
+              ...(laborRows || []),
+              ...(materialRows || []),
+            ]);
+            const n =
+              (laborRows?.length || 0) + (materialRows?.length || 0);
+            if (n > 0) {
+              setCostSheet(map);
+              try {
+                localStorage.setItem(
+                  'summitCostSheet_v2',
+                  JSON.stringify(map)
+                );
+              } catch {
+                /* ignore */
+              }
+              console.log(
+                'Loaded',
+                laborRows?.length || 0,
+                'labor +',
+                materialRows?.length || 0,
+                'material costs from Supabase'
+              );
+            } else {
+              console.warn(
+                'No cost sheet rows — getCost will use PRICING_GUIDE fallbacks'
+              );
+            }
+          } catch (e) {
+            console.error('cost sheet split fetch error:', e);
+          } finally {
             setCostsReady(true);
-            console.log(
-              'Loaded',
-              rows.length,
-              'costs from Supabase cost_sheet (regional + all)'
-            );
-          });
+          }
+        })();
 
         // mitigation_price_sheet
         void supabase
@@ -6767,6 +8931,22 @@ export default function SummitApp() {
     }
   }, [activeTab, sessionReady]);
 
+  /** Seed Labor job from open lead when entering the Orders → Labor step. */
+  useEffect(() => {
+    if (activeTab !== 'orders' || ordersStep !== 'labor') return;
+    setLaborLeadId((prev) => {
+      if (prev != null) return prev;
+      if (
+        currentLeadId != null &&
+        leads.some((l) => l.id === currentLeadId)
+      ) {
+        return currentLeadId;
+      }
+      return null;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seed once per Labor step visit
+  }, [activeTab, ordersStep]);
+
   useEffect(() => {
     if (!sessionReady) return;
     try {
@@ -6870,7 +9050,7 @@ export default function SummitApp() {
       const gcal = params.get('gcal');
       if (!gcal) return;
       if (gcal === 'connected') {
-        showToast('Google Calendar connected');
+        showToast('Calendar connected');
         void refreshGcalStatus();
         const tab = params.get('tab');
         if (tab === 'settings') handleTabChange('settings');
@@ -6879,7 +9059,7 @@ export default function SummitApp() {
         showToast(
           reason.includes('not configured') || reason.includes('access_denied')
             ? `Calendar: ${reason}`
-            : 'Google Calendar connection failed'
+            : 'Calendar connection failed'
         );
       }
       // Clean query so refresh doesn't re-toast
@@ -7128,7 +9308,6 @@ export default function SummitApp() {
   const ly = parseInt(layers) || 1;
   const pt = pitch || '4/12';
   const flf = parseFloat(fasciaLF) || 0;
-  const dsh = parseFloat(deckingSheets) || 0;
   const ridge = parseFloat(ridgeVentLF) || 0;
   const mbSq = parseFloat(modifiedBitumenSquares) || 0;
   const hvacCount = parseFloat(hvacUnits) || 0;
@@ -7151,60 +9330,168 @@ export default function SummitApp() {
 
   // Material (includes MB: 1 base ply + SA cap only when mod-bit is on THIS estimate)
   let realMaterial = 0;
-  if (selectedShingle === 'dynasty') realMaterial += sq * 31.33 * 3;
-  if (selectedShingle === 'cambridge') realMaterial += sq * 29.67 * 3;
-  if (selectedShingle === 'armourshake') realMaterial += sq * 48 * 5;
-  realMaterial += ridge * 6;
+  const shingleCostPerSq = selectedShingle
+    ? getCost(selectedShingle, SHINGLE_COST_PER_SQ[selectedShingle] || 0)
+    : 0;
+  if (shingleCostPerSq > 0 && SHINGLE_PRODUCTS.some((p) => p.key === selectedShingle)) {
+    realMaterial += sq * shingleCostPerSq;
+  }
+  // Tile R&R field material (D&R reuses existing tile — no field mat)
+  if (
+    (selectedShingle === 'tile_rr' || tileMode === 'rr') &&
+    sq > 0 &&
+    tileBrand
+  ) {
+    const tileMatKey =
+      tileBrand === 'eagle'
+        ? 'eagle_tile'
+        : tileBrand === 'westlake'
+          ? 'westlake_tile'
+          : tileBrand === 'clay'
+            ? 'clay_tile'
+            : '';
+    if (tileMatKey) {
+      const tileMat = getCost(tileMatKey, getPricingGuideCost(tileMatKey));
+      if (tileMat > 0) realMaterial += sq * tileMat;
+    }
+  }
+  realMaterial += ridge * getCost('ridge_vent', 6);
   if (mbMaterialSq > 0) {
     const capCost = getCost('mb_cap_sheet', 123);
     const baseCost = getCost('mb_base_ply', 126);
     realMaterial += mbMaterialSq * capCost;
     realMaterial += mbMaterialSq * baseCost; // 1 base ply (not 2)
   }
+  // Decking material (book OSB/CDX) — all sheets used
+  const osbMatRate = getCost('osb', 11);
+  const cdxMatRate = getCost('cdx', 20.5);
+  if (deckingMode === 'full') {
+    const pitchMultiplierMat = getPitchMultiplier(pt);
+    const roofAreaSqFtMat =
+      sq * 100 * pitchMultiplierMat * (1 + (parseFloat(waste) || 0.1));
+    const sheetsFull = Math.ceil(roofAreaSqFtMat / 32);
+    realMaterial += sheetsFull * osbMatRate;
+  } else if (deckingMode === 'repair') {
+    const osbNMat = parseFloat(deckingOsbSheets || '0') || 0;
+    const cdxNMat = parseFloat(deckingCdxSheets || '0') || 0;
+    realMaterial += osbNMat * osbMatRate + cdxNMat * cdxMatRate;
+  }
+
+  // Takeoff → Internal: pipe jack + vent material (package sell does not include these costs)
+  const takeoffLeadIdForCosts = currentLeadId ?? estimatorSourceLeadId;
+  const savedTakeoffForCosts =
+    takeoffLeadIdForCosts != null
+      ? leads.find((l) => l.id === takeoffLeadIdForCosts)?.takeoff
+      : null;
+  const takeoffFromForm = normalizeTakeoff(takeoffForm);
+  const takeoffFromSaved = normalizeTakeoff(savedTakeoffForCosts);
+  const takeoffFormHasSkus =
+    takeoffFromForm.pipeJackLines.length > 0 ||
+    takeoffFromForm.ventLines.length > 0;
+  const takeoffSavedHasSkus =
+    takeoffFromSaved.pipeJackLines.length > 0 ||
+    takeoffFromSaved.ventLines.length > 0;
+  // Prefer live form when it has SKUs (unsaved edits); else lead.takeoff so
+  // Internal still sees costs if the form was wiped or never loaded.
+  const liveTakeoffForCosts =
+    takeoffFormHasSkus || !takeoffSavedHasSkus
+      ? takeoffFromForm
+      : takeoffFromSaved;
+  let takeoffPipeJackMaterial = 0;
+  for (const line of liveTakeoffForCosts.pipeJackLines) {
+    const qty = parseFloat(line.qty) || 0;
+    if (!(qty > 0) || !line.skuKey) continue;
+    takeoffPipeJackMaterial +=
+      qty * getCost(line.skuKey, catalogFallbackCost(line.skuKey));
+  }
+  let takeoffVentMaterial = 0;
+  let takeoffVentCutInLabor = 0;
+  for (const line of liveTakeoffForCosts.ventLines) {
+    const qty = parseFloat(line.qty) || 0;
+    if (!(qty > 0) || !line.skuKey) continue;
+    takeoffVentMaterial +=
+      qty * getCost(line.skuKey, catalogFallbackCost(line.skuKey));
+    const ventMeta = VENT_CATALOG.find((v) => v.key === line.skuKey);
+    const cutIn =
+      ventMeta?.cutInLabor ?? getCost('cut_in_vent', 20);
+    if (cutIn > 0) takeoffVentCutInLabor += qty * cutIn;
+  }
+  realMaterial += takeoffPipeJackMaterial + takeoffVentMaterial;
 
   // Labor (includes HVAC / solar adders)
-  const laborPerSq = defaultLaborPerSq();
+  // Steep replaces base labor ($125 / $175 / $250), not +$10 stub
+  let steepLaborBase = 0;
+  if (pt === '8/12' || pt === '9/12') steepLaborBase = 125;
+  else if (pt === '10/12' || pt === '11/12') steepLaborBase = 175;
+  else if (pt === '12/12') steepLaborBase = 250;
+  const laborPerSq = steepLaborBase > 0 ? steepLaborBase : defaultLaborPerSq();
   let realLabor = sq * laborPerSq;
-  if (ly > 1) realLabor += sq * 10 * (ly - 1);
-  if (['8/12', '9/12', '10/12', '11/12', '12/12'].includes(pt)) realLabor += sq * 10;
+  // Double layer: +$20/sq per extra layer
+  if (ly > 1) realLabor += sq * 20 * (ly - 1);
   if (isTwoStory) realLabor += sq * 10;
   const fasciaBeyondFree = Math.max(0, flf - 10);
-  if (fasciaBeyondFree > 0 && fasciaType) {
-    realLabor += fasciaBeyondFree * 6;
+  const fasciaLaborRate = getCost('fascia_labor', 4);
+  const moldLaborRate = getCost('shingle_mold_labor', 4);
+  let fasciaLaborCost = 0;
+  let moldLaborCost = 0;
+  let moldMaterialCost = 0;
+  // Require fasciaMode so Internal matches sell + scope
+  if (fasciaBeyondFree > 0 && fasciaMode) {
+    fasciaLaborCost = fasciaBeyondFree * fasciaLaborRate;
+    moldLaborCost = fasciaBeyondFree * moldLaborRate;
+    // Miller mold pairs (1×2 × 16' default) when fascia/mold on estimate
+    const moldPairs = Math.ceil(fasciaBeyondFree / 16);
+    moldMaterialCost = moldPairs * getCost('mold_1x2_16', 10.5);
+    realLabor += fasciaLaborCost + moldLaborCost;
+    realMaterial += moldMaterialCost;
   }
+  let fullDeckingLaborCost = 0;
+  let repairDeckingLaborCost = 0;
   if (deckingMode === 'full') {
     const pitchMultiplier = getPitchMultiplier(pt);
     const roofAreaSqFt = sq * 100 * pitchMultiplier * (1 + (parseFloat(waste) || 0.1));
     const sheetsNeededCalc = Math.ceil(roofAreaSqFt / 32);
-    const extra = Math.max(0, sheetsNeededCalc - 2);
-    realLabor += extra * 20;
+    fullDeckingLaborCost = Math.max(0, sheetsNeededCalc - 2) * 20;
+    realLabor += fullDeckingLaborCost;
   } else if (deckingMode === 'repair') {
     const osbN = parseFloat(deckingOsbSheets || '0') || 0;
     const cdxN = parseFloat(deckingCdxSheets || '0') || 0;
     const totalSheets = osbN + cdxN;
-    const extraSheets = Math.max(0, totalSheets - 2);
-    realLabor += extraSheets * 20;
+    repairDeckingLaborCost = Math.max(0, totalSheets - 2) * 20;
+    realLabor += repairDeckingLaborCost;
   }
   realLabor += ridge * 2;
-  realLabor += hvacCount * 1500;
+  realLabor += hvacCount * getCost('hvac_labor', 900);
   realLabor += solarCount * 100;
+  realLabor += takeoffVentCutInLabor;
 
   // Breakdown helpers for Internal tab
   const shingleMaterialCost =
-    selectedShingle === 'dynasty'
-      ? sq * 31.33 * 3
-      : selectedShingle === 'cambridge'
-        ? sq * 29.67 * 3
-        : selectedShingle === 'armourshake'
-          ? sq * 48 * 5
-          : 0;
+    shingleCostPerSq > 0 &&
+    SHINGLE_PRODUCTS.some((p) => p.key === selectedShingle)
+      ? sq * shingleCostPerSq
+      : 0;
+  const tileFieldMatKey =
+    tileBrand === 'eagle'
+      ? 'eagle_tile'
+      : tileBrand === 'westlake'
+        ? 'westlake_tile'
+        : tileBrand === 'clay'
+          ? 'clay_tile'
+          : '';
+  const tileMaterialCost =
+    (selectedShingle === 'tile_rr' || tileMode === 'rr') &&
+    sq > 0 &&
+    tileFieldMatKey
+      ? sq * getCost(tileFieldMatKey, getPricingGuideCost(tileFieldMatKey))
+      : 0;
   const mbCapMaterial =
     mbMaterialSq > 0 ? mbMaterialSq * getCost('mb_cap_sheet', 123) : 0;
   // One base ply only (never 2 layers)
   const mbBasePlyMaterial =
     mbMaterialSq > 0 ? mbMaterialSq * getCost('mb_base_ply', 126) : 0;
-  const ridgeMaterial = ridge * 6;
-  const hvacLaborCost = hvacCount * 1500;
+  const ridgeMaterial = ridge * getCost('ridge_vent', 6);
+  const hvacLaborCost = hvacCount * getCost('hvac_labor', 900);
   const solarLaborCost = solarCount * 100;
 
   const officeCut = Math.round(estimatorTotalPrice * (officeCostPercent / 100));
@@ -7303,7 +9590,12 @@ export default function SummitApp() {
       cambridgeColor,
       dynastyColor,
       armourshakeColor,
+      hipRidgeChoice,
+      starterChoice,
+      iceWaterChoice,
       selectedUnderlayment,
+      mbCapChoice,
+      mbBaseChoice,
       fasciaMode,
       deckingMode,
       fasciaType,
@@ -7360,7 +9652,12 @@ export default function SummitApp() {
       cambridgeColor,
       dynastyColor,
       armourshakeColor,
+      hipRidgeChoice,
+      starterChoice,
+      iceWaterChoice,
       selectedUnderlayment,
+      mbCapChoice,
+      mbBaseChoice,
       fasciaMode,
       deckingMode,
       fasciaType,
@@ -7497,7 +9794,12 @@ export default function SummitApp() {
     setCambridgeColor('');
     setDynastyColor('');
     setArmourshakeColor('');
+    setHipRidgeChoice('');
+    setStarterChoice('');
+    setIceWaterChoice('');
     setSelectedUnderlayment('');
+    setMbCapChoice('');
+    setMbBaseChoice('');
     setFasciaMode('');
     setDeckingMode('');
     setFasciaType('');
@@ -7543,6 +9845,22 @@ export default function SummitApp() {
     return best === 0 ? '' : best.toFixed(2);
   };
 
+  /**
+   * Pre-fill pitch/stories/layers from a completed takeoff sheet — only fills
+   * fields that are still empty, so it never clobbers a value already set by
+   * a more precise source (e.g. measurement-detected pitch).
+   */
+  const applyTakeoffToEstimator = (takeoff?: TakeoffSheet | null) => {
+    if (!takeoff) return;
+    if (takeoff.pitch) setPitch((prev) => prev || takeoff.pitch);
+    if (takeoff.stories === '1' || takeoff.stories === '2' || takeoff.stories === '3') {
+      setStories((prev) => prev || takeoff.stories as '1' | '2' | '3');
+    }
+    if (takeoff.roofLayers) {
+      setLayers((prev) => prev || (takeoff.roofLayers === '3+' ? '3' : takeoff.roofLayers));
+    }
+  };
+
   const applyMeasurementToEstimator = (m: RoofMeasurement, lead?: Lead | null) => {
     skipUnsavedMarkRef.current = true;
     if (lead) {
@@ -7558,6 +9876,10 @@ export default function SummitApp() {
       setClientJobNumber(lead.jobNumber || '');
     }
 
+    // Fill from takeoff first (stories has no other source; pitch/layers act
+    // as a fallback below when the measurement itself doesn't pin them down).
+    applyTakeoffToEstimator(lead?.takeoff);
+
     const roofType = m.roofType || 'pitched-shingles';
     const pitchedSq = Number(m.squares) || 0;
     const flatSq = Number(m.flatSquares) || 0;
@@ -7571,13 +9893,13 @@ export default function SummitApp() {
     } else if (roofType === 'mixed') {
       setSquares(formatSquaresField(pitchedSq));
       setModifiedBitumenSquares(formatSquaresField(flatSq));
-      setPitch(m.pitch && m.pitch !== 'Flat' ? m.pitch : '6/12');
+      setPitch((prev) => (m.pitch && m.pitch !== 'Flat' ? m.pitch : prev || '6/12'));
       if (flatSq > 0) setModifiedBitumenColor((c) => c || 'Thunder Black');
     } else {
       // Pitched shingles — always fill TOTAL SQUARES; flat/MB only if present
       setSquares(formatSquaresField(pitchedSq));
       setModifiedBitumenSquares(formatSquaresField(flatSq));
-      setPitch(m.pitch && m.pitch !== 'Flat' ? m.pitch : '6/12');
+      setPitch((prev) => (m.pitch && m.pitch !== 'Flat' ? m.pitch : prev || '6/12'));
       if (flatSq > 0) setModifiedBitumenColor((c) => c || 'Thunder Black');
     }
 
@@ -8731,6 +11053,7 @@ export default function SummitApp() {
 
     resetEstimatorFields(true);
     fillLeadContact();
+    applyTakeoffToEstimator(resolvedLead.takeoff);
     showToast(
       workspace === 'internal'
         ? `Internal for ${name}`
@@ -8755,6 +11078,7 @@ export default function SummitApp() {
     setClientPhone(displayPhoneUS(resolvedLead.clientPhone || ''));
     setClientEmail(resolvedLead.clientEmail || '');
     setClientJobNumber(resolvedLead.jobNumber || '');
+    applyTakeoffToEstimator(resolvedLead.takeoff);
     showToast(
       workspace === 'internal'
         ? `Internal for ${name}`
@@ -8891,7 +11215,7 @@ export default function SummitApp() {
     setLayers(estimate.layers || '');
     setWaste(estimate.waste || '');
     setPitch(estimate.pitch || '');
-    setStories((estimate.stories as '1' | '2' | '') || '');
+    setStories((estimate.stories as '1' | '2' | '3' | '') || '');
     setFasciaLF(estimate.fasciaLF || '');
     setDeckingSheets(estimate.deckingSheets || '');
     setDeckingOsbSheets(estimate.deckingOsbSheets || '');
@@ -8968,7 +11292,28 @@ export default function SummitApp() {
     setCambridgeColor(estimate.cambridgeColor || '');
     setDynastyColor(estimate.dynastyColor || '');
     setArmourshakeColor(estimate.armourshakeColor || '');
+    setHipRidgeChoice(
+      estimate.hipRidgeChoice === 'standard' ||
+        estimate.hipRidgeChoice === 'high_profile'
+        ? estimate.hipRidgeChoice
+        : ''
+    );
+    setStarterChoice(
+      estimate.starterChoice === 'brand' || estimate.starterChoice === 'armour'
+        ? estimate.starterChoice
+        : ''
+    );
+    setIceWaterChoice(
+      estimate.iceWaterChoice === 'topshield_defender' ||
+        estimate.iceWaterChoice === 'topshield_sg_ps_max' ||
+        estimate.iceWaterChoice === 'iko_stormshield' ||
+        estimate.iceWaterChoice === 'polyflex_sa_v'
+        ? estimate.iceWaterChoice
+        : ''
+    );
     setSelectedUnderlayment(estimate.selectedUnderlayment || '');
+    setMbCapChoice(estimate.mbCapChoice || '');
+    setMbBaseChoice(estimate.mbBaseChoice || '');
     setFasciaMode(estimate.fasciaMode || '');
     setDeckingMode(estimate.deckingMode || '');
     setFasciaType(estimate.fasciaType || '');
@@ -9145,7 +11490,12 @@ export default function SummitApp() {
     cambridgeColor,
     dynastyColor,
     armourshakeColor,
+    hipRidgeChoice,
+    starterChoice,
+    iceWaterChoice,
     selectedUnderlayment,
+    mbCapChoice,
+    mbBaseChoice,
     fasciaMode,
     deckingMode,
     fasciaType,
@@ -9548,8 +11898,8 @@ export default function SummitApp() {
         if (!opts?.silent) {
           showToast(
             hasBrowserGcalToken()
-              ? 'Google session expired — tap Reconnect'
-              : 'Connect Google Calendar first'
+              ? 'Session expired — tap Reconnect'
+              : 'Connect Calendar first'
           );
         }
         // Token present → still Connected in Profile/Calendar; needs Reconnect
@@ -9905,7 +12255,7 @@ export default function SummitApp() {
       persistCalendarEvents(next);
       if (!opts?.silent) {
         showToast(
-          `Pushed ${pushed} event${pushed === 1 ? '' : 's'} to Google`
+          `Pushed ${pushed} event${pushed === 1 ? '' : 's'}`
         );
       }
     }
@@ -9979,7 +12329,7 @@ export default function SummitApp() {
           );
           showToast(formatGoogleConnectError(err));
         } catch {
-          showToast('Google Calendar sync failed');
+          showToast('Calendar sync failed');
         }
       }
     }
@@ -10277,18 +12627,18 @@ export default function SummitApp() {
         showToast(
           event.rrule
             ? event.leadId
-              ? 'Series saved · linked lead · synced to Google'
-              : 'Series saved · synced to Google'
+              ? 'Series saved · linked lead · synced'
+              : 'Series saved · synced'
             : event.leadId
-              ? 'Event saved · linked lead · synced to Google'
-              : 'Event saved · synced to Google'
+              ? 'Event saved · linked lead · synced'
+              : 'Event saved · synced'
         );
         return;
       }
       setGcalConnected(hasBrowserGcalToken());
       showToast(
         hasBrowserGcalToken()
-          ? 'Saved locally — Google session expired, tap Reconnect'
+          ? 'Saved locally — session expired, tap Reconnect'
           : event.leadId
             ? 'Event saved · lead linked'
             : 'Event saved'
@@ -10296,7 +12646,7 @@ export default function SummitApp() {
     } catch (e) {
       const { formatGoogleConnectError } = await import('@/lib/gcal-browser');
       showToast(
-        `Saved locally — Google sync failed: ${formatGoogleConnectError(e)}`
+        `Saved locally — sync failed: ${formatGoogleConnectError(e)}`
       );
     } finally {
       setCalEventBusy(false);
@@ -10401,23 +12751,19 @@ export default function SummitApp() {
             .map((c) => c?.id)
             .filter((id): id is string => Boolean(id))
         );
-        showToast(
-          isSeries
-            ? 'Series deleted · removed from Google'
-            : 'Event deleted · removed from Google'
-        );
+        showToast(isSeries ? 'Series deleted' : 'Event deleted');
         return;
       }
       setGcalConnected(hasBrowserGcalToken());
       showToast(
         hasBrowserGcalToken()
-          ? 'Removed locally — Google session expired, reconnect to finish delete'
+          ? 'Removed locally — session expired, reconnect to finish delete'
           : isSeries
             ? 'Series deleted'
             : 'Event deleted'
       );
     } catch {
-      showToast('Removed locally — could not delete on Google');
+      showToast('Removed locally — could not finish delete');
     }
   };
 
@@ -10465,7 +12811,7 @@ export default function SummitApp() {
       setGtasksErrorKind(tasksKind);
 
       if (tasksOk) {
-        showToast('Google connected (Calendar + Tasks)');
+        showToast('Connected (Calendar + Tasks)');
         void loadGoogleEvents({ silent: true }).then(() =>
           pushUnsyncedCalendarEvents({ silent: true })
         );
@@ -10492,8 +12838,8 @@ export default function SummitApp() {
         showToast(
           tasksError ||
             (tasksKind === 'api'
-              ? 'Calendar works — enable Google Tasks API in Cloud Console (see banner), then Reconnect for Tasks'
-              : 'Calendar connected — tap Reconnect for Tasks and allow Tasks on the Google consent screen')
+              ? 'Calendar works — enable Tasks API in Cloud Console (see banner), then Reconnect'
+              : 'Calendar connected — tap Reconnect and allow Tasks access')
         );
         void loadGoogleEvents({ silent: true }).then(() =>
           pushUnsyncedCalendarEvents({ silent: true })
@@ -10608,7 +12954,7 @@ export default function SummitApp() {
         gcalAuthEpochRef.current = getBrowserGcalAuthEpoch();
       }
       setGcalConnected(false);
-      showToast('Google disconnected');
+      showToast('Disconnected');
     } catch {
       // Soft-fail: still force disconnected UI if anything threw mid-cleanup
       try {
@@ -10636,7 +12982,7 @@ export default function SummitApp() {
         }
         return next;
       });
-      showToast('Google disconnected');
+      showToast('Disconnected');
     } finally {
       setGcalBusy(false);
     }
@@ -10731,7 +13077,7 @@ export default function SummitApp() {
     assumeConnected?: boolean;
   }) => {
     if (!opts?.assumeConnected && !gcalConnected) {
-      if (!opts?.silent) showToast('Connect Google first');
+      if (!opts?.silent) showToast('Connect first');
       return;
     }
     const epochAtStart = gcalAuthEpochRef.current;
@@ -10752,7 +13098,7 @@ export default function SummitApp() {
         if (!hasBrowserGcalToken() && !isBrowserGcalLinked()) {
           setGcalConnected(false);
         }
-        if (!opts?.silent) showToast('Connect Google first');
+        if (!opts?.silent) showToast('Connect first');
         return;
       }
       const {
@@ -10771,7 +13117,7 @@ export default function SummitApp() {
       }
       if (!session?.accessToken) {
         setGcalConnected(hasBrowserGcalToken() || isBrowserGcalLinked());
-        if (!opts?.silent) showToast('Connect Google first');
+        if (!opts?.silent) showToast('Connect first');
         return;
       }
       if (!browserSessionHasTasksScope(session)) {
@@ -10781,7 +13127,7 @@ export default function SummitApp() {
           'Token missing Tasks scope — Reconnect for Tasks and allow Tasks on consent.'
         );
         if (!opts?.silent) {
-          showToast('Reconnect Google to enable Tasks sync');
+          showToast('Reconnect to enable Tasks sync');
         }
         return;
       }
@@ -10969,7 +13315,7 @@ export default function SummitApp() {
         showToast(
           e instanceof Error
             ? e.message
-            : 'List saved locally — Google sync failed'
+            : 'List saved locally — sync failed'
         );
       }
     }
@@ -11020,7 +13366,7 @@ export default function SummitApp() {
         showToast(
           e instanceof Error
             ? e.message
-            : 'Renamed locally — Google sync failed'
+            : 'Renamed locally — sync failed'
         );
       }
     }
@@ -11060,7 +13406,7 @@ export default function SummitApp() {
         showToast(
           e instanceof Error
             ? e.message
-            : 'Saved locally — Google sync failed'
+            : 'Saved locally — sync failed'
         );
       }
     }
@@ -11342,7 +13688,7 @@ export default function SummitApp() {
     setLeadCategory(normalizePipelineStage(lead.category));
     setTakeoffForm(
       lead.takeoff && typeof lead.takeoff === 'object'
-        ? { ...emptyTakeoff(), ...lead.takeoff }
+        ? normalizeTakeoff(lead.takeoff)
         : emptyTakeoff()
     );
     setLeadNoteDraft('');
@@ -11477,6 +13823,107 @@ export default function SummitApp() {
   };
 
   const createNewLead = addNewLead;
+
+  /**
+   * Canvassing → "Create lead": reuses the same lead shape/pipeline as
+   * addNewLead/mapAppLeadToDb, auto-filling the address from the dropped pin.
+   * Does NOT run automatically — only fires when Joe taps "Create lead" on a
+   * pin's detail view (pins never auto-convert into leads).
+   */
+  const createLeadFromCanvassPin = async (input: {
+    address: string | null;
+    ownerName: string | null;
+    lat: number;
+    lng: number;
+  }): Promise<CreatedLeadInfo | null> => {
+    try {
+      const jobNumber = await generateJobNumber();
+      const nameParts = (input.ownerName || '').trim().split(/\s+/).filter(Boolean);
+      const firstName = nameParts[0] || '';
+      const lastName = nameParts.slice(1).join(' ');
+
+      // Best-effort split of a "street, city, ST zip" label into lead fields —
+      // stays editable in the lead profile either way.
+      const addressLine = (input.address || '').trim();
+      const [streetPart, cityPart, stateZipPart] = addressLine
+        .split(',')
+        .map((s) => s.trim());
+      const stateZipMatch = (stateZipPart || '').match(/^([A-Za-z]{2})\s*(\d{5})?/);
+
+      const newLead = createEmptyLead({
+        category: 'Lead',
+        clientFirstName: firstName,
+        clientLastName: lastName,
+        clientAddress: streetPart || addressLine,
+        clientCity: cityPart || '',
+        clientState: stateZipMatch?.[1]?.toUpperCase() || '',
+        clientZip: stateZipMatch?.[2] || '',
+        leadSource: 'Self Generated',
+        jobNumber,
+        notes: [
+          {
+            id: newClientId('note'),
+            text: `Created from Canvassing pin (${input.lat.toFixed(5)}, ${input.lng.toFixed(5)}).`,
+            date: new Date().toLocaleDateString(),
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      });
+
+      // Insert to Supabase directly (rather than relying on persistLeads' async
+      // insert loop) so we get the cloud id back immediately for the pin's
+      // lead_id reference. Setting supabaseId before persistLeads makes it
+      // UPDATE instead of INSERT — no duplicate row.
+      let supabaseLeadId: string | null = null;
+      if (supabaseEnabled && supabase) {
+        try {
+          const payload = mapAppLeadToDb(newLead);
+          const { data, error } = await supabase
+            .from('leads')
+            .insert(payload)
+            .select('id')
+            .single();
+          if (error) {
+            console.error('Supabase canvassing lead insert error:', error);
+          } else if (data?.id) {
+            supabaseLeadId = String(data.id);
+          }
+        } catch (err) {
+          console.error('Supabase canvassing lead insert error:', err);
+        }
+      }
+
+      const leadWithCloudId: Lead = supabaseLeadId
+        ? { ...newLead, supabaseId: supabaseLeadId }
+        : newLead;
+
+      persistLeads([leadWithCloudId, ...leads]);
+      showToast(`Lead ${jobNumber} created from pin`);
+
+      return {
+        leadNumericId: leadWithCloudId.id,
+        supabaseLeadId,
+        jobNumber,
+      };
+    } catch (err) {
+      console.error('createLeadFromCanvassPin failed:', err);
+      showToast('Could not create lead — try again');
+      return null;
+    }
+  };
+
+  /** Canvassing → "Open lead": jump into the pipeline for a pin already converted. */
+  const openLeadFromCanvassPin = (leadRef: string) => {
+    const lead = leads.find(
+      (l) => l.supabaseId === leadRef || String(l.id) === leadRef
+    );
+    if (!lead) {
+      showToast('Lead not found — it may have been deleted');
+      return;
+    }
+    handleTabChange('leads');
+    window.setTimeout(() => openLeadProfile(lead.id, lead), 80);
+  };
 
   const persistTrash = (next: AppTrashItem[]) => {
     // Never accidentally wipe on bad data
@@ -12986,22 +15433,21 @@ export default function SummitApp() {
   };
 
   const TAKEOFF_FIELD_LABELS: { key: keyof TakeoffSheet; label: string }[] = [
-    { key: 'roofTypeLayers', label: 'Roof type & layers' },
-    { key: 'pipeJacks', label: 'Pipe jacks — neoprene or lead / qty & sizes' },
-    { key: 'turtleVents', label: 'Turtle type vents' },
-    { key: 'powerAtticVents', label: 'Power attic vents' },
-    { key: 'windTurbines', label: 'Wind turbines' },
-    { key: 'ridgeVent', label: 'Ridge vent — aluminum or shingle-over' },
-    { key: 'roofExhaustCap', label: 'Roof exhaust cap (e.g. goose-neck)' },
-    { key: 'hvacVent', label: 'HVAC vent — size and/or model #' },
-    { key: 'hvacMount', label: 'HVAC mount — curb or elbow' },
+    { key: 'roofType', label: 'Roof type & layers' },
+    { key: 'pitch', label: 'Pitch' },
+    { key: 'stories', label: 'Stories' },
+    { key: 'pipeJackLines', label: 'Pipe jacks' },
+    { key: 'ventLines', label: 'Vents' },
+    { key: 'ridgeVent', label: 'Ridge vent (LF)' },
+    { key: 'roofExhaustCap', label: 'Roof exhaust cap' },
+    { key: 'hvacCount', label: 'HVAC units' },
+    { key: 'hvacMount', label: 'HVAC mount' },
     { key: 'chimneyFlashing', label: 'Chimney flashing & size' },
-    { key: 'soffitOverhang', label: 'Soffit overhang measurement' },
-    { key: 'satelliteDish', label: 'Satellite dish' },
-    { key: 'electricalMast', label: 'Electrical mast — split boot or DNR' },
-    { key: 'skylights', label: 'Skylights — type & quantity/sizes' },
+    { key: 'soffitOverhang', label: 'Soffit overhang' },
+    { key: 'satelliteDishCount', label: 'Satellite dish' },
+    { key: 'electricalMast', label: 'Electrical mast' },
+    { key: 'skylightLines', label: 'Skylights' },
     { key: 'dripEdgeGutterApron', label: 'Drip edge / gutter apron' },
-    { key: 'iceAndWaterShield', label: 'Ice & water shield' },
     { key: 'valleyLiner', label: 'Valley liner' },
     { key: 'drywallSf', label: 'Interior — drywall SF' },
     { key: 'paintingSf', label: 'Interior — painting SF / coats' },
@@ -13010,9 +15456,489 @@ export default function SummitApp() {
     { key: 'notes', label: 'Notes' },
   ];
 
+  const updateTakeoffSkuLine = (
+    field: 'pipeJackLines' | 'ventLines',
+    lineId: string,
+    patch: Partial<TakeoffSkuLine>
+  ) => {
+    setTakeoffForm((f) => ({
+      ...f,
+      [field]: f[field].map((line) =>
+        line.id === lineId ? { ...line, ...patch } : line
+      ),
+    }));
+  };
+
+  const addTakeoffSkuLine = (field: 'pipeJackLines' | 'ventLines') => {
+    setTakeoffForm((f) => ({
+      ...f,
+      [field]: [...f[field], newTakeoffSkuLine()],
+    }));
+  };
+
+  const removeTakeoffSkuLine = (
+    field: 'pipeJackLines' | 'ventLines',
+    lineId: string
+  ) => {
+    setTakeoffForm((f) => ({
+      ...f,
+      [field]: f[field].filter((line) => line.id !== lineId),
+    }));
+  };
+
+  const updateTakeoffSkylightLine = (
+    lineId: string,
+    patch: Partial<TakeoffSkylightLine>
+  ) => {
+    setTakeoffForm((f) => ({
+      ...f,
+      skylightLines: f.skylightLines.map((line) =>
+        line.id === lineId ? { ...line, ...patch } : line
+      ),
+    }));
+  };
+
+  const addTakeoffSkylightLine = () => {
+    setTakeoffForm((f) => ({
+      ...f,
+      skylightLines: [...f.skylightLines, newTakeoffSkylightLine()],
+    }));
+  };
+
+  const removeTakeoffSkylightLine = (lineId: string) => {
+    setTakeoffForm((f) => ({
+      ...f,
+      skylightLines: f.skylightLines.filter((line) => line.id !== lineId),
+    }));
+  };
+
+  const renderTakeoffSkuLines = (
+    field: 'pipeJackLines' | 'ventLines',
+    catalog: CatalogSku[]
+  ) => {
+    const lines = takeoffForm[field];
+    const selectCls =
+      'flex-1 min-w-0 border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20';
+    const qtyCls =
+      'w-24 border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20';
+    return (
+      <div className="space-y-2">
+        {lines.length === 0 && (
+          <p className="text-sm text-zinc-400">None added</p>
+        )}
+        {lines.map((line) => (
+          <div key={line.id} className="flex flex-wrap items-center gap-2">
+            <select
+              value={line.skuKey}
+              onChange={(e) =>
+                updateTakeoffSkuLine(field, line.id, { skuKey: e.target.value })
+              }
+              className={selectCls}
+            >
+              <option value="">Select product…</option>
+              {catalog.map((p) => (
+                <option key={p.key} value={p.key}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={line.qty}
+              onChange={(e) =>
+                updateTakeoffSkuLine(field, line.id, { qty: e.target.value })
+              }
+              placeholder="Qty"
+              className={qtyCls}
+            />
+            <button
+              type="button"
+              onClick={() => removeTakeoffSkuLine(field, line.id)}
+              className="text-sm text-zinc-500 hover:text-red-600 px-2 py-1"
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() => addTakeoffSkuLine(field)}
+          className="text-sm font-medium text-sky-700 hover:text-sky-900"
+        >
+          + Add {field === 'pipeJackLines' ? 'pipe jack' : 'vent'}
+        </button>
+      </div>
+    );
+  };
+
+  const renderTakeoffSkylightLines = () => {
+    const lines = takeoffForm.skylightLines;
+    const sizeCls =
+      'flex-1 min-w-0 border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20';
+    const qtyCls =
+      'w-24 border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20';
+    return (
+      <div className="space-y-2">
+        {lines.length === 0 && (
+          <p className="text-sm text-zinc-400">None added</p>
+        )}
+        {lines.map((line) => (
+          <div key={line.id} className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              value={line.size}
+              onChange={(e) =>
+                updateTakeoffSkylightLine(line.id, { size: e.target.value })
+              }
+              placeholder="Size, e.g. 22x46"
+              className={sizeCls}
+            />
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={line.qty}
+              onChange={(e) =>
+                updateTakeoffSkylightLine(line.id, { qty: e.target.value })
+              }
+              placeholder="Qty"
+              className={qtyCls}
+            />
+            <button
+              type="button"
+              onClick={() => removeTakeoffSkylightLine(line.id)}
+              className="text-sm text-zinc-500 hover:text-red-600 px-2 py-1"
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={addTakeoffSkylightLine}
+          className="text-sm font-medium text-sky-700 hover:text-sky-900"
+        >
+          + Add skylight
+        </button>
+      </div>
+    );
+  };
+
+  const renderTakeoffFields = () => {
+    const inputCls =
+      'w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20';
+    const labelCls = 'text-sm text-zinc-500 mb-1.5 block';
+    const sectionCls =
+      'bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm';
+    const sectionHeaderCls =
+      'text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-4';
+
+    const setField = (key: keyof TakeoffSheet, value: string) =>
+      setTakeoffForm((f) => ({ ...f, [key]: value }));
+
+    const renderStringSelect = (
+      value: string,
+      onChange: (v: string) => void,
+      options: string[],
+      noneLabel = 'None'
+    ) => (
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={inputCls}
+      >
+        <option value="">{noneLabel}</option>
+        {options.map((o) => (
+          <option key={o} value={o}>
+            {o}
+          </option>
+        ))}
+      </select>
+    );
+
+    return (
+      <div className="space-y-6">
+        <section className={sectionCls}>
+          <div className={sectionHeaderCls}>Roof System</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className={labelCls}>Roof type</label>
+              <select
+                value={takeoffForm.roofType}
+                onChange={(e) => setField('roofType', e.target.value)}
+                className={inputCls}
+              >
+                <option value="">Select…</option>
+                {TAKEOFF_ROOF_TYPE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>Layers</label>
+              <select
+                value={takeoffForm.roofLayers}
+                onChange={(e) => setField('roofLayers', e.target.value)}
+                className={inputCls}
+              >
+                <option value="">Select…</option>
+                {TAKEOFF_ROOF_LAYERS_OPTIONS.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>Pitch</label>
+              <select
+                value={takeoffForm.pitch}
+                onChange={(e) => setField('pitch', e.target.value)}
+                className={inputCls}
+              >
+                <option value="">Select…</option>
+                {PITCH_OPTIONS.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>Stories</label>
+              <select
+                value={takeoffForm.stories}
+                onChange={(e) => setField('stories', e.target.value)}
+                className={inputCls}
+              >
+                <option value="">Select…</option>
+                {TAKEOFF_STORIES_OPTIONS.map((o) => (
+                  <option key={o} value={o}>
+                    {o} Story{o === '1' ? '' : 's'}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <section className={sectionCls}>
+          <div className={sectionHeaderCls}>Ventilation &amp; Penetrations</div>
+          <div className="space-y-5">
+            <div>
+              <label className={labelCls}>Pipe jacks</label>
+              {renderTakeoffSkuLines('pipeJackLines', PIPE_JACK_CATALOG)}
+            </div>
+            <div>
+              <label className={labelCls}>Vents</label>
+              {renderTakeoffSkuLines('ventLines', VENT_CATALOG)}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className={labelCls}>Ridge vent (LF)</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={takeoffForm.ridgeVent}
+                  onChange={(e) => setField('ridgeVent', e.target.value)}
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label className={labelCls}>Roof exhaust cap</label>
+                {renderStringSelect(
+                  takeoffForm.roofExhaustCap,
+                  (v) => setField('roofExhaustCap', v),
+                  TAKEOFF_ROOF_EXHAUST_CAP_OPTIONS
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className={sectionCls}>
+          <div className={sectionHeaderCls}>Metals &amp; Edges</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className={labelCls}>Drip edge / gutter apron</label>
+              {renderStringSelect(
+                takeoffForm.dripEdgeGutterApron,
+                (v) => setField('dripEdgeGutterApron', v),
+                TAKEOFF_DRIP_EDGE_OPTIONS
+              )}
+            </div>
+            <div>
+              <label className={labelCls}>Valley liner</label>
+              {renderStringSelect(
+                takeoffForm.valleyLiner,
+                (v) => setField('valleyLiner', v),
+                TAKEOFF_VALLEY_LINER_OPTIONS
+              )}
+            </div>
+            <div>
+              <label className={labelCls}>Chimney flashing</label>
+              {renderStringSelect(
+                takeoffForm.chimneyFlashing,
+                (v) => setField('chimneyFlashing', v),
+                TAKEOFF_CHIMNEY_FLASHING_OPTIONS
+              )}
+            </div>
+            <div>
+              <label className={labelCls}>Chimney size</label>
+              <input
+                type="text"
+                placeholder="e.g. 24x24"
+                value={takeoffForm.chimneyFlashingSize}
+                onChange={(e) =>
+                  setField('chimneyFlashingSize', e.target.value)
+                }
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Soffit overhang</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={takeoffForm.soffitOverhang}
+                  onChange={(e) => setField('soffitOverhang', e.target.value)}
+                  className={inputCls}
+                />
+                <select
+                  value={takeoffForm.soffitOverhangUnit}
+                  onChange={(e) => setField('soffitOverhangUnit', e.target.value)}
+                  className={`${inputCls} w-40 flex-shrink-0`}
+                >
+                  <option value="">Unit…</option>
+                  {TAKEOFF_SOFFIT_UNIT_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className={sectionCls}>
+          <div className={sectionHeaderCls}>HVAC &amp; Equipment</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className={labelCls}>HVAC units</label>
+              <input
+                type="number"
+                min={0}
+                value={takeoffForm.hvacCount}
+                onChange={(e) => setField('hvacCount', e.target.value)}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>HVAC mount</label>
+              <select
+                value={
+                  takeoffForm.hvacMount === 'curb' ||
+                  takeoffForm.hvacMount === 'elbow'
+                    ? takeoffForm.hvacMount
+                    : ''
+                }
+                onChange={(e) => setField('hvacMount', e.target.value)}
+                className={inputCls}
+              >
+                <option value="">Select…</option>
+                <option value="curb">Curb</option>
+                <option value="elbow">Elbow</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}># of satellite dishes</label>
+              <input
+                type="number"
+                min={0}
+                value={takeoffForm.satelliteDishCount}
+                onChange={(e) => setField('satelliteDishCount', e.target.value)}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Detach &amp; reset dish?</label>
+              {renderStringSelect(
+                takeoffForm.satelliteDishDr,
+                (v) => setField('satelliteDishDr', v),
+                TAKEOFF_YES_NO_OPTIONS,
+                'Select…'
+              )}
+            </div>
+            <div>
+              <label className={labelCls}>Electrical mast</label>
+              {renderStringSelect(
+                takeoffForm.electricalMast,
+                (v) => setField('electricalMast', v),
+                TAKEOFF_YES_NO_OPTIONS,
+                'Select…'
+              )}
+            </div>
+          </div>
+          <div className="mt-4">
+            <label className={labelCls}>Skylights</label>
+            {renderTakeoffSkylightLines()}
+          </div>
+        </section>
+
+        <section className={sectionCls}>
+          <div className={sectionHeaderCls}>Interior</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className={labelCls}>Drywall (SF)</label>
+              <input
+                type="text"
+                value={takeoffForm.drywallSf}
+                onChange={(e) => setField('drywallSf', e.target.value)}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Painting (SF / coats)</label>
+              <input
+                type="text"
+                value={takeoffForm.paintingSf}
+                onChange={(e) => setField('paintingSf', e.target.value)}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Ceiling height</label>
+              <input
+                type="text"
+                value={takeoffForm.ceilingHeight}
+                onChange={(e) => setField('ceilingHeight', e.target.value)}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Ceiling fans</label>
+              <input
+                type="text"
+                value={takeoffForm.ceilingFans}
+                onChange={(e) => setField('ceilingFans', e.target.value)}
+                className={inputCls}
+              />
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  };
+
   const saveTakeoff = (alsoDocument = false) => {
     if (!currentLeadId) return;
-    const snapshot = { ...takeoffForm };
+    const snapshot = normalizeTakeoff(takeoffForm);
+    setTakeoffForm(snapshot);
     const updatedLeads = leads.map((lead) =>
       lead.id === currentLeadId ? { ...lead, takeoff: snapshot } : lead
     );
@@ -13037,7 +15963,8 @@ export default function SummitApp() {
         `Date: ${new Date().toLocaleString()}`,
         '',
         ...TAKEOFF_FIELD_LABELS.map(
-          ({ key, label }) => `${label}: ${snapshot[key] || '—'}`
+          ({ key, label }) =>
+            `${label}: ${formatTakeoffFieldValue(key, snapshot)}`
         ),
       ];
       const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
@@ -13053,7 +15980,8 @@ export default function SummitApp() {
   };
 
   const assignTakeoffToLead = (leadId: number) => {
-    const snapshot = { ...takeoffForm };
+    const snapshot = normalizeTakeoff(takeoffForm);
+    setTakeoffForm(snapshot);
     const updatedLeads = leads.map((lead) =>
       lead.id === leadId ? { ...lead, takeoff: snapshot } : lead
     );
@@ -13210,6 +16138,12 @@ export default function SummitApp() {
     setCoatingExtraPass(false);
     setCoatingPressureWash(false);
     setProductColors({});
+    setHipRidgeChoice('');
+    setStarterChoice('');
+    setIceWaterChoice('');
+    setSelectedUnderlayment('');
+    setMbCapChoice('');
+    setMbBaseChoice('');
     setLowSlopeMode('none');
     setLowSlopeType('none');
     setTileMode('');
@@ -13226,6 +16160,8 @@ export default function SummitApp() {
     if (type !== 'cambridge') setCambridgeColor('');
     if (type !== 'dynasty') setDynastyColor('');
     if (type !== 'armourshake') setArmourshakeColor('');
+    // Sell-only ridge pick on estimate; starter / I&W material costs stay on Material Order
+    if (!hipRidgeChoice) setHipRidgeChoice('standard');
   };
 
   const setProductColor = (product: string, color: string) => {
@@ -13277,6 +16213,10 @@ export default function SummitApp() {
       else if (kind === 'urethane') product = 'urethane';
       else product = '';
     }
+    if (system !== 'mod_bit') {
+      setMbCapChoice('');
+      setMbBaseChoice('');
+    }
     setSelectedShingle(product);
     setHasUnsavedChanges(true);
   };
@@ -13294,14 +16234,9 @@ export default function SummitApp() {
   const estimatorClient = resolveEstimatorClient();
 
   const getShingleDisplayName = () => {
+    const fromCatalog = SHINGLE_PRODUCTS.find((p) => p.key === selectedShingle);
+    if (fromCatalog) return fromCatalog.label;
     const names: Record<string, string> = {
-      cambridge: 'Cambridge',
-      dynasty: 'Dynasty',
-      armourshake: 'Armourshake',
-      gaf_hdz: 'GAF HDZ',
-      gaf_natural_shadow: 'GAF Natural Shadow',
-      owens_oakridge: 'Owens Oakridge',
-      owens_duration: 'Owens Duration',
       tile_dr: 'Detach & Reset',
       tile_rr: 'Remove & Replace',
       sa_underlayment: 'SA High-Temp Underlayment',
@@ -13328,13 +16263,20 @@ export default function SummitApp() {
   };
 
   const getUnderlaymentLabel = () => {
+    const book = underlaymentLabel(selectedUnderlayment);
+    if (book) return `Install ${book}`;
     if (selectedUnderlayment === 'sa-high-temp') {
       return 'Install SA High-Temp Underlayment';
     }
     if (selectedUnderlayment === 'high-temp') {
       return 'Install TopShield Bigfoot 30 High-Temp Synthetic Underlayment';
     }
-    return 'Install TopShield Securegrip 30 Full Synthetic Underlayment';
+    if (selectedUnderlayment === 'standard') {
+      return 'Install TopShield Securegrip 30 Full Synthetic Underlayment';
+    }
+    return selectedUnderlayment
+      ? `Install ${selectedUnderlayment}`
+      : 'Install synthetic underlayment over the entire roof deck';
   };
 
   const buildScopeOfWork = (): { text: string; amount?: number }[] => {
@@ -13386,6 +16328,14 @@ export default function SummitApp() {
             : `Install ${name} shingles`
         );
       }
+      if (hipRidgeChoice === 'high_profile') {
+        push(
+          `Install ${hipRidgeOptionLabel('high_profile', selectedShingle)}`,
+          getSellPrice('hip_ridge_high_profile', HIGH_PROFILE_RIDGE_SELL)
+        );
+      } else if (hipRidgeChoice === 'standard') {
+        push(`Install ${hipRidgeOptionLabel('standard', selectedShingle)}`);
+      }
     }
 
     // --- Priced adders only below ---
@@ -13401,25 +16351,34 @@ export default function SummitApp() {
     }
 
     let steepAmt = 0;
-    if (pt === '8/12' || pt === '9/12') steepAmt = getSellPrice('steep_8_9', 100) * sq;
-    else if (pt === '10/12' || pt === '11/12') steepAmt = getSellPrice('steep_9_11', 175) * sq;
-    else if (pt === '12/12') steepAmt = getSellPrice('steep_11_12', 250) * sq;
+    if (pt === '8/12' || pt === '9/12') steepAmt = getSteepSellPerSq('steep_8_9') * sq;
+    else if (pt === '10/12' || pt === '11/12') steepAmt = getSteepSellPerSq('steep_9_11') * sq;
+    else if (pt === '12/12') steepAmt = getSteepSellPerSq('steep_11_12') * sq;
     if (steepAmt > 0) {
       push(`Steep slope charge — ${pt}`, steepAmt);
     }
 
     if (ridge > 0) {
-      const ridgeAmt = ridge * getSellPrice('ridge_vent', 12);
+      const ridgeAmt = ridge * getSellPrice('ridge_vent', 13);
       push(`Install ridge vent — ${ridge} LF`, ridgeAmt);
     }
 
     if (fasciaMode && flf > 0) {
       const fType = fasciaType === '2x8' ? '2×8' : fasciaType === '2x6' ? '2×6' : '';
       const kind = fasciaMode === 'full' ? 'Full fascia replacement' : 'Fascia repair';
-      const fasciaRate = getSellPrice(
-        'fascia',
-        activePricingRegion === 'central' ? 15 : 18
-      );
+      const fasciaKey =
+        fasciaType === '2x8'
+          ? 'fascia_2x8'
+          : fasciaType === '2x6'
+            ? 'fascia_2x6'
+            : 'fascia';
+      const fasciaFallback =
+        fasciaKey === 'fascia_2x8'
+          ? 18
+          : activePricingRegion === 'central'
+            ? 15
+            : 18;
+      const fasciaRate = getSellPrice(fasciaKey, fasciaFallback);
       const fasciaAmt = billableFascia * fasciaRate;
       push(
         fType
@@ -13472,9 +16431,8 @@ export default function SummitApp() {
       );
     }
     if (hvac > 0) {
-      const hvacRate = getSellPrice(
-        'hvac',
-        activePricingRegion === 'central' ? 1250 : 1600
+      const hvacRate = getHvacSellPrice(
+        activePricingRegion === 'central' ? 1300 : 1600
       );
       push(
         `Detach and reset HVAC — ${hvac} unit${hvac === 1 ? '' : 's'}`,
@@ -13484,20 +16442,20 @@ export default function SummitApp() {
     if (sky > 0) {
       const skyRate = getSellPrice(
         'skylight',
-        activePricingRegion === 'central' ? 500 : 550
+        activePricingRegion === 'central' ? 525 : 550
       );
       push(`Detach and reset skylights — ${sky}`, sky * skyRate);
     }
     if (gutterMode === 'dr' && gLF > 0) {
       const rate = getSellPrice(
         'gutters_dr',
-        activePricingRegion === 'central' ? 15 : 20
+        activePricingRegion === 'central' ? 18 : 20
       );
       push(`Detach and reset gutters — ${gLF} LF`, gLF * rate);
     } else if (gutterMode === 'rr' && gLF > 0) {
       const rate = getSellPrice(
         'gutters_rr',
-        activePricingRegion === 'central' ? 20 : 30
+        activePricingRegion === 'central' ? 25 : 30
       );
       push(`Remove and replace gutters — ${gLF} LF`, gLF * rate);
     }
@@ -13517,8 +16475,14 @@ export default function SummitApp() {
         : 0;
     if (isModBitScope && mbScopeSq > 0) {
       // 1 base ply + SA cap only (never 2 base layers)
+      const baseName =
+        MB_BASE_OPTIONS.find((o) => o.key === mbBaseChoice)?.label ||
+        'SA base sheet';
+      const capName =
+        MB_CAP_OPTIONS.find((o) => o.key === mbCapChoice)?.label ||
+        'SA cap sheet';
       push(
-        `Install modified bitumen — ${mbScopeSq} SQ (1 base ply + SA cap sheet${
+        `Install modified bitumen — ${mbScopeSq} SQ (1 ${baseName} + ${capName}${
           modifiedBitumenColor ? `, ${modifiedBitumenColor}` : ''
         })`
       );
@@ -14188,6 +17152,7 @@ export default function SummitApp() {
       | 'calendar'
       | 'tasks'
       | 'performance'
+      | 'orders'
       | 'tools'
       | 'documents'
       | 'settings';
@@ -14201,6 +17166,7 @@ export default function SummitApp() {
     { tab: 'calendar', label: 'Calendar', icon: 'calendar' },
     { tab: 'tasks', label: 'Tasks', icon: 'tasks' },
     { tab: 'performance', label: 'Performance', icon: 'performance' },
+    { tab: 'orders', label: 'Orders', icon: 'orders' },
     { tab: 'tools', label: 'Tools', icon: 'tools' },
     { tab: 'documents', label: 'Documents', icon: 'documents' },
   ];
@@ -14274,6 +17240,13 @@ export default function SummitApp() {
         return (
           <svg {...common}>
             <path d="M4 19V5M10 19v-9M16 19V8M22 19H2" />
+          </svg>
+        );
+      case 'orders':
+        return (
+          <svg {...common}>
+            <path d="M6 7h12l-1 12H7L6 7Z" />
+            <path d="M9 7V5a3 3 0 0 1 6 0v2" />
           </svg>
         );
       case 'tools':
@@ -14810,6 +17783,1239 @@ export default function SummitApp() {
     );
   }
 
+  /**
+   * Orders flow — order type chooser → material sections → Next → Labor
+   * (crew + job packet) → Submit/PDF. Shared by the global Orders tab and the
+   * lead-profile Orders tab. When `fixedLead` is set, the job is locked to
+   * that lead (no manual job/lead picker) and `embedded` swaps the sticky
+   * page-level chrome for the lighter card chrome used inside a lead profile.
+   */
+  const renderOrdersFlow = (opts: {
+    orderType: MaterialOrderType | null;
+    setOrderType: typeof setMaterialOrderType;
+    orderLines: Record<string, TakeoffSkuLine[]>;
+    setOrderLines: typeof setMaterialOrderLines;
+    coverageInputs: Record<string, string>;
+    setCoverageInputs: typeof setMaterialOrderCoverageInputs;
+    step: OrdersStep;
+    setStep: typeof setOrdersStep;
+    fixedLead?: Lead | null;
+    embedded?: boolean;
+  }) => {
+    const materialOrderType = opts.orderType;
+    const setMaterialOrderType = opts.setOrderType;
+    const materialOrderLines = opts.orderLines;
+    const setMaterialOrderLines = opts.setOrderLines;
+    const coverageInputs = opts.coverageInputs;
+    const setCoverageInputs = opts.setCoverageInputs;
+    const ordersStep = opts.step;
+    const setOrdersStep = opts.setStep;
+    const fixedLead = opts.fixedLead ?? null;
+    const embedded = opts.embedded ?? false;
+
+    // Lead-profile Orders only: latest measurement's eave+rake LF, for the
+    // starter / hip&ridge / drip-edge LF quick-fill.
+    const fixedLeadMeasurement =
+      fixedLead?.measurements && fixedLead.measurements.length > 0
+        ? fixedLead.measurements[fixedLead.measurements.length - 1]
+        : null;
+    const fixedLeadEaveRakeLF = fixedLeadMeasurement
+      ? Math.round(
+          ((fixedLeadMeasurement.eaveLF || 0) +
+            (fixedLeadMeasurement.rakeLF || 0)) *
+            10
+        ) / 10
+      : null;
+
+    const orderTypeLabel =
+      materialOrderType === 'shingle'
+        ? 'Shingle order'
+        : materialOrderType === 'tile'
+          ? 'Tile order'
+          : materialOrderType === 'flat'
+            ? 'Low-slope order'
+            : '';
+    const sections = materialOrderType
+      ? materialOrderSectionsFor(materialOrderType)
+      : [];
+    const selectedLines = sections.flatMap((sec) =>
+      (materialOrderLines[sec.key] || [])
+        .filter((l) => l.skuKey)
+        .map((l) => ({ section: sec, line: l }))
+    );
+    const orderMatTotal = selectedLines.reduce((sum, { line }) => {
+      const qty = Number(line.qty) || 0;
+      return (
+        sum +
+        qty * getCost(line.skuKey, catalogFallbackCost(line.skuKey))
+      );
+    }, 0);
+
+    const downloadMaterialOrder = () => {
+      if (selectedLines.length === 0) {
+        showToast('Add materials first');
+        return;
+      }
+      const header = [
+        'MATERIAL ORDER',
+        orderTypeLabel,
+        '',
+      ];
+      const body = selectedLines.map(({ section, line }) => {
+        const qty = line.qty || '1';
+        const label = catalogLabel(line.skuKey);
+        const unit = catalogUnit(line.skuKey);
+        const unitPart = unit ? ` ${unit}` : '';
+        const unitCost = getCost(
+          line.skuKey,
+          catalogFallbackCost(line.skuKey)
+        );
+        const costPart =
+          unitCost > 0 ? ` @ $${unitCost.toFixed(2)}${unitPart}` : '';
+        return `${section.title}: ${qty}${unitPart} · ${label}${costPart}`;
+      });
+      const blob = new Blob([[...header, ...body].join('\n')], {
+        type: 'text/plain',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `material-order-${materialOrderType || 'list'}-${Date.now()}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('Order list downloaded');
+    };
+
+    const updateOrderLine = (
+      sectionKey: string,
+      lineId: string,
+      patch: Partial<TakeoffSkuLine>
+    ) => {
+      setMaterialOrderLines((prev) => ({
+        ...prev,
+        [sectionKey]: (prev[sectionKey] || []).map((l) =>
+          l.id === lineId ? { ...l, ...patch } : l
+        ),
+      }));
+    };
+
+    const addOrderLine = (sectionKey: string) => {
+      setMaterialOrderLines((prev) => ({
+        ...prev,
+        [sectionKey]: [
+          ...(prev[sectionKey] || []),
+          newTakeoffSkuLine('', '1'),
+        ],
+      }));
+    };
+
+    const removeOrderLine = (sectionKey: string, lineId: string) => {
+      setMaterialOrderLines((prev) => ({
+        ...prev,
+        [sectionKey]: (prev[sectionKey] || []).filter(
+          (l) => l.id !== lineId
+        ),
+      }));
+      setCoverageInputs((prev) => {
+        if (!(lineId in prev)) return prev;
+        const next = { ...prev };
+        delete next[lineId];
+        return next;
+      });
+    };
+
+    const toggleCoverageCalc = (lineId: string) => {
+      setCoverageInputs((prev) => {
+        const next = { ...prev };
+        if (lineId in next) {
+          delete next[lineId];
+        } else {
+          next[lineId] = '';
+        }
+        return next;
+      });
+    };
+
+    const applyCoverageValue = (
+      sectionKey: string,
+      lineId: string,
+      coverage: OrderCoverage,
+      raw: string
+    ) => {
+      setCoverageInputs((prev) => ({ ...prev, [lineId]: raw }));
+      const n = parseFloat(raw);
+      if (Number.isFinite(n) && n > 0) {
+        updateOrderLine(sectionKey, lineId, {
+          qty: String(coverageComputeQty(coverage, n)),
+        });
+      }
+    };
+
+    return (
+      <div className={embedded ? 'space-y-6' : 'page-shell page-fade pb-28'}>
+        {ordersStep === 'material' && (
+          <>
+        {!embedded && (
+        <div className="mb-8">
+          <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
+            Orders
+          </h1>
+        </div>
+        )}
+
+        {!materialOrderType ? (
+          <div className="pb-8">
+            <div className="mb-6">
+              <h2 className="text-2xl font-semibold text-zinc-900 tracking-tight">
+                Material Order
+              </h2>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {(
+                [
+                  {
+                    id: 'shingle' as const,
+                    label: 'Shingle order',
+                    desc: 'Shingles, hip & ridge, starter, underlayment',
+                  },
+                  {
+                    id: 'tile' as const,
+                    label: 'Tile order',
+                    desc: 'Tile, hip & ridge, underlayment, accessories',
+                  },
+                  {
+                    id: 'flat' as const,
+                    label: 'Low-slope order',
+                    desc: 'Modified bitumen, coatings, foam, ice & water',
+                  },
+                ] as const
+              ).map((sys) => (
+                <button
+                  key={sys.id}
+                  type="button"
+                  onClick={() => {
+                    setMaterialOrderType(sys.id);
+                    // Seed one empty line per first few sections for speed
+                    setMaterialOrderLines((prev) => {
+                      const next = { ...prev };
+                      for (const sec of materialOrderSectionsFor(
+                        sys.id
+                      )) {
+                        if (!next[sec.key]?.length) {
+                          next[sec.key] = [newTakeoffSkuLine('', '1')];
+                        }
+                      }
+                      return next;
+                    });
+                  }}
+                  className="text-left bg-white border-2 border-zinc-200 hover:border-sky-300 hover:shadow-md rounded-3xl p-6 sm:p-8 transition-all group"
+                >
+                  <div className="text-sky-700 text-xs font-semibold mb-2 uppercase tracking-wide group-hover:text-sky-800">
+                    Order type
+                  </div>
+                  <div className="text-2xl font-semibold text-zinc-900 mb-2">
+                    {sys.label}
+                  </div>
+                  <p className="text-sm text-zinc-500">{sys.desc}</p>
+                  <div className="mt-5 text-sm font-semibold text-sky-700">
+                    Continue →
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <>
+            <div
+              className={
+                embedded
+                  ? 'py-4 mb-6 bg-zinc-50 rounded-2xl px-4 border border-zinc-200/70'
+                  : 'sticky top-14 sm:top-16 z-30 -mx-[var(--page-pad-x)] px-[var(--page-pad-x)] py-4 mb-6 bg-zinc-50/95 backdrop-blur border-b border-zinc-200/70'
+              }
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
+                    Material Order
+                  </div>
+                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 tracking-tight">
+                    {orderTypeLabel}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMaterialOrderType(null)}
+                  className="text-sm font-medium text-sky-800 hover:text-sky-950 self-start sm:self-auto"
+                >
+                  ← Change order type
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              {sections.map((sec) => {
+                const lines = materialOrderLines[sec.key] || [];
+                return (
+                  <section
+                    key={sec.key}
+                    className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm"
+                  >
+                    <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-4">
+                      {sec.title}
+                    </div>
+                    <div className="space-y-2">
+                      {lines.length === 0 && (
+                        <p className="text-sm text-zinc-400">None added</p>
+                      )}
+                      {lines.map((line) => {
+                        const unitCost = line.skuKey
+                          ? getCost(
+                              line.skuKey,
+                              catalogFallbackCost(line.skuKey)
+                            )
+                          : 0;
+                        const coverage = line.skuKey
+                          ? orderCoverageFor(line.skuKey)
+                          : null;
+                        const calcOpen = line.id in coverageInputs;
+                        const calcValue = coverageInputs[line.id] ?? '';
+                        const calcIsLf =
+                          coverage?.kind === 'lf_to_bundle' ||
+                          coverage?.kind === 'lf_to_piece';
+                        const showMeasurementFill =
+                          calcOpen &&
+                          calcIsLf &&
+                          fixedLeadEaveRakeLF != null &&
+                          fixedLeadEaveRakeLF > 0;
+                        return (
+                          <div key={line.id} className="space-y-1.5">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <select
+                                value={line.skuKey}
+                                onChange={(e) =>
+                                  updateOrderLine(sec.key, line.id, {
+                                    skuKey: e.target.value,
+                                  })
+                                }
+                                className="flex-1 min-w-[12rem] border border-zinc-200 rounded-2xl px-3 py-2.5 text-sm text-zinc-900 bg-white"
+                              >
+                                <option value="">Select product…</option>
+                                {sec.options.map((opt) => (
+                                  <option key={opt.key} value={opt.key}>
+                                    {opt.label}
+                                    {opt.unit ? ` · ${opt.unit}` : ''}
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                type="number"
+                                min={0}
+                                step={1}
+                                value={line.qty}
+                                onChange={(e) =>
+                                  updateOrderLine(sec.key, line.id, {
+                                    qty: e.target.value,
+                                  })
+                                }
+                                placeholder="Qty"
+                                className="w-20 border border-zinc-200 rounded-2xl px-3 py-2.5 text-sm text-zinc-900"
+                                aria-label="Quantity"
+                              />
+                              <span
+                                className="text-sm font-medium text-zinc-700 tabular-nums min-w-[3.5rem] shrink-0"
+                                title="Unit of measure"
+                              >
+                                {line.skuKey
+                                  ? catalogUnit(line.skuKey) || '—'
+                                  : ''}
+                              </span>
+                              <span className="text-xs text-zinc-500 tabular-nums w-24 text-right shrink-0">
+                                {line.skuKey
+                                  ? unitCost > 0
+                                    ? `$${unitCost.toFixed(2)}`
+                                    : '—'
+                                  : ''}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  removeOrderLine(sec.key, line.id)
+                                }
+                                className="text-sm text-zinc-500 hover:text-red-600 px-2 py-1"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                            {coverage && (
+                              <div className="flex flex-wrap items-center gap-2 pl-1">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleCoverageCalc(line.id)}
+                                  className="text-xs font-medium text-sky-700 hover:text-sky-900"
+                                >
+                                  {calcOpen
+                                    ? 'Hide calculator'
+                                    : coverageCalcButtonLabel(coverage.kind)}
+                                </button>
+                                {calcOpen && (
+                                  <>
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      step={0.1}
+                                      value={calcValue}
+                                      onChange={(e) =>
+                                        applyCoverageValue(
+                                          sec.key,
+                                          line.id,
+                                          coverage,
+                                          e.target.value
+                                        )
+                                      }
+                                      placeholder={calcIsLf ? 'LF' : 'Squares'}
+                                      aria-label={
+                                        calcIsLf
+                                          ? 'Linear feet'
+                                          : 'Squares'
+                                      }
+                                      className="w-24 border border-zinc-200 rounded-2xl px-3 py-2 text-xs text-zinc-900"
+                                    />
+                                    <span className="text-xs text-zinc-400">
+                                      {calcIsLf ? 'LF' : 'sq'} →{' '}
+                                      {catalogUnit(line.skuKey) || 'units'}
+                                    </span>
+                                    {showMeasurementFill && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          applyCoverageValue(
+                                            sec.key,
+                                            line.id,
+                                            coverage,
+                                            String(fixedLeadEaveRakeLF)
+                                          )
+                                        }
+                                        className="text-xs text-sky-700 hover:text-sky-900 underline underline-offset-2"
+                                      >
+                                        Use eave+rake from measurement (
+                                        {fixedLeadEaveRakeLF} LF)
+                                      </button>
+                                    )}
+                                    {coverage.approx && (
+                                      <span className="text-xs text-amber-700">
+                                        ≈ confirm coverage
+                                      </span>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                      <button
+                        type="button"
+                        onClick={() => addOrderLine(sec.key)}
+                        className="text-sm font-medium text-sky-700 hover:text-sky-900"
+                      >
+                        + Add {sec.addLabel}
+                      </button>
+                    </div>
+                  </section>
+                );
+              })}
+            </div>
+
+            <div
+              className={
+                embedded
+                  ? 'bg-white border border-zinc-200 rounded-3xl py-4 px-4 sm:px-6 mt-8'
+                  : 'sticky bottom-0 bg-white/95 backdrop-blur border-t border-zinc-200 py-4 z-40 -mx-[var(--page-pad-x)] px-[var(--page-pad-x)] mt-8'
+              }
+            >
+              <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs text-zinc-500">ORDER TOTAL</div>
+                  <div className="text-2xl sm:text-3xl font-semibold text-emerald-700 tabular-nums">
+                    {selectedLines.length === 0
+                      ? '—'
+                      : `$${orderMatTotal.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}`}
+                  </div>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                  <button
+                    type="button"
+                    onClick={downloadMaterialOrder}
+                    className="px-8 py-4 rounded-3xl font-semibold w-full sm:w-auto sm:shrink-0 border border-zinc-200 bg-white text-zinc-900 hover:bg-zinc-50"
+                  >
+                    Download list
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOrdersStep('labor')}
+                    className="btn-primary px-8 py-4 rounded-3xl font-semibold w-full sm:w-auto sm:shrink-0"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+          </>
+        )}
+
+        {ordersStep === 'labor' && (() => {
+    const effectiveLaborLeadId = fixedLead ? fixedLead.id : laborLeadId;
+    const laborLead =
+      fixedLead ??
+      (effectiveLaborLeadId != null
+        ? leads.find((l) => l.id === effectiveLaborLeadId) || null
+        : null);
+    const laborEst =
+      laborLead?.estimates && laborLead.estimates.length > 0
+        ? laborLead.estimates[laborLead.estimates.length - 1]
+        : null;
+    const laborRegion: PricingRegion = laborLead
+      ? resolvePricingRegion(
+          laborLead.clientCity,
+          laborLead.clientState,
+          laborLead.clientZip
+        )
+      : activePricingRegion || 'central';
+    const selectedCrew = crewById(laborLead?.assignedCrew);
+    const qLabor = laborLeadSearch.trim().toLowerCase();
+    const laborLeadChoices = leads
+      .filter((l) => {
+        if (!qLabor) return true;
+        const hay = [
+          l.clientFirstName,
+          l.clientLastName,
+          l.jobNumber,
+          l.clientAddress,
+          l.clientCity,
+          l.clientPhone,
+        ]
+          .join(' ')
+          .toLowerCase();
+        return hay.includes(qLabor);
+      })
+      .slice(0, 40);
+
+    const assignLaborCrew = (crewId: string) => {
+      if (effectiveLaborLeadId == null) {
+        showToast('Pick a job first');
+        return;
+      }
+      const updated = leads.map((l) =>
+        l.id === effectiveLaborLeadId
+          ? { ...l, assignedCrew: crewId }
+          : l
+      );
+      persistLeads(updated);
+      showToast(
+        crewById(crewId)?.name
+          ? `${crewById(crewId)!.name} assigned`
+          : 'Crew assigned'
+      );
+    };
+
+    const clearLaborCrew = () => {
+      if (effectiveLaborLeadId == null) return;
+      const updated = leads.map((l) =>
+        l.id === effectiveLaborLeadId
+          ? { ...l, assignedCrew: undefined }
+          : l
+      );
+      persistLeads(updated);
+    };
+
+    const addr = laborLead
+      ? [
+          laborLead.clientAddress,
+          laborLead.clientCity,
+          laborLead.clientState,
+          laborLead.clientZip,
+        ]
+          .filter(Boolean)
+          .join(', ')
+      : '';
+
+    const squaresRows: { label: string; value: string }[] = [];
+    if (laborEst?.squares) {
+      squaresRows.push({
+        label: 'Squares',
+        value: `${laborEst.squares} sq`,
+      });
+    }
+    if (laborEst?.modifiedBitumenSquares) {
+      squaresRows.push({
+        label: 'Mod-bit / flat',
+        value: `${laborEst.modifiedBitumenSquares} sq`,
+      });
+    }
+    const meas = laborLead?.measurements || [];
+    if (meas.length > 1 || (meas.length === 1 && !laborEst?.squares)) {
+      for (const m of meas) {
+        if (m.squares > 0) {
+          squaresRows.push({
+            label: `${m.label || m.roofType || 'Measure'} pitched`,
+            value: `${m.squares} sq`,
+          });
+        }
+        if (m.flatSquares > 0) {
+          squaresRows.push({
+            label: `${m.label || m.roofType || 'Measure'} flat`,
+            value: `${m.flatSquares} sq`,
+          });
+        }
+      }
+    }
+
+    const ridgeChoice =
+      laborEst?.hipRidgeChoice
+        ? hipRidgeOptionLabel(
+            laborEst.hipRidgeChoice,
+            laborEst.selectedShingle
+          ) || laborEst.hipRidgeChoice
+        : '';
+    const underlayLabel = laborEst?.selectedUnderlayment
+      ? underlaymentLabel(laborEst.selectedUnderlayment) ||
+        laborEst.selectedUnderlayment
+      : '';
+
+    const jobFacts: { label: string; value: string }[] = laborLead
+      ? [
+          { label: 'Job #', value: laborLead.jobNumber || '—' },
+          { label: 'Address', value: addr || '—' },
+          {
+            label: 'System',
+            value: laborEst ? estimateSystemLabel(laborEst) : '—',
+          },
+          {
+            label: 'Pitch',
+            value: laborEst?.pitch || meas[0]?.pitch || '—',
+          },
+          {
+            label: 'Steep',
+            value: steepLabelFromPitch(
+              laborEst?.pitch || meas[0]?.pitch || ''
+            ),
+          },
+          {
+            label: 'Stories',
+            value: laborEst?.stories ? String(laborEst.stories) : '—',
+          },
+          {
+            label: 'Layers',
+            value: laborEst?.layers || '—',
+          },
+          {
+            label: 'Redeck',
+            value: laborEst ? deckingLabel(laborEst) : '—',
+          },
+          {
+            label: 'Fascia',
+            value: laborEst?.fasciaLF
+              ? `${laborEst.fasciaLF} LF${
+                  laborEst.fasciaMode
+                    ? ` · ${laborEst.fasciaMode}`
+                    : ''
+                }${
+                  laborEst.fasciaType
+                    ? ` · ${laborEst.fasciaType}`
+                    : ''
+                }`
+              : laborEst?.fasciaMode || '—',
+          },
+          {
+            label: 'HVAC',
+            value:
+              laborEst?.hvacUnits ||
+              laborLead.takeoff?.hvacCount ||
+              '—',
+          },
+          {
+            label: 'Underlayment',
+            value: underlayLabel || '—',
+          },
+          {
+            label: 'Hip & ridge',
+            value: ridgeChoice || '—',
+          },
+          {
+            label: 'Ridge vent',
+            value:
+              laborEst?.ridgeVentLF ||
+              laborLead.takeoff?.ridgeVent ||
+              '—',
+          },
+          {
+            label: 'Region',
+            value: REGION_LABEL[laborRegion],
+          },
+          ...squaresRows,
+        ]
+      : [];
+
+    const materialLinesForPdf = selectedLines.map(({ section, line }) => {
+      const qty = line.qty || '1';
+      const label = catalogLabel(line.skuKey);
+      const unit = catalogUnit(line.skuKey);
+      const unitPart = unit ? ` ${unit}` : '';
+      return `${section.title}: ${qty}${unitPart} · ${label}`;
+    });
+
+    const downloadOrderPacketPdf = () => {
+      const doc = new jsPDF({ unit: 'mm', format: 'letter' });
+      const pageW = doc.internal.pageSize.getWidth();
+      const pageH = doc.internal.pageSize.getHeight();
+      const left = 18;
+      const right = pageW - 18;
+      const ink = { r: 28, g: 28, b: 30 };
+      const muted = { r: 100, g: 100, b: 105 };
+      const rule = { r: 190, g: 190, b: 195 };
+      let y = 18;
+
+      const ensureSpace = (need: number) => {
+        if (y + need <= pageH - 16) return;
+        doc.addPage();
+        y = 18;
+      };
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(16);
+      doc.setTextColor(ink.r, ink.g, ink.b);
+      doc.text('ORDER PACKET', left, y);
+      y += 6;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      doc.setTextColor(muted.r, muted.g, muted.b);
+      doc.text(
+        [orderTypeLabel || 'Material order', new Date().toLocaleDateString()]
+          .filter(Boolean)
+          .join(' · '),
+        left,
+        y
+      );
+      y += 8;
+      doc.setDrawColor(rule.r, rule.g, rule.b);
+      doc.setLineWidth(0.4);
+      doc.line(left, y, right, y);
+      y += 8;
+
+      const sectionTitle = (title: string) => {
+        ensureSpace(12);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(11);
+        doc.setTextColor(ink.r, ink.g, ink.b);
+        doc.text(title, left, y);
+        y += 6;
+      };
+
+      const lineText = (text: string) => {
+        ensureSpace(6);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9.5);
+        doc.setTextColor(ink.r, ink.g, ink.b);
+        const lines = doc.splitTextToSize(text, right - left);
+        doc.text(lines, left, y);
+        y += lines.length * 4.5 + 1;
+      };
+
+      sectionTitle('JOB');
+      if (laborLead) {
+        const clientName =
+          [laborLead.clientFirstName, laborLead.clientLastName]
+            .filter(Boolean)
+            .join(' ') || 'Untitled lead';
+        lineText(`Client: ${clientName}`);
+        for (const f of jobFacts) {
+          if (f.value && f.value !== '—') {
+            lineText(`${f.label}: ${f.value}`);
+          }
+        }
+      } else {
+        lineText('No job linked');
+      }
+
+      y += 3;
+      sectionTitle('CREW');
+      if (selectedCrew) {
+        lineText(
+          `${selectedCrew.name}${selectedCrew.preferred ? ' · Preferred' : ''}`
+        );
+        lineText(
+          [selectedCrew.contact, selectedCrew.phone]
+            .filter(Boolean)
+            .join(' · ') || '—'
+        );
+        lineText(
+          `${REGION_LABEL[laborRegion]} ${formatCrewRate(
+            selectedCrew.shingle[laborRegion]
+          )}`
+        );
+        if (selectedCrew.adders?.length) {
+          for (const a of selectedCrew.adders) {
+            lineText(`${a.label}: ${a.value}`);
+          }
+        }
+      } else {
+        lineText('No crew assigned');
+      }
+
+      y += 3;
+      sectionTitle('MATERIALS');
+      if (materialLinesForPdf.length === 0) {
+        lineText('No materials on order');
+      } else {
+        for (const row of materialLinesForPdf) {
+          lineText(row);
+        }
+        y += 2;
+        lineText(
+          `Order total: $${orderMatTotal.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}`
+        );
+      }
+
+      y += 3;
+      sectionTitle('LABOR ADDERS');
+      for (const a of LABOR_ADDERS_SUMMARY) {
+        lineText(`${a.label}: ${a.value}`);
+      }
+
+      const stamp = Date.now();
+      const jobPart = laborLead?.jobNumber
+        ? laborLead.jobNumber.replace(/[^\w-]+/g, '_')
+        : 'order';
+      doc.save(`order-packet-${jobPart}-${stamp}.pdf`);
+      showToast('Order packet downloaded');
+    };
+
+    const submitOrder = () => {
+      if (selectedLines.length === 0 && !selectedCrew && !laborLead) {
+        showToast('Add materials or pick a job first');
+        return;
+      }
+      if (!materialOrderType) {
+        showToast('Pick a material type first');
+        return;
+      }
+      if (!supabaseEnabled || !supabase) {
+        showToast('Order submission failed — check connection');
+        return;
+      }
+
+      const clientName = laborLead
+        ? [laborLead.clientFirstName, laborLead.clientLastName]
+            .filter(Boolean)
+            .join(' ')
+        : '';
+      const jobSnapshot = {
+        jobNumber: laborLead?.jobNumber || null,
+        clientName: clientName || null,
+        address: addr || null,
+        system: laborEst ? estimateSystemLabel(laborEst) : null,
+        pitch: laborEst?.pitch || meas[0]?.pitch || null,
+        stories: laborEst?.stories ?? null,
+        layers: laborEst?.layers || null,
+        redeck: laborEst ? deckingLabel(laborEst) : null,
+        fasciaLF: laborEst?.fasciaLF ?? null,
+        fasciaMode: laborEst?.fasciaMode || null,
+        fasciaType: laborEst?.fasciaType || null,
+        hvac:
+          laborEst?.hvacUnits || laborLead?.takeoff?.hvacCount || null,
+        underlayment: underlayLabel || null,
+        hipRidge: ridgeChoice || null,
+        ridgeVent:
+          laborEst?.ridgeVentLF ||
+          laborLead?.takeoff?.ridgeVent ||
+          null,
+        region: REGION_LABEL[laborRegion] || null,
+        squares: squaresRows,
+      };
+      const lineItems = selectedLines.map(({ section, line }) => ({
+        item_key: line.skuKey,
+        label: catalogLabel(line.skuKey),
+        section: section.title,
+        unit: catalogUnit(line.skuKey),
+        qty: Number(line.qty) || 0,
+        cost: getCost(line.skuKey, catalogFallbackCost(line.skuKey)),
+      }));
+      const orderType =
+        materialOrderType === 'flat' ? 'low_slope' : materialOrderType;
+      const payload = {
+        order_type: orderType,
+        lead_id: laborLead?.supabaseId?.trim() || null,
+        job_snapshot: jobSnapshot,
+        crew_id: selectedCrew?.id || null,
+        crew_name: selectedCrew?.name || null,
+        line_items: lineItems,
+        total_cost: orderMatTotal,
+        status: 'submitted',
+      };
+
+      void (async () => {
+        try {
+          const { error } = await supabase
+            .from('material_orders')
+            .insert(payload);
+          if (error) {
+            console.error('Supabase material_orders insert error:', error);
+            showToast('Order submission failed — check connection');
+            return;
+          }
+          showToast('Order submitted');
+        } catch (err) {
+          console.error('Order submit error:', err);
+          showToast('Order submission failed — check connection');
+        }
+      })();
+    };
+
+    const Fact = ({
+      label,
+      value,
+    }: {
+      label: string;
+      value: string;
+    }) => (
+      <div className="min-w-0">
+        <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
+          {label}
+        </div>
+        <div className="mt-1 text-sm font-medium text-zinc-900 break-words">
+          {value}
+        </div>
+      </div>
+    );
+
+    return (
+      <>
+        <div
+          className={
+            embedded
+              ? 'py-4 mb-6 bg-zinc-50 rounded-2xl px-4 border border-zinc-200/70'
+              : 'sticky top-14 sm:top-16 z-30 -mx-[var(--page-pad-x)] px-[var(--page-pad-x)] py-4 mb-6 bg-zinc-50/95 backdrop-blur border-b border-zinc-200/70'
+          }
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              {!embedded && (
+              <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
+                Orders
+              </div>
+              )}
+              <div className="text-xl sm:text-2xl font-semibold text-zinc-900 tracking-tight">
+                Labor
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setOrdersStep('material')}
+              className="text-sm font-medium text-sky-800 hover:text-sky-950 self-start sm:self-auto"
+            >
+              ← Material order
+            </button>
+          </div>
+        </div>
+
+        <div className={embedded ? 'space-y-6' : 'space-y-6 pb-28'}>
+          {!fixedLead && (
+          <section className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm">
+            <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-4">
+              Job
+            </div>
+            <input
+              value={laborLeadSearch}
+              onChange={(e) => setLaborLeadSearch(e.target.value)}
+              placeholder="Search name, job #, address…"
+              className="w-full border border-zinc-200 rounded-2xl px-3 py-2.5 text-sm text-zinc-900 mb-3"
+            />
+            {laborLead ? (
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3 rounded-2xl border border-sky-200 bg-sky-50/50 px-4 py-3">
+                <div className="min-w-0">
+                  <div className="font-semibold text-zinc-900 truncate">
+                    {[laborLead.clientFirstName, laborLead.clientLastName]
+                      .filter(Boolean)
+                      .join(' ') || 'Untitled lead'}
+                  </div>
+                  <div className="text-sm text-zinc-500 truncate">
+                    {laborLead.jobNumber || 'No job #'}
+                    {addr ? ` · ${addr}` : ''}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLaborLeadId(null);
+                    setLaborLeadSearch('');
+                  }}
+                  className="text-sm font-medium text-sky-800 hover:text-sky-950 self-start sm:self-auto"
+                >
+                  Change job
+                </button>
+              </div>
+            ) : null}
+            {(!laborLead || laborLeadSearch.trim()) && (
+              <div className="max-h-56 overflow-y-auto space-y-1">
+                {laborLeadChoices.length === 0 ? (
+                  <p className="text-sm text-zinc-400 px-1 py-2">
+                    No jobs match
+                  </p>
+                ) : (
+                  laborLeadChoices.map((l, idx) => {
+                    const name =
+                      [l.clientFirstName, l.clientLastName]
+                        .filter(Boolean)
+                        .join(' ') || 'Untitled lead';
+                    const active = l.id === effectiveLaborLeadId;
+                    return (
+                      <button
+                        key={`labor-lead-${l.supabaseId || l.id}-${idx}`}
+                        type="button"
+                        onClick={() => {
+                          setLaborLeadId(l.id);
+                          setLaborLeadSearch('');
+                        }}
+                        className={`w-full text-left px-3 py-2.5 rounded-2xl text-sm transition-colors ${
+                          active
+                            ? 'bg-zinc-900 text-white'
+                            : 'hover:bg-sky-50 text-zinc-900'
+                        }`}
+                      >
+                        <div className="font-medium truncate">{name}</div>
+                        <div
+                          className={`text-xs truncate ${
+                            active ? 'text-zinc-300' : 'text-zinc-500'
+                          }`}
+                        >
+                          {l.jobNumber || 'No job #'}
+                          {l.clientAddress
+                            ? ` · ${l.clientAddress}`
+                            : ''}
+                          {l.assignedCrew && crewById(l.assignedCrew)
+                            ? ` · ${crewById(l.assignedCrew)!.name}`
+                            : ''}
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </section>
+          )}
+
+          {laborLead && (
+            <>
+              <section className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm">
+                <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-4">
+                  Crew packet
+                </div>
+                {!laborEst ? (
+                  <p className="text-sm text-zinc-500">
+                    No estimate on this job
+                  </p>
+                ) : null}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-5">
+                  {jobFacts.map((f) => (
+                    <Fact
+                      key={`${f.label}-${f.value}`}
+                      label={f.label}
+                      value={f.value}
+                    />
+                  ))}
+                </div>
+              </section>
+
+              <section className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+                  <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
+                    Crew
+                  </div>
+                  {selectedCrew ? (
+                    <button
+                      type="button"
+                      onClick={clearLaborCrew}
+                      className="text-sm font-medium text-sky-800 hover:text-sky-950 self-start sm:self-auto"
+                    >
+                      Clear crew
+                    </button>
+                  ) : null}
+                </div>
+
+                {selectedCrew ? (
+                  <div className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50/50 px-4 py-3">
+                    <div className="font-semibold text-zinc-900">
+                      {selectedCrew.name}
+                      {selectedCrew.preferred ? ' · Preferred' : ''}
+                    </div>
+                    <div className="text-sm text-zinc-700 mt-1">
+                      {selectedCrew.contact}
+                      {selectedCrew.phone
+                        ? ` · ${selectedCrew.phone}`
+                        : ''}
+                    </div>
+                    <div className="text-sm text-emerald-800 font-medium tabular-nums mt-2">
+                      {REGION_LABEL[laborRegion]}{' '}
+                      {formatCrewRate(selectedCrew.shingle[laborRegion])}
+                    </div>
+                    {selectedCrew.adders &&
+                      selectedCrew.adders.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-600">
+                          {selectedCrew.adders.map((a) => (
+                            <span key={a.label}>
+                              {a.label}: {a.value}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                  </div>
+                ) : null}
+
+                <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-2">
+                  Preferred
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-5">
+                  {CREW_ROSTER.filter((c) => c.preferred).map((crew) => {
+                    const active = selectedCrew?.id === crew.id;
+                    return (
+                      <button
+                        key={crew.id}
+                        type="button"
+                        onClick={() => assignLaborCrew(crew.id)}
+                        className={`text-left rounded-2xl border px-4 py-3 transition-all ${
+                          active
+                            ? 'border-zinc-900 bg-zinc-900 text-white'
+                            : 'border-zinc-200 bg-white hover:border-sky-300'
+                        }`}
+                      >
+                        <div className="font-semibold">
+                          {crew.name}
+                        </div>
+                        <div
+                          className={`text-sm mt-0.5 ${
+                            active ? 'text-zinc-300' : 'text-zinc-500'
+                          }`}
+                        >
+                          {crew.contact}
+                          {crew.phone ? ` · ${crew.phone}` : ''}
+                        </div>
+                        <div
+                          className={`text-sm font-medium tabular-nums mt-1 ${
+                            active ? 'text-emerald-300' : 'text-emerald-700'
+                          }`}
+                        >
+                          {formatCrewRate(crew.shingle[laborRegion])}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-2">
+                  All crews
+                </div>
+                <div className="space-y-1 max-h-72 overflow-y-auto">
+                  {CREW_ROSTER.filter((c) => !c.preferred).map((crew) => {
+                    const active = selectedCrew?.id === crew.id;
+                    return (
+                      <button
+                        key={crew.id}
+                        type="button"
+                        onClick={() => assignLaborCrew(crew.id)}
+                        className={`w-full flex flex-wrap items-center justify-between gap-2 text-left rounded-2xl border px-3 py-2.5 text-sm transition-colors ${
+                          active
+                            ? 'border-zinc-900 bg-zinc-900 text-white'
+                            : 'border-zinc-200 hover:bg-sky-50'
+                        }`}
+                      >
+                        <span className="min-w-0">
+                          <span className="font-medium">{crew.name}</span>
+                          <span
+                            className={
+                              active ? 'text-zinc-300' : 'text-zinc-500'
+                            }
+                          >
+                            {crew.contact !== '—'
+                              ? ` · ${crew.contact}`
+                              : ''}
+                            {crew.phone ? ` · ${crew.phone}` : ''}
+                          </span>
+                        </span>
+                        <span
+                          className={`tabular-nums font-medium shrink-0 ${
+                            active ? 'text-emerald-300' : 'text-emerald-700'
+                          }`}
+                        >
+                          {formatCrewRate(crew.shingle[laborRegion])}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm">
+                <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-4">
+                  Labor adders
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {LABOR_ADDERS_SUMMARY.map((a) => (
+                    <div
+                      key={a.label}
+                      className="flex items-center justify-between gap-3 rounded-2xl border border-zinc-100 px-3 py-2.5 text-sm"
+                    >
+                      <span className="text-zinc-700">{a.label}</span>
+                      <span className="tabular-nums font-medium text-zinc-900 shrink-0">
+                        {a.value}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </>
+          )}
+        </div>
+
+        <div
+          className={
+            embedded
+              ? 'bg-white border border-zinc-200 rounded-3xl py-4 px-4 sm:px-6 mt-2'
+              : 'sticky bottom-0 bg-white/95 backdrop-blur border-t border-zinc-200 py-4 z-40 -mx-[var(--page-pad-x)] px-[var(--page-pad-x)]'
+          }
+        >
+          <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2">
+            <button
+              type="button"
+              onClick={downloadOrderPacketPdf}
+              className="px-8 py-4 rounded-3xl font-semibold w-full sm:w-auto sm:shrink-0 border border-zinc-200 bg-white text-zinc-900 hover:bg-zinc-50"
+            >
+              Download PDF
+            </button>
+            <button
+              type="button"
+              onClick={submitOrder}
+              className="btn-primary px-8 py-4 rounded-3xl font-semibold w-full sm:w-auto sm:shrink-0"
+            >
+              Submit order
+            </button>
+          </div>
+        </div>
+      </>
+    );
+        })()}
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-zinc-100 text-zinc-900">
       {(systemDocWorkspace === 'mitigation' ||
@@ -14829,11 +19035,6 @@ export default function SummitApp() {
               <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
                 Mitigation invoice
               </h1>
-              {mitigationWorkspace === 'internal' ? (
-                <p className="text-sm text-zinc-500 mt-1">
-                  Internal financials & buffer
-                </p>
-              ) : null}
             </div>
 
             {mitigationDraft && !showMitigationPreview && (
@@ -14880,9 +19081,6 @@ export default function SummitApp() {
                         maximumFractionDigits: 2,
                       })}
                     </div>
-                    <p className="text-xs text-zinc-400 mt-1">
-                      List sell from invoice lines · negotiate below if needed
-                    </p>
                   </div>
                   <div className="space-y-4">
                     <div
@@ -14912,9 +19110,7 @@ export default function SummitApp() {
                     </div>
                   </div>
                   <p className="text-xs text-zinc-500 mt-4">
-                    Labor is included in the sell price. Only materials (tarps,
-                    battens, sandbags) count as cost — everything else is $0
-                    on the cost sheet.
+                    Cost = materials only (tarps, battens, sandbags).
                   </p>
                   {showMitigationCostBreakdown && (
                     <div className="mt-6 bg-zinc-100 rounded-3xl p-6 text-sm text-zinc-900">
@@ -15027,11 +19223,6 @@ export default function SummitApp() {
                       ${MITIGATION_BUFFER_CAP.toLocaleString()} discount room
                     </div>
                   </div>
-                  <p className="text-sm text-zinc-500 mb-5">
-                    Starts at list sell price. Lower it in the field for a small
-                    discount — costs stay internal.
-                  </p>
-
                   <div className="mb-5">
                     <div className="flex justify-between text-xs font-medium text-zinc-500 mb-1.5">
                       <span>Buffer used</span>
@@ -15128,8 +19319,7 @@ export default function SummitApp() {
                     </div>
                   </div>
                   <p className="text-xs text-zinc-500 mt-5">
-                    Invoice PDF and saved total use the negotiated price. Costs never
-                    appear on the customer PDF.
+                    Costs never on the customer PDF.
                   </p>
                 </div>
 
@@ -16582,10 +20772,6 @@ export default function SummitApp() {
               >
                 Unsaved estimate changes
               </h2>
-              <p className="text-sm text-zinc-500 mt-2">
-                Save to the lead before leaving, discard changes, or stay and
-                keep editing.
-              </p>
             </div>
             <div className="px-5 sm:px-6 pb-5 sm:pb-6 flex flex-col gap-2">
               <button
@@ -16625,14 +20811,13 @@ export default function SummitApp() {
                 Apply roof measurement?
               </h2>
               <p className="text-sm text-zinc-500 mt-2">
-                {pendingApplyMeasurement.name} has a saved measurement
+                {pendingApplyMeasurement.name}
                 {pendingApplyMeasurement.measurement.squares
                   ? ` · ${pendingApplyMeasurement.measurement.squares} sq`
                   : ''}
                 {pendingApplyMeasurement.measurement.flatSquares
                   ? ` · ${pendingApplyMeasurement.measurement.flatSquares} flat sq`
                   : ''}
-                . Apply it to this estimate, or start blank (contact stays).
               </p>
             </div>
             <div className="px-5 sm:px-6 pb-5 sm:pb-6 flex flex-col gap-2">
@@ -16760,13 +20945,6 @@ export default function SummitApp() {
                           ? 'Open Internal'
                           : 'New estimate'}
                     </h2>
-                    <p className="text-sm text-zinc-500 mt-1">
-                      {invoicePickerMode
-                        ? 'Choose a lead — contact and job info fill the invoice.'
-                        : estimatePickerMode === 'internal'
-                          ? 'Choose a lead for cost, commission, and buffer.'
-                          : 'Choose a lead — contact info is pulled into the estimate.'}
-                    </p>
                   </div>
                   <button
                     type="button"
@@ -17268,102 +21446,300 @@ export default function SummitApp() {
         {/* System docs: available from lead profile + documents hub */}
 {systemDocWorkspace === 'pricing' && (
         <div className={documentWorkspaceClass}>
-          <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-20">
-            <div className="flex items-center justify-between gap-3 mb-4 sticky top-0 bg-zinc-50/95 backdrop-blur py-3 z-10">
-              <div>
-                <button
-                  type="button"
-                  onClick={() => exitLeadDocumentWorkspace()}
-                  className="text-sm text-zinc-500 hover:text-zinc-800 mb-2 inline-flex items-center gap-1"
-                >
-                  ← Back to lead
-                </button>
-                <h1 className="text-xl font-semibold text-zinc-900">Company pricing</h1>
-                <p className="text-xs text-zinc-500">Cost · Sell PHX · Sell Tuc/North</p>
+          <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-24">
+            <div className="sticky top-0 z-10 -mx-4 sm:-mx-6 px-4 sm:px-6 py-4 mb-6 bg-zinc-50/95 backdrop-blur border-b border-zinc-200/70">
+              <button
+                type="button"
+                onClick={() => exitLeadDocumentWorkspace()}
+                className="text-sm text-zinc-500 hover:text-zinc-800 mb-3 inline-flex items-center gap-1"
+              >
+                ← Back
+              </button>
+              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+                <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
+                  Company pricing
+                </h1>
+                <div className="inline-flex rounded-2xl border border-zinc-200 bg-white p-1 shadow-sm">
+                  {(
+                    [
+                      ['labor', 'Labor'],
+                      ['materials', 'Materials'],
+                    ] as const
+                  ).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setCompanyPricingPane(id)}
+                      className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
+                        companyPricingPane === id
+                          ? 'bg-zinc-900 text-white'
+                          : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-50'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
-            <div className="grid grid-cols-1 gap-4">
-              {PRICING_GUIDE.map((section) => (
-                <section
-                  key={section.title}
-                  className="rounded-2xl border border-zinc-200 bg-white overflow-hidden"
-                >
-                  <div className="px-3 py-2 border-b border-zinc-100 bg-zinc-50">
-                    <h2 className="text-xs font-semibold uppercase tracking-wide text-zinc-600">
-                      {section.title}
-                    </h2>
-                  </div>
-                  <div className="divide-y divide-zinc-50">
-                    {section.rows.map((row, idx) => {
-                      const live =
-                        row.key && priceSheet && priceSheet[row.key] != null
-                          ? Number(priceSheet[row.key])
-                          : null;
-                      const sellPhx = live != null && live > 0 ? live : row.sellPhx;
-                      const liveCost =
-                        row.key != null
-                          ? getCost(row.key, row.cost ?? 0)
-                          : row.cost ?? 0;
-                      const unit = row.unit || '';
-                      const money = (n?: number) =>
-                        n != null && n > 0 ? (
-                          <span className="whitespace-nowrap">
-                            <span className="font-semibold text-emerald-700">
-                              ${Number(n).toLocaleString()}
-                            </span>
-                            {unit ? (
-                              <span className="text-[10px] text-zinc-400 ml-0.5">{unit}</span>
-                            ) : null}
-                          </span>
-                        ) : null;
-                      return (
-                        <div
-                          key={`${section.title}-${idx}`}
-                          className="px-3 py-2 flex items-start justify-between gap-3"
+
+            <div className="grid grid-cols-1 gap-5">
+              {PRICING_GUIDE.filter((s) => s.pane === companyPricingPane).map(
+                (section) => {
+                  const expanded = expandedPricingSections.has(section.title);
+                  return (
+                  <section
+                    key={section.title}
+                    className="rounded-3xl border border-zinc-200/80 bg-white overflow-hidden shadow-sm"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => togglePricingSection(section.title)}
+                      className="w-full px-5 py-4 border-b border-zinc-100 flex items-center justify-between gap-3 bg-gradient-to-r from-zinc-50 to-white hover:from-zinc-100 transition-colors text-left"
+                      aria-expanded={expanded}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <svg
+                          className={`w-4 h-4 text-zinc-400 shrink-0 transition-transform duration-200 ${
+                            expanded ? 'rotate-90' : ''
+                          }`}
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                          aria-hidden
                         >
-                          <div className="min-w-0">
-                            <div className="text-sm font-medium text-zinc-900 leading-snug">
-                              {row.label}
-                            </div>
-                            {row.note && (
-                              <div className="text-[11px] text-zinc-400 leading-snug mt-0.5">
-                                {row.note}
-                              </div>
-                            )}
-                          </div>
-                          <div className="text-right shrink-0 text-xs leading-snug space-y-0.5">
-                            {liveCost > 0 && (
-                              <div className="text-zinc-500">
-                                C{' '}
-                                <span className="font-medium text-zinc-700">
-                                  ${Number(liveCost).toLocaleString()}
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M9 6l6 6-6 6"
+                          />
+                        </svg>
+                        <h2 className="text-base font-semibold text-zinc-900 truncate">
+                          {section.title}
+                        </h2>
+                      </div>
+                      {(section.supplier === 'Miller' ||
+                        section.supplier === 'SRS') && (
+                        <span
+                          className={`text-[11px] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-full shrink-0 ${
+                            section.supplier === 'Miller'
+                              ? 'bg-amber-50 text-amber-800 ring-1 ring-amber-100'
+                              : 'bg-sky-50 text-sky-800 ring-1 ring-sky-100'
+                          }`}
+                        >
+                          {section.supplier}
+                        </span>
+                      )}
+                    </button>
+                    <div
+                      className="grid transition-[grid-template-rows] duration-300 ease-in-out"
+                      style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
+                    >
+                      <div className="overflow-hidden">
+                    <div className="divide-y divide-zinc-100">
+                      {section.rows.map((row, idx) => {
+                        const live =
+                          row.key && priceSheet && priceSheet[row.key] != null
+                            ? Number(priceSheet[row.key])
+                            : null;
+                        // Steep rows: ignore stale legacy RFQ labor-base values
+                        // ($100/$175/$250 or old 20%-pad $30/$90/$180) left over
+                        // in price_sheet — sell is cover-only ($25/$75/$150).
+                        const isLegacySteepValue =
+                          (row.key === 'steep_8_9' ||
+                            row.key === 'steep_9_11' ||
+                            row.key === 'steep_11_12') &&
+                          live != null &&
+                          [100, 175, 250, 30, 90, 180].includes(live);
+                        // HVAC: ignore stale pre-2026 $1,250 override —
+                        // current sell is $1,300 PHX (see getHvacSellPrice).
+                        const isLegacyHvacValue =
+                          row.key === 'hvac' && live === 1250;
+                        const sellPhx =
+                          live != null &&
+                          live > 0 &&
+                          !isLegacySteepValue &&
+                          !isLegacyHvacValue
+                            ? live
+                            : row.sellPhx;
+                        const liveCost =
+                          row.key != null
+                            ? getCost(row.key, row.cost ?? 0)
+                            : row.cost ?? 0;
+                        // "Shingle package sells" cost is the field shingle
+                        // bundle (material) price only. The package itself —
+                        // what it actually costs us to deliver — is material
+                        // + base install labor (mirrors realMaterial/realLabor
+                        // in the Internal cost breakdown). Show that all-in
+                        // package cost per region alongside the material cost
+                        // so margin vs. the all-in sell price isn't overstated.
+                        const isShinglePackageRow =
+                          row.key != null &&
+                          SHINGLE_PRODUCTS.some((p) => p.key === row.key);
+                        const packageLaborCentral = getCost(
+                          'base_shingle',
+                          100,
+                          'central'
+                        );
+                        const packageLaborSouthern = getCost(
+                          'base_shingle',
+                          110,
+                          'southern'
+                        );
+                        const packageLaborNorthern = getCost(
+                          'base_shingle',
+                          110,
+                          'northern'
+                        );
+                        const packageCostPhx =
+                          isShinglePackageRow && liveCost > 0
+                            ? liveCost + packageLaborCentral
+                            : 0;
+                        const packageCostTuc =
+                          isShinglePackageRow && liveCost > 0
+                            ? liveCost + packageLaborSouthern
+                            : 0;
+                        const packageCostNorth =
+                          isShinglePackageRow && liveCost > 0
+                            ? liveCost + packageLaborNorthern
+                            : 0;
+                        const unit = row.unit || '';
+                        const money = (n?: number) =>
+                          n != null && n > 0 ? (
+                            <span className="whitespace-nowrap tabular-nums">
+                              <span className="font-semibold text-emerald-700">
+                                ${Number(n).toLocaleString(undefined, {
+                                  maximumFractionDigits: 2,
+                                })}
+                              </span>
+                              {unit ? (
+                                <span className="text-[10px] text-zinc-400 ml-0.5">
+                                  {unit}
                                 </span>
-                                {unit ? (
-                                  <span className="text-[10px] text-zinc-400 ml-0.5">
-                                    {unit}
+                              ) : null}
+                            </span>
+                          ) : null;
+                        const hasSell =
+                          (sellPhx != null && sellPhx > 0) ||
+                          (row.sellTuc != null && row.sellTuc > 0) ||
+                          (row.sellNorth != null && row.sellNorth > 0);
+                        const costLabel = isShinglePackageRow
+                          ? 'Material'
+                          : 'Cost';
+                        const hasCost = liveCost > 0;
+                        return (
+                          <div
+                            key={`${section.title}-${idx}`}
+                            className="px-5 py-3.5 flex items-start justify-between gap-4 hover:bg-zinc-50/60 transition-colors"
+                          >
+                            <div className="min-w-0">
+                              <div className="text-sm font-medium text-zinc-900 leading-snug">
+                                {row.label}
+                              </div>
+                              {row.note && (
+                                <div className="text-[11px] text-zinc-400 leading-snug mt-0.5">
+                                  {row.note}
+                                </div>
+                              )}
+                            </div>
+                            <div className="text-right shrink-0 text-xs leading-snug space-y-2 min-w-[6.5rem]">
+                              {hasCost && (
+                                <div>
+                                  <div className="text-[9px] font-semibold uppercase tracking-wide text-zinc-400">
+                                    {costLabel}
+                                  </div>
+                                  <span className="font-semibold text-zinc-800 tabular-nums">
+                                    $
+                                    {Number(liveCost).toLocaleString(
+                                      undefined,
+                                      { maximumFractionDigits: 2 }
+                                    )}
                                   </span>
-                                ) : null}
-                              </div>
-                            )}
-                            {sellPhx != null && sellPhx > 0 && (
-                              <div>
-                                <span className="text-zinc-400">PHX </span>
-                                {money(sellPhx)}
-                              </div>
-                            )}
-                            {row.sellTuc != null && row.sellTuc > 0 && (
-                              <div>
-                                <span className="text-zinc-400">Tuc </span>
-                                {money(row.sellTuc)}
-                              </div>
-                            )}
+                                  {unit ? (
+                                    <span className="text-[10px] text-zinc-400 ml-0.5">
+                                      {unit}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              )}
+                              {isShinglePackageRow && hasCost && (
+                                <div className="space-y-0.5">
+                                  <div className="text-[9px] font-semibold uppercase tracking-wide text-zinc-400">
+                                    All-in (mat + labor)
+                                  </div>
+                                  <div className="text-zinc-500">
+                                    PHX{' '}
+                                    <span className="tabular-nums font-medium text-zinc-700">
+                                      $
+                                      {packageCostPhx.toLocaleString(
+                                        undefined,
+                                        { maximumFractionDigits: 0 }
+                                      )}
+                                    </span>
+                                  </div>
+                                  <div className="text-zinc-500">
+                                    Tuc{' '}
+                                    <span className="tabular-nums font-medium text-zinc-700">
+                                      $
+                                      {packageCostTuc.toLocaleString(
+                                        undefined,
+                                        { maximumFractionDigits: 0 }
+                                      )}
+                                    </span>
+                                  </div>
+                                  <div className="text-zinc-500">
+                                    North{' '}
+                                    <span className="tabular-nums font-medium text-zinc-700">
+                                      $
+                                      {packageCostNorth.toLocaleString(
+                                        undefined,
+                                        { maximumFractionDigits: 0 }
+                                      )}
+                                    </span>
+                                  </div>
+                                </div>
+                              )}
+                              {hasSell && (
+                                <div
+                                  className={
+                                    hasCost
+                                      ? 'space-y-0.5 pt-2 border-t border-zinc-100'
+                                      : 'space-y-0.5'
+                                  }
+                                >
+                                  <div className="text-[9px] font-semibold uppercase tracking-wide text-emerald-700/70">
+                                    Sell
+                                  </div>
+                                  {sellPhx != null && sellPhx > 0 && (
+                                    <div className="text-zinc-500">
+                                      PHX {money(sellPhx)}
+                                    </div>
+                                  )}
+                                  {row.sellTuc != null && row.sellTuc > 0 && (
+                                    <div className="text-zinc-500">
+                                      Tuc {money(row.sellTuc)}
+                                    </div>
+                                  )}
+                                  {row.sellNorth != null &&
+                                    row.sellNorth > 0 && (
+                                      <div className="text-zinc-500">
+                                        North {money(row.sellNorth)}
+                                      </div>
+                                    )}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              ))}
+                        );
+                      })}
+                    </div>
+                      </div>
+                    </div>
+                  </section>
+                  );
+                }
+              )}
             </div>
           </div>
         </div>
@@ -17384,56 +21760,33 @@ export default function SummitApp() {
                 </h1>
               </div>
 
-              <div className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm mb-6">
-              <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-4">
-                Take-off details
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {TAKEOFF_FIELD_LABELS.map(({ key, label }) =>
-                  key === 'notes' ? null : (
-                    <div key={key}>
-                      <label className="text-sm text-zinc-500 mb-1.5 block">
-                        {label}
-                      </label>
-                      <input
-                        value={takeoffForm[key]}
-                        onChange={(e) =>
-                          setTakeoffForm((f) => ({
-                            ...f,
-                            [key]: e.target.value,
-                          }))
-                        }
-                        className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base text-zinc-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
-                      />
-                    </div>
-                  )
-                )}
-              </div>
-              </div>
+              <div className="space-y-6">
+                {renderTakeoffFields()}
 
-                                                        
-              <div className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm mb-6">
-                <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-4">
-                  Notes
+                <div className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm">
+                  <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-4">
+                    Notes
+                  </div>
+                  <textarea
+                    value={takeoffForm.notes || ''}
+                    onChange={(e) =>
+                      setTakeoffForm((prev) => ({ ...prev, notes: e.target.value }))
+                    }
+                    rows={4}
+                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20"
+                  />
                 </div>
-                <textarea
-                  value={takeoffForm.notes || ''}
-                  onChange={(e) =>
-                    setTakeoffForm((prev) => ({ ...prev, notes: e.target.value }))
-                  }
-                  rows={4}
-                  placeholder=""
-                  className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base text-zinc-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500"
-                />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-6">
                 <button
                   type="button"
                   className="btn-primary btn-primary-lg w-full rounded-full"
                   onClick={() => {
-                    const lines = Object.entries(takeoffForm || {}).map(
-                      ([k, v]) => `${k}: ${v || ''}`
+                    const snapshot = normalizeTakeoff(takeoffForm);
+                    const lines = TAKEOFF_FIELD_LABELS.map(
+                      ({ key, label }) =>
+                        `${label}: ${formatTakeoffFieldValue(key, snapshot)}`
                     );
                     const blob = new Blob([lines.join('\n')], {
                       type: 'text/plain',
@@ -18508,7 +22861,7 @@ export default function SummitApp() {
                     New Lead
                   </div>
                   <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
-                    Create a job · estimate from the lead profile
+                    Create a job and open the profile
                   </p>
                 </div>
 
@@ -18520,7 +22873,7 @@ export default function SummitApp() {
                     Pipeline
                   </div>
                   <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
-                    Pipeline board · open a job to estimate
+                    Open the jobs board by stage
                   </p>
                 </div>
 
@@ -18532,7 +22885,7 @@ export default function SummitApp() {
                     Estimates
                   </div>
                   <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
-                    All saved quotes across leads
+                    Browse quotes and open any estimate
                   </p>
                 </div>
 
@@ -18544,7 +22897,7 @@ export default function SummitApp() {
                     Invoices
                   </div>
                   <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
-                    All invoices
+                    Review invoices saved across leads
                   </p>
                 </div>
 
@@ -18556,7 +22909,7 @@ export default function SummitApp() {
                     Calendar
                   </div>
                   <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
-                    Adjustments and bookings
+                    See and manage upcoming appointments
                   </p>
                 </div>
 
@@ -18569,7 +22922,7 @@ export default function SummitApp() {
                     Tasks
                   </div>
                   <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
-                    To-dos with due dates · Google Tasks
+                    Track open work and follow-ups
                   </p>
                 </button>
 
@@ -18582,20 +22935,20 @@ export default function SummitApp() {
                     Performance
                   </div>
                   <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
-                    Pipeline health · jobs and estimates
+                    View pipeline value and job stats
                   </p>
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => handleTabChange('tools')}
+                  onClick={() => handleTabChange('orders')}
                   className="group text-left bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-7 sm:p-8 transition-all duration-200"
                 >
                   <div className="text-xl sm:text-2xl font-semibold text-zinc-900 mb-1 group-hover:text-sky-900 transition-colors">
-                    Tools
+                    Orders
                   </div>
                   <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
-                    Weather, canvassing
+                    Build material lists by roof system
                   </p>
                 </button>
 
@@ -18607,7 +22960,7 @@ export default function SummitApp() {
                     Documents
                   </div>
                   <p className="text-sm text-zinc-500 group-hover:text-zinc-600">
-                    Contracts and files
+                    Open contracts and job files
                   </p>
                 </div>
               </div>
@@ -18754,11 +23107,6 @@ export default function SummitApp() {
                   <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
                     Estimates
                   </h1>
-                  <p className="text-zinc-500 mt-1">
-                    {items.length === 0
-                      ? 'Saved quotes across all leads'
-                      : `${items.length} saved estimate${items.length === 1 ? '' : 's'}`}
-                  </p>
                 </div>
                 <button
                   type="button"
@@ -18772,9 +23120,6 @@ export default function SummitApp() {
               {items.length === 0 ? (
                 <div className="rounded-3xl border border-dashed border-zinc-200 bg-white px-6 py-16 text-center">
                   <p className="text-sm font-medium text-zinc-800">No estimates yet</p>
-                  <p className="text-sm text-zinc-500 mt-2 max-w-md mx-auto">
-                    Open a lead and create an estimate — they all list here.
-                  </p>
                   <div className="mt-6 flex flex-wrap justify-center gap-2">
                     <button
                       type="button"
@@ -18876,13 +23221,9 @@ export default function SummitApp() {
 
         {activeTab === 'documents' && (
           <div className="page-shell page-fade">
-            <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
+            <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight mb-8">
               Documents
             </h1>
-            <p className="text-zinc-500 mt-1 mb-8">
-              System templates you can fill and assign to a job, or add from a
-              lead’s Documents tab.
-            </p>
             <div className="space-y-3">
               {SYSTEM_DOCUMENTS.map((doc) => (
                 <button
@@ -18900,7 +23241,15 @@ export default function SummitApp() {
                       return;
                     }
                     if (doc.id === 'takeoff') {
-                      setTakeoffForm(emptyTakeoff());
+                      const lead =
+                        currentLeadId != null
+                          ? leads.find((l) => l.id === currentLeadId)
+                          : null;
+                      setTakeoffForm(
+                        lead?.takeoff && typeof lead.takeoff === 'object'
+                          ? normalizeTakeoff(lead.takeoff)
+                          : emptyTakeoff()
+                      );
                       setSystemDocWorkspace('takeoff');
                       setSystemDocPreview(null);
                       setTakeoffAssignOpen(false);
@@ -18913,7 +23262,6 @@ export default function SummitApp() {
                   className="w-full text-left rounded-3xl border border-zinc-200 bg-white p-5 hover:border-sky-300 transition"
                 >
                   <div className="font-semibold text-zinc-900">{doc.name}</div>
-                  <div className="text-sm text-zinc-500 mt-1">{doc.description}</div>
                 </button>
               ))}
             </div>
@@ -19299,10 +23647,10 @@ export default function SummitApp() {
                       onClick={() => void connectGoogleCalendar()}
                       className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
                     >
-                      Connect Google
+                      Connect
                     </button>
                   ) : null}
-                  {gcalConnected && gtasksNeedsReconnect ? (
+                  {gcalConnected && (gtasksNeedsReconnect || gcalCalendarListNeedsReconnect) ? (
                     <button
                       type="button"
                       disabled={gcalBusy}
@@ -19311,19 +23659,7 @@ export default function SummitApp() {
                       }
                       className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-amber-300 text-amber-950 bg-amber-50 hover:bg-amber-100 disabled:opacity-50"
                     >
-                      Reconnect for Tasks
-                    </button>
-                  ) : null}
-                  {gcalConnected && gcalCalendarListNeedsReconnect ? (
-                    <button
-                      type="button"
-                      disabled={gcalBusy}
-                      onClick={() =>
-                        void connectGoogleCalendar({ forceConsent: true })
-                      }
-                      className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-amber-300 text-amber-950 bg-amber-50 hover:bg-amber-100 disabled:opacity-50"
-                    >
-                      Reconnect for colors
+                      Reconnect
                     </button>
                   ) : null}
                   <button
@@ -20044,7 +24380,7 @@ export default function SummitApp() {
                       }
                       className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
                     >
-                      Connect Google
+                      Connect
                     </button>
                   ) : gtasksNeedsReconnect ? (
                     <button
@@ -20055,11 +24391,11 @@ export default function SummitApp() {
                       }
                       className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-amber-300 text-amber-950 bg-amber-50 hover:bg-amber-100 disabled:opacity-50"
                     >
-                      Reconnect for Tasks
+                      Reconnect
                     </button>
                   ) : (
                     <span className="px-3 py-2 rounded-2xl text-xs font-semibold uppercase tracking-wide text-emerald-800 bg-emerald-50 border border-emerald-200">
-                      Google connected
+                      Connected
                     </span>
                   )}
                 </div>
@@ -20090,7 +24426,7 @@ export default function SummitApp() {
                     </button>
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap justify-center gap-3">
                   {safeTaskLists.map((list) => {
                     const count = visibleTasks.filter(
                       (t) =>
@@ -20099,73 +24435,89 @@ export default function SummitApp() {
                         isActiveSummitTask(t)
                     ).length;
                     const active = list.id === listId;
-                    return (
-                      <div key={list.id} className="flex items-center gap-1">
-                        {renamingTaskListId === list.id ? (
-                          <form
-                            className="flex items-center gap-1"
-                            onSubmit={(e) => {
-                              e.preventDefault();
-                              void renameTaskList(list.id, renameTaskListTitle);
-                            }}
+                    if (renamingTaskListId === list.id) {
+                      return (
+                        <form
+                          key={list.id}
+                          className="flex items-center gap-2"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            void renameTaskList(list.id, renameTaskListTitle);
+                          }}
+                        >
+                          <input
+                            autoFocus
+                            type="text"
+                            value={renameTaskListTitle}
+                            onChange={(e) =>
+                              setRenameTaskListTitle(e.target.value)
+                            }
+                            className="rounded-2xl border border-sky-300 px-4 py-3 text-base font-semibold w-48"
+                          />
+                          <button
+                            type="submit"
+                            className="text-sm font-semibold text-sky-800 px-3 py-2"
                           >
-                            <input
-                              autoFocus
-                              type="text"
-                              value={renameTaskListTitle}
-                              onChange={(e) =>
-                                setRenameTaskListTitle(e.target.value)
-                              }
-                              className="rounded-xl border border-zinc-200 px-2 py-1.5 text-sm w-36"
-                            />
-                            <button
-                              type="submit"
-                              className="text-xs font-semibold text-sky-800 px-2 py-1"
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRenamingTaskListId(null);
+                              setRenameTaskListTitle('');
+                            }}
+                            className="text-sm text-zinc-500 px-3 py-2"
+                          >
+                            Cancel
+                          </button>
+                        </form>
+                      );
+                    }
+                    return (
+                      <div key={list.id} className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => persistActiveTaskListId(list.id)}
+                          className={`flex-1 px-6 py-3 rounded-2xl text-base font-semibold border transition-colors ${
+                            active
+                              ? 'border-sky-500 bg-sky-50 text-zinc-900'
+                              : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'
+                          }`}
+                        >
+                          {list.title}
+                          {count > 0 ? (
+                            <span className="ml-2 text-sm font-medium text-zinc-500">
+                              {count}
+                            </span>
+                          ) : null}
+                        </button>
+                        {active ? (
+                          <button
+                            type="button"
+                            title="Rename list"
+                            onClick={() => {
+                              setRenamingTaskListId(list.id);
+                              setRenameTaskListTitle(list.title);
+                            }}
+                            className="p-2.5 rounded-xl text-zinc-400 hover:text-zinc-700 hover:bg-zinc-50"
+                          >
+                            <svg
+                              className="w-4 h-4"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth={2}
+                              aria-hidden
                             >
-                              Save
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setRenamingTaskListId(null);
-                                setRenameTaskListTitle('');
-                              }}
-                              className="text-xs text-zinc-500 px-2 py-1"
-                            >
-                              Cancel
-                            </button>
-                          </form>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => persistActiveTaskListId(list.id)}
-                              className={`px-3 py-1.5 rounded-full text-sm font-semibold border transition-colors ${
-                                active
-                                  ? 'border-sky-500 bg-sky-50 text-zinc-900'
-                                  : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'
-                              }`}
-                            >
-                              {list.title}
-                              {count > 0 ? (
-                                <span className="ml-1.5 text-xs font-medium text-zinc-500">
-                                  {count}
-                                </span>
-                              ) : null}
-                            </button>
-                            <button
-                              type="button"
-                              title="Rename list"
-                              onClick={() => {
-                                setRenamingTaskListId(list.id);
-                                setRenameTaskListTitle(list.title);
-                              }}
-                              className="text-xs text-zinc-400 hover:text-zinc-700 px-1"
-                            >
-                              Rename
-                            </button>
-                          </>
-                        )}
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"
+                              />
+                            </svg>
+                            <span className="sr-only">Rename list</span>
+                          </button>
+                        ) : null}
                       </div>
                     );
                   })}
@@ -20593,31 +24945,55 @@ export default function SummitApp() {
           );
         })()}
 
+        {activeTab === 'orders' &&
+          renderOrdersFlow({
+            orderType: materialOrderType,
+            setOrderType: setMaterialOrderType,
+            orderLines: materialOrderLines,
+            setOrderLines: setMaterialOrderLines,
+            coverageInputs: materialOrderCoverageInputs,
+            setCoverageInputs: setMaterialOrderCoverageInputs,
+            step: ordersStep,
+            setStep: setOrdersStep,
+          })}
         {activeTab === 'tools' && (
           <div className="page-shell page-fade">
             <div className="mb-8">
               <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
                 Tools
               </h1>
-              <p className="text-zinc-500 mt-1">
-                Field tools — more coming soon
-              </p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="bg-white border border-zinc-200 rounded-3xl p-6 sm:p-7">
                 <div className="text-xl font-semibold text-zinc-900 mb-1">
-                  Weather Tracking
+                  Weather
                 </div>
-                <p className="text-sm text-zinc-500">Coming soon</p>
+                <p className="text-sm text-zinc-500">
+                  Check job-site conditions before you crew
+                </p>
               </div>
-              <div className="bg-white border border-zinc-200 rounded-3xl p-6 sm:p-7">
+              <button
+                type="button"
+                onClick={() => handleTabChange('canvassing')}
+                className="text-left bg-white border border-zinc-200 rounded-3xl p-6 sm:p-7 hover:border-zinc-300 hover:shadow-sm transition-all"
+              >
                 <div className="text-xl font-semibold text-zinc-900 mb-1">
                   Canvassing
                 </div>
-                <p className="text-sm text-zinc-500">Coming soon</p>
-              </div>
+                <p className="text-sm text-zinc-500">
+                  Map neighborhoods and track doors knocked
+                </p>
+              </button>
             </div>
           </div>
+        )}
+
+        {activeTab === 'canvassing' && (
+          <CanvassingTool
+            onCreateLead={createLeadFromCanvassPin}
+            onOpenLead={openLeadFromCanvassPin}
+            showToast={showToast}
+          />
         )}
 
         {activeTab === 'settings' && (
@@ -21571,18 +25947,18 @@ export default function SummitApp() {
                         : 'Lead estimate'}
                     </div>
                     <p className="text-xs text-zinc-500 mt-0.5 truncate">
-                      {estimateFlow === 'pick'
-                        ? 'Choose roof system'
-                        : estimateWorkspace === 'estimate'
-                          ? `Customer quote · ${roofSystem}`
-                          : 'Internal financials & buffer'}
-                      {estimatorClient.jobNumber
-                        ? ` · Job #${estimatorClient.jobNumber}`
-                        : ''}
-                      {estimatorClient.fullAddress !== 'N/A'
-                        ? ` · ${estimatorClient.fullAddress}`
-                        : ''}
-                      {hasUnsavedChanges ? ' · unsaved changes' : ''}
+                      {[
+                        roofSystem && estimateFlow !== 'pick' ? roofSystem : null,
+                        estimatorClient.jobNumber
+                          ? `Job #${estimatorClient.jobNumber}`
+                          : null,
+                        estimatorClient.fullAddress !== 'N/A'
+                          ? estimatorClient.fullAddress
+                          : null,
+                        hasUnsavedChanges ? 'unsaved changes' : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
                     </p>
                   </div>
                 </div>
@@ -21626,9 +26002,6 @@ export default function SummitApp() {
                     <div className="text-4xl font-semibold tabular-nums text-emerald-700">
                       ${estimatorTotalPrice.toLocaleString()}
                     </div>
-                    <p className="text-xs text-zinc-400 mt-1">
-                      From the estimate · switch to Estimate to edit scope
-                    </p>
                   </div>
                   <div className="space-y-4">
                     <div className="flex justify-between items-center text-zinc-900">
@@ -21638,23 +26011,13 @@ export default function SummitApp() {
                       </div>
                     </div>
                     <div className="flex justify-between items-center text-zinc-900 px-2 -mx-2">
-                      <div>
-                        <div>Labor cost</div>
-                        <div className="text-xs text-zinc-500">
-                          Crew / production — not customer-facing
-                        </div>
-                      </div>
+                      <div>Labor cost</div>
                       <div className="font-semibold text-red-600 tabular-nums">
                         -${realLabor.toFixed(2)}
                       </div>
                     </div>
                     <div className="flex justify-between items-center text-zinc-900 px-2 -mx-2">
-                      <div>
-                        <div>Material cost</div>
-                        <div className="text-xs text-zinc-500">
-                          What you pay for product
-                        </div>
-                      </div>
+                      <div>Material cost</div>
                       <div className="font-semibold text-red-600 tabular-nums">
                         -${realMaterial.toFixed(2)}
                       </div>
@@ -21669,8 +26032,7 @@ export default function SummitApp() {
                       </div>
                     </div>
                     <p className="text-xs text-zinc-500 px-2 -mx-2">
-                      Sell price is customer-facing. Labor + materials stay
-                      internal — never on the estimate PDF.
+                      Labor + materials never on the PDF.
                     </p>
                   </div>
                   {showCostBreakdown && (
@@ -21686,14 +26048,8 @@ export default function SummitApp() {
                         </div>
                         {ly > 1 && (
                           <div className="flex justify-between">
-                            <span>Additional layers</span>
-                            <span>${(sq * 10 * (ly - 1)).toFixed(2)}</span>
-                          </div>
-                        )}
-                        {['8/12', '9/12', '10/12', '11/12', '12/12'].includes(pt) && (
-                          <div className="flex justify-between">
-                            <span>Steep pitch</span>
-                            <span>${(sq * 10).toFixed(2)}</span>
+                            <span>Additional layers ($20/sq)</span>
+                            <span>${(sq * 20 * (ly - 1)).toFixed(2)}</span>
                           </div>
                         )}
                         {isTwoStory && (
@@ -21702,10 +26058,16 @@ export default function SummitApp() {
                             <span>${(sq * 10).toFixed(2)}</span>
                           </div>
                         )}
-                        {fasciaBeyondFree > 0 && fasciaType && (
+                        {fasciaLaborCost > 0 && (
                           <div className="flex justify-between">
-                            <span>Fascia + trim</span>
-                            <span>${(fasciaBeyondFree * 6).toFixed(2)}</span>
+                            <span>Fascia labor ($4/LF)</span>
+                            <span>${fasciaLaborCost.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {moldLaborCost > 0 && (
+                          <div className="flex justify-between">
+                            <span>Shingle mold labor ($4/LF)</span>
+                            <span>${moldLaborCost.toFixed(2)}</span>
                           </div>
                         )}
                         {ridge > 0 && (
@@ -21714,21 +26076,22 @@ export default function SummitApp() {
                             <span>${(ridge * 2).toFixed(2)}</span>
                           </div>
                         )}
-                        {deckingMode === 'full' && (
+                        {takeoffVentCutInLabor > 0 && (
                           <div className="flex justify-between">
-                            <span>Decking labor</span>
-                            <span>
-                              $
-                              {(
-                                Math.max(0, sheetsNeeded - 2) * 20
-                              ).toFixed(2)}
-                            </span>
+                            <span>Cut-in vent labor ($20/ea)</span>
+                            <span>${takeoffVentCutInLabor.toFixed(2)}</span>
                           </div>
                         )}
-                        {deckingMode === 'repair' && dsh > 2 && (
+                        {fullDeckingLaborCost > 0 && (
                           <div className="flex justify-between">
                             <span>Decking labor</span>
-                            <span>${((dsh - 2) * 20).toFixed(2)}</span>
+                            <span>${fullDeckingLaborCost.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {repairDeckingLaborCost > 0 && (
+                          <div className="flex justify-between">
+                            <span>Decking labor</span>
+                            <span>${repairDeckingLaborCost.toFixed(2)}</span>
                           </div>
                         )}
                         {hvacLaborCost > 0 && (
@@ -21752,10 +26115,42 @@ export default function SummitApp() {
                             <span>${shingleMaterialCost.toFixed(2)}</span>
                           </div>
                         )}
+                        {tileMaterialCost > 0 && (
+                          <div className="flex justify-between">
+                            <span>Tile</span>
+                            <span>${tileMaterialCost.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {(selectedShingle === 'tile_rr' || tileMode === 'rr') &&
+                          tileBrand === 'clay' &&
+                          tileMaterialCost === 0 && (
+                          <div className="flex justify-between text-amber-700">
+                            <span>Tile (clay)</span>
+                            <span>Mat $ TBD — Joe</span>
+                          </div>
+                        )}
                         {ridgeMaterial > 0 && (
                           <div className="flex justify-between">
                             <span>Ridge vent material</span>
                             <span>${ridgeMaterial.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {takeoffPipeJackMaterial > 0 && (
+                          <div className="flex justify-between">
+                            <span>Pipe jacks (takeoff)</span>
+                            <span>${takeoffPipeJackMaterial.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {takeoffVentMaterial > 0 && (
+                          <div className="flex justify-between">
+                            <span>Vents (takeoff)</span>
+                            <span>${takeoffVentMaterial.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {moldMaterialCost > 0 && (
+                          <div className="flex justify-between">
+                            <span>Shingle mold (Miller pairs)</span>
+                            <span>${moldMaterialCost.toFixed(2)}</span>
                           </div>
                         )}
                         {summitIsModBit && mbCapMaterial > 0 && (
@@ -21788,9 +26183,6 @@ export default function SummitApp() {
                       <div className="text-sm text-zinc-500 mb-1">Gross profit</div>
                       <div className="text-4xl font-semibold text-emerald-700 tabular-nums">
                         ${grossProfit.toFixed(2)}
-                      </div>
-                      <div className="text-xs text-zinc-500 mt-1">
-                        Before your commission
                       </div>
                     </div>
                     <div className="bg-zinc-50 border border-zinc-100 rounded-3xl p-6">
@@ -21826,11 +26218,6 @@ export default function SummitApp() {
                       ${NEGOTIATION_BUFFER_CAP.toLocaleString()} built-in room
                     </div>
                   </div>
-                  <p className="text-sm text-zinc-500 mb-5">
-                    Lower the price in the field and see impact on commission — protect
-                    your payout while closing the deal.
-                  </p>
-
                   <div className="mb-5">
                     <div className="flex justify-between text-xs font-medium text-zinc-500 mb-1.5">
                       <span>Buffer used</span>
@@ -21895,10 +26282,6 @@ export default function SummitApp() {
                       </div>
                     </div>
                   </div>
-                  <p className="text-xs text-zinc-500 mt-5">
-                    Commission above uses the negotiated price so you always see the real
-                    payout after discounting.
-                  </p>
                 </div>
 
                 <button
@@ -21917,9 +26300,6 @@ export default function SummitApp() {
                   <h2 className="text-2xl font-semibold text-zinc-900 tracking-tight">
                     New estimate
                   </h2>
-                  <p className="text-sm text-zinc-500 mt-1">
-                    Choose the roof system for this job. You can change it later.
-                  </p>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {(
@@ -21927,17 +26307,17 @@ export default function SummitApp() {
                       {
                         id: 'shingle' as const,
                         label: 'Shingle',
-                        desc: 'IKO, GAF, Owens — architectural shingles',
+                        desc: 'Start an architectural asphalt shingle quote',
                       },
                       {
                         id: 'tile' as const,
                         label: 'Tile',
-                        desc: 'Detach & Reset / R&R systems',
+                        desc: 'Start a detach-reset or tear-off tile quote',
                       },
                       {
                         id: 'flat' as const,
                         label: 'Low Slope',
-                        desc: 'Mod bit, BUR, coatings, foam — low slope systems',
+                        desc: 'Start a mod bit, foam, or coating quote',
                       },
                     ] as const
                   ).map((sys) => (
@@ -21972,9 +26352,6 @@ export default function SummitApp() {
                   <div className="text-sm font-semibold text-zinc-900">
                     Roof measurement (optional)
                   </div>
-                  <p className="text-xs text-zinc-500 mt-0.5">
-                    Auto-fill pitched squares, flat squares, pitch & waste from a measurement.
-                  </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {currentLeadId &&
@@ -22025,7 +26402,7 @@ export default function SummitApp() {
                 <div className="text-sm font-semibold text-zinc-600">
                   CLIENT / JOB INFO
                   <span className="ml-2 font-normal text-zinc-400">
-                    from lead · not editable here
+                    from lead
                   </span>
                 </div>
                 <button
@@ -22122,10 +26499,11 @@ export default function SummitApp() {
                 </div>
                 <div className="bg-white rounded-3xl p-5 border border-zinc-200">
                   <div className="text-xs text-zinc-500 mb-1">STORIES</div>
-                  <select value={stories} onChange={(e) => setStories(e.target.value as '1' | '2' | '')} className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900">
+                  <select value={stories} onChange={(e) => setStories(e.target.value as '1' | '2' | '3' | '')} className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900">
                     <option value="">Select...</option>
                     <option value="1">1 Story</option>
                     <option value="2">2 Story</option>
+                    <option value="3">3 Story</option>
                   </select>
                 </div>
                 <div className="bg-white rounded-3xl p-5 border border-zinc-200">
@@ -22236,6 +26614,29 @@ export default function SummitApp() {
                           ).map((c) => (
                             <option key={c} value={c}>
                               {c}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                  {/* Hip & ridge — sell option only (no material $/bdl) */}
+                  {selectedShingle &&
+                    SHINGLE_PRODUCTS.some((p) => p.key === selectedShingle) && (
+                      <div className="space-y-2">
+                        <div className="text-xs text-zinc-500">HIP &amp; RIDGE</div>
+                        <select
+                          value={hipRidgeChoice}
+                          onChange={(e) => {
+                            setHipRidgeChoice(e.target.value as HipRidgeChoice);
+                            setHasUnsavedChanges(true);
+                          }}
+                          className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white"
+                        >
+                          <option value="">Select hip &amp; ridge…</option>
+                          {HIP_RIDGE_OPTIONS.map((opt) => (
+                            <option key={opt.key} value={opt.key}>
+                              {hipRidgeOptionLabel(opt.key, selectedShingle)}
                             </option>
                           ))}
                         </select>
@@ -22433,27 +26834,49 @@ export default function SummitApp() {
                       </p>
                     )}
 
-                    {/* Cap color — mod bitumen */}
+                    {/* SA base / cap products + cap color — mod bitumen */}
                     {flatSystem === 'mod_bit' && (
-                      <div className="mt-4">
-                        <div className="text-xs font-semibold tracking-wide text-zinc-500 mb-3">
-                          CAP COLOR
+                      <div className="mt-4 space-y-4">
+                        <div>
+                          <div className="text-xs font-semibold tracking-wide text-zinc-500 mb-3">
+                            SA CAP
+                          </div>
+                          <select
+                            value={mbCapChoice}
+                            onChange={(e) => {
+                              setMbCapChoice(e.target.value);
+                              setHasUnsavedChanges(true);
+                            }}
+                            className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20"
+                          >
+                            <option value="">Select cap sheet…</option>
+                            {MB_CAP_OPTIONS.map((o) => (
+                              <option key={o.key} value={o.key}>
+                                {o.label}
+                              </option>
+                            ))}
+                          </select>
                         </div>
-                        <select
-                          value={modifiedBitumenColor}
-                          onChange={(e) => {
-                            setModifiedBitumenColor(e.target.value);
-                            setHasUnsavedChanges(true);
-                          }}
-                          className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20"
-                        >
-                          <option value="">Select color…</option>
-                          {MOD_BITUMEN_CAP_COLORS.map((c) => (
-                            <option key={c} value={c}>
-                              {c}
-                            </option>
-                          ))}
-                        </select>
+                        <div>
+                          <div className="text-xs font-semibold tracking-wide text-zinc-500 mb-3">
+                            CAP COLOR
+                          </div>
+                          <select
+                            value={modifiedBitumenColor}
+                            onChange={(e) => {
+                              setModifiedBitumenColor(e.target.value);
+                              setHasUnsavedChanges(true);
+                            }}
+                            className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20"
+                          >
+                            <option value="">Select color…</option>
+                            {MOD_BITUMEN_CAP_COLORS.map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
                     )}
 
@@ -22806,6 +27229,28 @@ export default function SummitApp() {
                         </div>
                       )}
                     </div>
+                    {lowSlopeType === 'mod_bitumen' && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <div className="text-xs text-zinc-500 mb-1">SA CAP</div>
+                          <select
+                            value={mbCapChoice}
+                            onChange={(e) => {
+                              setMbCapChoice(e.target.value);
+                              setHasUnsavedChanges(true);
+                            }}
+                            className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
+                          >
+                            <option value="">Select cap sheet…</option>
+                            {MB_CAP_OPTIONS.map((o) => (
+                              <option key={o.key} value={o.key}>
+                                {o.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -22822,29 +27267,19 @@ export default function SummitApp() {
                   className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white"
                 >
                   <option value="">Select underlayment…</option>
-                  <option value="standard">Standard Synthetic</option>
-                  <option value="high-temp">High-Temp Synthetic</option>
-                  <option value="sa-high-temp">Self-Adhered High-Temp</option>
+                  {underlaymentOptionsForSystem(
+                    roofSystem === 'tile'
+                      ? 'tile'
+                      : roofSystem === 'flat'
+                        ? 'flat'
+                        : 'shingle'
+                  ).map((o) => (
+                    <option key={o.key} value={o.key}>
+                      {o.label}
+                    </option>
+                  ))}
                 </select>
-                {selectedUnderlayment === 'standard' && (
-                  <p className="text-sm text-zinc-500 leading-relaxed mt-2">
-                    Standard synthetic underlayment for typical shingle applications.
-                  </p>
-                )}
-                {selectedUnderlayment === 'high-temp' && (
-                  <p className="text-sm text-zinc-500 leading-relaxed mt-2">
-                    High-temperature rated synthetic underlayment for hotter roof decks and
-                    valleys.
-                  </p>
-                )}
-                {selectedUnderlayment === 'sa-high-temp' && (
-                  <p className="text-sm text-zinc-500 leading-relaxed mt-2">
-                    Self-adhered high-temp underlayment. Excellent for valleys, eaves, and
-                    critical areas.
-                  </p>
-                )}
               </div>
-
             </div>
 
             <div className="mb-8">
@@ -23063,10 +27498,10 @@ export default function SummitApp() {
                                 gutterMode === 'rr' ? 'gutters_rr' : 'gutters_dr',
                                 gutterMode === 'rr'
                                   ? activePricingRegion === 'central'
-                                    ? 20
+                                    ? 25
                                     : 30
                                   : activePricingRegion === 'central'
-                                    ? 15
+                                    ? 18
                                     : 20
                               )
                             ).toLocaleString()}
@@ -23121,9 +27556,8 @@ export default function SummitApp() {
                       + $
                       {(
                         parseFloat(hvacUnits) *
-                        getSellPrice(
-                          'hvac',
-                          activePricingRegion === 'central' ? 1250 : 1600
+                        getHvacSellPrice(
+                          activePricingRegion === 'central' ? 1300 : 1600
                         )
                       ).toLocaleString()}
                     </div>
@@ -23152,7 +27586,7 @@ export default function SummitApp() {
                         parseFloat(skylights) *
                         getSellPrice(
                           'skylight',
-                          activePricingRegion === 'central' ? 500 : 550
+                          activePricingRegion === 'central' ? 525 : 550
                         )
                       ).toLocaleString()}
                     </div>
@@ -23178,7 +27612,7 @@ export default function SummitApp() {
                     <div className="text-xs text-emerald-700 mt-2">
                       + $
                       {(
-                        parseFloat(ridgeVentLF) * getSellPrice('ridge_vent', 12)
+                        parseFloat(ridgeVentLF) * getSellPrice('ridge_vent', 13)
                       ).toFixed(0)}
                     </div>
                   )}
@@ -23311,6 +27745,7 @@ export default function SummitApp() {
                 { id: 'insurance', label: 'Insurance' },
                 { id: 'notes', label: 'Messages' },
                 { id: 'estimates', label: 'Estimates' },
+                { id: 'orders', label: 'Orders' },
                 { id: 'photos', label: 'Photos' },
                 { id: 'documents', label: 'Documents' },
               ];
@@ -25223,6 +29658,21 @@ export default function SummitApp() {
                         </section>
                       )}
 
+                      {profileTab === 'orders' &&
+                        profileLead &&
+                        renderOrdersFlow({
+                          orderType: profileOrderType,
+                          setOrderType: setProfileOrderType,
+                          orderLines: profileOrderLines,
+                          setOrderLines: setProfileOrderLines,
+                          coverageInputs: profileOrderCoverageInputs,
+                          setCoverageInputs: setProfileOrderCoverageInputs,
+                          step: profileOrdersStep,
+                          setStep: setProfileOrdersStep,
+                          fixedLead: profileLead,
+                          embedded: true,
+                        })}
+
                       {profileTab === 'photos' && (
                         <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
                           <div className="flex items-center justify-between gap-3 mb-3">
@@ -25572,17 +30022,11 @@ export default function SummitApp() {
                       )}
 
                       {profileTab === 'takeoff' && (
-                        <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
-                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-5">
-                            <div>
-                              <h2 className="text-lg font-semibold text-zinc-900">
-                                Take-off
-                              </h2>
-                              <p className="text-sm text-zinc-500 mt-0.5">
-                                Site inspection sheet — roof, penetrations, and
-                                interior notes.
-                              </p>
-                            </div>
+                        <div className="space-y-6">
+                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                            <h2 className="text-lg font-semibold text-zinc-900">
+                              Take-off
+                            </h2>
                             <div className="flex flex-wrap gap-2">
                               <button
                                 type="button"
@@ -25600,45 +30044,24 @@ export default function SummitApp() {
                               </button>
                             </div>
                           </div>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {TAKEOFF_FIELD_LABELS.map(({ key, label }) =>
-                              key === 'notes' ? (
-                                <div key={key} className="md:col-span-2">
-                                  <label className="text-sm text-zinc-500 mb-1.5 block">
-                                    {label}
-                                  </label>
-                                  <textarea
-                                    value={takeoffForm[key]}
-                                    onChange={(e) =>
-                                      setTakeoffForm((f) => ({
-                                        ...f,
-                                        [key]: e.target.value,
-                                      }))
-                                    }
-                                    rows={3}
-                                    className="w-full border border-zinc-200 rounded-xl px-3 py-2 text-sm text-zinc-900"
-                                  />
-                                </div>
-                              ) : (
-                                <div key={key}>
-                                  <label className="text-sm text-zinc-500 mb-1.5 block">
-                                    {label}
-                                  </label>
-                                  <input
-                                    value={takeoffForm[key]}
-                                    onChange={(e) =>
-                                      setTakeoffForm((f) => ({
-                                        ...f,
-                                        [key]: e.target.value,
-                                      }))
-                                    }
-                                    className="w-full border border-zinc-200 rounded-xl px-3 py-2 text-sm text-zinc-900"
-                                  />
-                                </div>
-                              )
-                            )}
-                          </div>
-                        </section>
+                          {renderTakeoffFields()}
+                          <section className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm">
+                            <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-4">
+                              Notes
+                            </div>
+                            <textarea
+                              value={takeoffForm.notes || ''}
+                              onChange={(e) =>
+                                setTakeoffForm((f) => ({
+                                  ...f,
+                                  notes: e.target.value,
+                                }))
+                              }
+                              rows={3}
+                              className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white outline-none focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20"
+                            />
+                          </section>
+                        </div>
                       )}
 
                     </div>

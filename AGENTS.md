@@ -9,3 +9,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - Sales Pitch Deck (planned): see `.cursor/rules/pitch-deck-vision.mdc` — inspection → photo report → estimate → professional pitch. Do not build until Joe asks.
 - Cash + insurance contracts (planned): see `.cursor/rules/legal-contracts-backlog.mdc` — legal docs; twin UI/PDF system; **verbiage unchanged**. Do not build until Joe asks.
 - Auth / login (planned): see `.cursor/rules/auth-login-backlog.mdc` — password settings, proper user auth, tighten Supabase RLS. Do not build until Joe asks.
+
+## UI note
+
+- No filler under-title copy: see `.cursor/rules/no-filler-ui-copy.mdc` — titles + actions; skip restating helpers.

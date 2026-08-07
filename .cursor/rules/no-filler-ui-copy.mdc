@@ -1,0 +1,28 @@
+---
+description: No filler under-title UI copy — copy must earn its place
+alwaysApply: true
+---
+
+# No filler UI copy
+
+Joe hates small descriptions under titles that only restate what the screen already is.
+
+## Rules
+
+- Don’t add helper blurbs under page/section titles that restate the function (“this page lets you…”, “N open”, “showing X only”).
+- Copy must earn its place — something you’d want on a real production system (status that changes decisions, errors, account identity).
+- Prefer clear titles + actions (e.g. Connect Google). Skip essay/subtitle fluff.
+- Do **not** gut useful labels on buttons themselves.
+
+## Examples
+
+```tsx
+// ❌ BAD — count/status essay under title
+<h1>Tasks</h1>
+<p>My Tasks · 0 open</p>
+<p>Google not connected — showing Summit tasks only</p>
+
+// ✅ GOOD — title + real action
+<h1>Tasks</h1>
+<button>Connect Google</button>
+```
