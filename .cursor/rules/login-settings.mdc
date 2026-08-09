@@ -1,0 +1,27 @@
+---
+description: Summit · Login & Settings — file map (@ tag this chat)
+globs: middleware.ts,lib/supabase/client.ts,lib/supabase/server.ts
+alwaysApply: false
+---
+
+# Summit · Login & Settings
+
+**Chat name:** `Summit · Login & Settings`  
+**Sidebar label:** Profile settings (`activeTab: settings`; profile menu, not primary sidebar)  
+**Agent starter:** `.cursor/agents/login-settings.md`  
+**Status:** Auth not built — anon Supabase client; middleware disabled
+
+## Files
+
+- `app/page.tsx` — `activeTab === 'settings'` (~L24243); user profile, company settings, theme pref, Google connect
+- `middleware.ts`
+- `lib/supabase/client.ts`
+- `lib/supabase/server.ts`
+- `lib/supabase.ts`
+- `lib/app-settings-sync.ts`
+- `components/PhoneInput.tsx` — shared
+- `lib/phone.ts` — shared
+- `supabase/company_user_settings_sync.sql`
+- `supabase/harden_rls_step1.sql`
+- `supabase/enable_rls_pricing_open.sql`
+- `supabase/calendar_tasks_settings_sync.sql`

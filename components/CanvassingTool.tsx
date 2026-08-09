@@ -71,9 +71,9 @@ const STAT_ACCENTS: Record<TallyType, StatAccent> = {
     chip: 'bg-zinc-900',
   },
   conversation: {
-    text: 'text-sky-700',
-    ring: 'focus-visible:ring-sky-300',
-    chip: 'bg-sky-600',
+    text: 'text-steel',
+    ring: 'focus-visible:ring-steel-soft',
+    chip: 'bg-steel',
   },
   signed: {
     text: 'text-emerald-700',
@@ -84,7 +84,7 @@ const STAT_ACCENTS: Record<TallyType, StatAccent> = {
 
 const STAT_FLASH: Record<TallyType, string> = {
   door: 'rgba(24, 24, 27, 0.18)',
-  conversation: 'rgba(2, 132, 199, 0.2)',
+  conversation: 'color-mix(in srgb, var(--steel) 20%, transparent)',
   signed: 'rgba(5, 150, 105, 0.2)',
 };
 
@@ -631,7 +631,7 @@ export default function CanvassingTool({
               onChange={setAddressSearch}
               onSelect={handleAddressSelect}
               placeholder="Or search an address to drop a pin there…"
-              className="w-full rounded-2xl border border-zinc-200 pl-10 pr-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-300"
+              className="w-full rounded-2xl border border-zinc-200 pl-10 pr-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-300/50"
             />
           </div>
         </div>
@@ -962,7 +962,7 @@ function PinDetailPanel({
           onChange={(e) => setAddressDraft(e.target.value)}
           onBlur={() => onSaveField(pin, 'address', addressDraft)}
           placeholder="Not set — type an address"
-          className="w-full rounded-2xl border border-zinc-200 px-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-300"
+          className="w-full rounded-2xl border border-zinc-200 px-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-300/50"
         />
       </div>
 
@@ -1001,7 +1001,7 @@ function PinDetailPanel({
                 setOwnerDraft(name);
                 onSaveField(pin, 'owner_name', name);
               }}
-              className="text-[11px] font-medium text-sky-700 hover:text-sky-800"
+              className="text-[11px] font-medium text-graphite hover:text-graphite-hover"
             >
               Use “{propertyData.ownerName}”
             </button>
@@ -1013,7 +1013,7 @@ function PinDetailPanel({
           onChange={(e) => setOwnerDraft(e.target.value)}
           onBlur={() => onSaveField(pin, 'owner_name', ownerDraft)}
           placeholder="Not known yet"
-          className="w-full rounded-2xl border border-zinc-200 px-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-300"
+          className="w-full rounded-2xl border border-zinc-200 px-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-300/50"
         />
       </div>
 
@@ -1027,7 +1027,7 @@ function PinDetailPanel({
           onBlur={() => onSaveField(pin, 'notes', notesDraft)}
           placeholder="What happened at this door…"
           rows={3}
-          className="w-full rounded-2xl border border-zinc-200 px-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-300 resize-none"
+          className="w-full rounded-2xl border border-zinc-200 px-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-300/50 resize-none"
         />
       </div>
 
@@ -1043,7 +1043,7 @@ function PinDetailPanel({
               type="button"
               onClick={() => void runFetchPropertyData()}
               disabled={propertyLoading}
-              className="text-xs font-medium text-sky-700 hover:text-sky-800 disabled:opacity-50"
+              className="text-xs font-medium text-graphite hover:text-graphite-hover disabled:opacity-50"
             >
               {propertyLoading ? 'Refreshing…' : 'Refresh lookup'}
             </button>
@@ -1053,7 +1053,7 @@ function PinDetailPanel({
             <button
               type="button"
               onClick={() => void runFetchPropertyData()}
-              className="text-xs font-medium text-sky-700 hover:text-sky-800"
+              className="text-xs font-medium text-graphite hover:text-graphite-hover"
             >
               Try again
             </button>
@@ -1133,7 +1133,7 @@ function PinDetailPanel({
               <button
                 type="button"
                 onClick={() => onOpenLead(pin.lead_id as string)}
-                className="text-sm font-medium text-sky-700 hover:text-sky-800"
+                className="text-sm font-medium text-graphite hover:text-graphite-hover"
               >
                 Open lead
               </button>
@@ -1149,7 +1149,7 @@ function PinDetailPanel({
               value={createLeadName}
               onChange={(e) => setCreateLeadName(e.target.value)}
               placeholder="First and last name"
-              className="w-full rounded-2xl border border-zinc-200 px-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-300"
+              className="w-full rounded-2xl border border-zinc-200 px-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-300/50"
             />
             <div className="flex gap-2">
               <button

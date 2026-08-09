@@ -1,0 +1,14 @@
+---
+description: Summit · Performance — file map (@ tag this chat)
+alwaysApply: false
+---
+
+# Summit · Performance
+
+**Chat name:** `Summit · Performance`  
+**Sidebar label:** Performance  
+**Agent starter:** `.cursor/agents/performance.md`
+
+## Files
+
+- `app/page.tsx` — `activeTab === 'performance'` (~L24067); pipeline value, stage counts, avg estimate

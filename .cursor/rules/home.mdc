@@ -1,0 +1,22 @@
+---
+description: Summit · Home — file map (@ tag this chat)
+globs: components/HomeDashboard.tsx
+alwaysApply: false
+---
+
+# Summit · Home
+
+**Chat name:** `Summit · Home`  
+**Sidebar label:** Home  
+**Agent starter:** `.cursor/agents/home.md`
+
+## Files
+
+- `components/HomeDashboard.tsx`
+- `app/page.tsx` — `activeTab === 'home'` (~L22146); pipeline stats, schedule/tasks/canvass/storm cards
+- `lib/supabase.ts` — shared; lead counts
+- `lib/summit-calendar.ts` — shared; today's schedule card
+- `lib/google-tasks.ts` — shared; tasks card
+- `lib/canvassing.ts` — shared; canvass tally card
+- `lib/weather.ts` — shared; storm watch card
+- `lib/storm-clusters.ts` — shared; storm severity

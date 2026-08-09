@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en" data-mode="night" data-font="geist" data-depth="soft" data-motion="on">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Summit — Chrome/Steel Lab v5 (dark day CTA)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  html {
+    --font-geist: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-plex: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-inter: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  html[data-font="geist"] body { font-family: var(--font-geist); }
+  html[data-font="plex"] body { font-family: var(--font-plex); }
+  html[data-font="inter"] body { font-family: var(--font-inter); }
+  .tnum { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+
+  /*
+    v5 change from v4: day mode's CTA now uses a DARK brushed-chrome stack instead of
+    light silver. Light-on-light was reading as washed out against the steel-gray day
+    background. Night mode's metal tokens are unchanged.
+  */
+  html[data-mode="night"] {
+    --bg-0: #131518; --bg-1: #1a1c20;
+    --surface: #1f2226; --surface-2: #262930;
+    --border: rgba(226,232,240,0.08); --border-strong: rgba(226,232,240,0.15); --line: rgba(226,232,240,0.2);
+    --text-primary: #eef0f3; --text-secondary: #a1a6ae; --text-muted: #6c7079;
+    --sheen-edge: rgba(255,255,255,0.14); --shadow-tint: 0, 0, 0;
+    --metal-1: #565a62; --metal-2: #3c3f45; --metal-3: #24262a; --metal-ink: #f4f5f6;
+    --metal-bevel: rgba(255,255,255,0.22);
+    --metal-hover-brightness: 1.08;
+    --danger: #b6604a; --danger-soft: rgba(182,96,74,0.16);
+    --stage-lead: #8b93a3;      --stage-lead-soft: rgba(139,147,163,0.16);
+    --stage-prospect: #d9a441;  --stage-prospect-soft: rgba(217,164,65,0.16);
+    --stage-approved: #3fb0a8;  --stage-approved-soft: rgba(63,176,168,0.16);
+    --stage-completed: #8776d9; --stage-completed-soft: rgba(135,118,217,0.16);
+    --stage-invoiced: #d9743f;  --stage-invoiced-soft: rgba(217,116,63,0.16);
+    --stage-closed: #47b881;   --stage-closed-soft: rgba(71,184,129,0.18);
+  }
+  html[data-mode="day"] {
+    --bg-0: #c8cdd2; --bg-1: #d5d9dc;
+    --surface: #d9dde0; --surface-2: #ccd1d5;
+    --border: rgba(20,24,28,0.11); --border-strong: rgba(20,24,28,0.2); --line: rgba(20,24,28,0.26);
+    --text-primary: #191c20; --text-secondary: #4d525a; --text-muted: #7b8089;
+    --sheen-edge: rgba(255,255,255,0.85); --shadow-tint: 20, 24, 28;
+    /* Dark brushed chrome — was light silver in v4, got lost against the gray page */
+    --metal-1: #5a5e64; --metal-2: #42454a; --metal-3: #2e3034; --metal-ink: #f4f5f6;
+    --metal-bevel: rgba(255,255,255,0.18);
+    --metal-hover-brightness: 1.05;
+    --danger: #8a4433; --danger-soft: rgba(138,68,51,0.13);
+    --stage-lead: #5c6270;      --stage-lead-soft: rgba(92,98,112,0.13);
+    --stage-prospect: #a1751f;  --stage-prospect-soft: rgba(161,117,31,0.13);
+    --stage-approved: #1f7d75;  --stage-approved-soft: rgba(31,125,117,0.12);
+    --stage-completed: #5b4d9e; --stage-completed-soft: rgba(91,77,158,0.12);
+    --stage-invoiced: #a1521f;  --stage-invoiced-soft: rgba(161,82,31,0.13);
+    --stage-closed: #227a55;   --stage-closed-soft: rgba(34,122,85,0.15);
+  }
+
+  /* Depth still controls elevation only — not color, not the CTA's metal identity */
+  html[data-depth="flat"]   { --bg-gradient: var(--bg-0); --panel-sheen-opacity: 0;   --shadow-1: none; --shadow-2: none; --btn-shadow-2: none; }
+  html[data-depth="soft"]   { --bg-gradient: linear-gradient(165deg, var(--bg-1) 0%, var(--bg-0) 55%, var(--bg-1) 100%); --panel-sheen-opacity: 0.5; --shadow-1: 0 1px 2px rgba(var(--shadow-tint),0.05), 0 3px 8px rgba(var(--shadow-tint),0.05); --shadow-2: 0 10px 24px -12px rgba(var(--shadow-tint),0.18); --btn-shadow-2: 0 8px 16px -10px rgba(var(--shadow-tint),0.35); }
+  html[data-depth="rich"]   { --bg-gradient: linear-gradient(165deg, var(--bg-1) 0%, var(--bg-0) 45%, var(--bg-1) 75%, var(--bg-0) 100%); --panel-sheen-opacity: 0.85; --shadow-1: 0 1px 2px rgba(var(--shadow-tint),0.06), 0 4px 10px rgba(var(--shadow-tint),0.08); --shadow-2: 0 20px 40px -16px rgba(var(--shadow-tint),0.28); --btn-shadow-2: 0 14px 26px -10px rgba(var(--shadow-tint),0.45); }
+
+  body { margin: 0; background: var(--bg-gradient); color: var(--text-primary); -webkit-font-smoothing: antialiased; transition: background 0.3s ease, color 0.2s ease; min-height: 100vh; }
+
+  .lab-bar { position: sticky; top: 0; z-index: 10; background: var(--surface-2); border-bottom: 1px solid var(--border); padding: 14px 28px; display: flex; align-items: center; gap: 26px; flex-wrap: wrap; font-family: var(--font-inter); }
+  .lab-group { display: flex; align-items: center; gap: 8px; }
+  .lab-group-label { font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); margin-right: 4px; }
+  .lab-btn { font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--text-secondary); background: transparent; border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px; cursor: pointer; transition: all 0.15s ease; }
+  .lab-btn:hover { border-color: var(--border-strong); color: var(--text-primary); }
+  .lab-btn.active { background: var(--text-primary); border-color: var(--text-primary); color: var(--bg-0); }
+  .lab-note { margin-left: auto; font-size: 11.5px; color: var(--text-muted); }
+
+  .container { position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 72px 48px 140px; }
+  .topbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 60px; flex-wrap: wrap; }
+  .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 14px; }
+  h1.greeting { font-size: 46px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.05; margin: 0; }
+
+  /* CTA: brushed metal, no hue at all. Dark chrome in both modes now — day just uses a lighter bevel. */
+  .btn-new-lead {
+    position: relative; overflow: hidden;
+    display: inline-flex; align-items: center; gap: 9px;
+    background: linear-gradient(165deg, var(--metal-1) 0%, var(--metal-2) 60%, var(--metal-3) 100%);
+    border: none; border-radius: 12px;
+    padding: 15px 28px; cursor: pointer;
+    color: var(--metal-ink); font-size: 14.5px; font-weight: 700;
+    box-shadow: inset 0 1px 0 var(--metal-bevel), inset 0 -1px 0 rgba(0,0,0,0.25), var(--btn-shadow-2);
+    transition: transform 0.18s cubic-bezier(0.22,0.61,0.36,1), filter 0.18s ease;
+  }
+  html[data-motion="on"] .btn-new-lead:hover { transform: translateY(-1px); filter: brightness(var(--metal-hover-brightness)); }
+  html[data-motion="on"] .btn-new-lead:active { transform: translateY(0) scale(0.97); filter: brightness(0.96); }
+  .btn-new-lead .plus { font-size: 18px; font-weight: 800; line-height: 1; }
+  .btn-new-lead.firing { animation: fire-pop 0.42s ease-out; }
+  @keyframes fire-pop {
+    0% { box-shadow: inset 0 1px 0 var(--metal-bevel), inset 0 -1px 0 rgba(0,0,0,0.25), 0 0 0 0 rgba(255,255,255,0.18); }
+    40% { box-shadow: inset 0 1px 0 var(--metal-bevel), inset 0 -1px 0 rgba(0,0,0,0.25), 0 0 0 9px rgba(255,255,255,0.12); }
+    100% { box-shadow: inset 0 1px 0 var(--metal-bevel), inset 0 -1px 0 rgba(0,0,0,0.25), 0 0 0 0 transparent; }
+  }
+
+  .panel, .storm-alert, .glimpse-card {
+    position: relative; background: var(--surface); border: 1px solid var(--border);
+    box-shadow: var(--shadow-1), var(--shadow-2);
+    transition: background-color 0.25s ease, border-color 0.2s ease, box-shadow 0.25s ease, transform 0.18s cubic-bezier(0.22,0.61,0.36,1);
+  }
+  .panel::before, .storm-alert::before, .glimpse-card::before {
+    content: ''; position: absolute; top: 0; left: 6%; right: 6%; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--sheen-edge) 50%, transparent);
+    opacity: var(--panel-sheen-opacity);
+  }
+
+  .panel { border-radius: 22px; padding: 44px; margin-bottom: 26px; }
+  .pipeline-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 36px; flex-wrap: wrap; }
+  .pv-label { font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 10px; }
+  .pv-value { font-size: 42px; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em; }
+  .pipeline-meta { display: flex; gap: 40px; }
+  .meta-item .num { display: block; font-size: 21px; font-weight: 600; }
+  .meta-item .lbl { font-size: 12px; color: var(--text-muted); margin-top: 5px; }
+
+  .stage-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; }
+  .stage-tile { background: transparent; border: 1px solid var(--border); border-radius: 14px; padding: 24px 12px; text-align: center; cursor: pointer; transition: border-color 0.15s ease, transform 0.18s cubic-bezier(0.22,0.61,0.36,1), background-color 0.15s ease; }
+  html[data-motion="on"] .stage-tile:hover { transform: translateY(-2px); }
+  .stage-tile.active { border-color: color-mix(in srgb, var(--stage-color) 60%, transparent); background: var(--stage-color-soft); }
+  .stage-dot-row { display: flex; align-items: center; justify-content: center; gap: 6px; margin-bottom: 12px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--stage-color); transition: transform 0.15s ease; }
+  .stage-tile.active .dot { transform: scale(1.3); }
+  .stage-name { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+  .stage-count { font-size: 25px; font-weight: 700; margin: 8px 0 3px; }
+  .stage-value { font-size: 11px; font-weight: 500; color: var(--text-muted); }
+  .stage-tile[data-stage="lead"] { --stage-color: var(--stage-lead); --stage-color-soft: var(--stage-lead-soft); }
+  .stage-tile[data-stage="prospect"] { --stage-color: var(--stage-prospect); --stage-color-soft: var(--stage-prospect-soft); }
+  .stage-tile[data-stage="approved"] { --stage-color: var(--stage-approved); --stage-color-soft: var(--stage-approved-soft); }
+  .stage-tile[data-stage="completed"] { --stage-color: var(--stage-completed); --stage-color-soft: var(--stage-completed-soft); }
+  .stage-tile[data-stage="invoiced"] { --stage-color: var(--stage-invoiced); --stage-color-soft: var(--stage-invoiced-soft); }
+  .stage-tile[data-stage="closed"] { --stage-color: var(--stage-closed); --stage-color-soft: var(--stage-closed-soft); }
+
+  .storm-alert { border-radius: 18px; padding: 28px 32px; margin-bottom: 26px; display: flex; align-items: center; justify-content: space-between; gap: 20px; overflow: hidden; cursor: pointer; }
+  html[data-motion="on"] .storm-alert:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+  .storm-rail { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--danger); }
+  .storm-label { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--danger); margin-bottom: 10px; }
+  .pulse-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
+  html[data-motion="on"] .pulse-dot { animation: pulse 1.9s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 var(--danger-soft); } 70% { box-shadow: 0 0 0 8px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+  .storm-title { font-size: 17.5px; font-weight: 600; }
+  .storm-sub { font-size: 12.5px; color: var(--text-secondary); margin-top: 5px; }
+  .arrow { color: var(--text-muted); font-size: 17px; display: inline-block; transition: transform 0.15s ease; }
+  html[data-motion="on"] .glimpse-card:hover .arrow, html[data-motion="on"] .storm-alert:hover .arrow { transform: translateX(4px); }
+
+  .glimpse-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+  .glimpse-card { border-radius: 16px; padding: 28px 30px; cursor: pointer; }
+  html[data-motion="on"] .glimpse-card:hover { border-color: var(--border-strong); transform: translateY(-2px); }
+  html[data-motion="on"] .glimpse-card.stagger-in { animation: card-rise 0.5s cubic-bezier(0.22,0.61,0.36,1) both; animation-delay: calc(var(--i) * 70ms); }
+  @keyframes card-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  .glimpse-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  .glimpse-title { font-size: 14px; font-weight: 600; }
+  .schedule-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .time-chip { font-size: 11px; font-weight: 600; color: var(--text-secondary); background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; min-width: 62px; text-align: center; }
+  .schedule-text { font-size: 13.5px; color: var(--text-secondary); }
+  .more-note { font-size: 12px; color: var(--text-muted); }
+  .big-num { font-size: 34px; font-weight: 700; margin-bottom: 16px; }
+  .task-row { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+  .task-badge { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; border-radius: 999px; padding: 3px 9px; }
+  .task-badge.overdue { background: var(--danger-soft); color: var(--danger); }
+  .task-badge.today { background: var(--surface-2); color: var(--text-secondary); border: 1px solid var(--border); }
+  .task-text { font-size: 13.5px; color: var(--text-secondary); }
+  .lead-name { font-size: 16px; font-weight: 600; }
+  .lead-address { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+  .lead-tags { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
+  .stage-badge { font-size: 11px; font-weight: 700; padding: 5px 12px; border-radius: 999px; background: var(--stage-approved-soft); color: var(--stage-approved); }
+  .job-number { font-size: 12px; color: var(--text-muted); }
+  .canvass-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; text-align: center; }
+  .canvass-num { font-size: 26px; font-weight: 700; }
+  .canvass-lbl { font-size: 10px; color: var(--text-muted); margin-top: 5px; text-transform: uppercase; letter-spacing: 0.06em; }
+
+  html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="off"] *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  @media (prefers-reduced-motion: reduce) { * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; } }
+</style>
+</head>
+<body>
+  <div class="lab-bar">
+    <div class="lab-group">
+      <span class="lab-group-label">Mode</span>
+      <button class="lab-btn active" data-set="mode" data-val="night">Night</button>
+      <button class="lab-btn" data-set="mode" data-val="day">Day</button>
+    </div>
+    <div class="lab-group">
+      <span class="lab-group-label">Depth</span>
+      <button class="lab-btn" data-set="depth" data-val="flat">Flat</button>
+      <button class="lab-btn active" data-set="depth" data-val="soft">Soft</button>
+      <button class="lab-btn" data-set="depth" data-val="rich">Rich</button>
+    </div>
+    <div class="lab-group">
+      <span class="lab-group-label">Font</span>
+      <button class="lab-btn active" data-set="font" data-val="geist">Geist</button>
+      <button class="lab-btn" data-set="font" data-val="plex">IBM Plex</button>
+      <button class="lab-btn" data-set="font" data-val="inter">Inter</button>
+    </div>
+    <div class="lab-group">
+      <span class="lab-group-label">Motion</span>
+      <button class="lab-btn active" data-set="motion" data-val="on">On</button>
+      <button class="lab-btn" data-set="motion" data-val="off">Off</button>
+    </div>
+    <button class="lab-btn" id="replayBtn" style="margin-left: 4px;">↺ Replay entrance</button>
+    <span class="lab-note">v5: dark chrome CTA in day mode too — click Day to compare against v4.</span>
+  </div>
+
+  <div class="container">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">Tuesday · Aug 6</div>
+        <h1 class="greeting">Good evening, Joe</h1>
+      </div>
+      <button class="btn-new-lead" id="newLeadBtn" type="button"><span class="plus">+</span> New Lead</button>
+    </header>
+    <section class="panel">
+      <div class="pipeline-header">
+        <div>
+          <div class="pv-label">Pipeline Value</div>
+          <div class="pv-value tnum">$482,600</div>
+        </div>
+        <div class="pipeline-meta">
+          <div class="meta-item"><span class="num tnum">14</span><span class="lbl">active jobs</span></div>
+          <div class="meta-item"><span class="num tnum">9</span><span class="lbl">estimates on file</span></div>
+        </div>
+      </div>
+      <div class="stage-grid" id="stageGrid">
+        <div class="stage-tile active" data-stage="lead"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Lead</span></div><div class="stage-count tnum">5</div><div class="stage-value tnum">$86,200</div></div>
+        <div class="stage-tile" data-stage="prospect"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Prospect</span></div><div class="stage-count tnum">4</div><div class="stage-value tnum">$142,900</div></div>
+        <div class="stage-tile" data-stage="approved"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Approved</span></div><div class="stage-count tnum">3</div><div class="stage-value tnum">$168,400</div></div>
+        <div class="stage-tile" data-stage="completed"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Completed</span></div><div class="stage-count tnum">1</div><div class="stage-value tnum">$52,000</div></div>
+        <div class="stage-tile" data-stage="invoiced"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Invoiced</span></div><div class="stage-count tnum">1</div><div class="stage-value tnum">$33,100</div></div>
+        <div class="stage-tile" data-stage="closed"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Closed</span></div><div class="stage-count tnum">0</div><div class="stage-value tnum">$0</div></div>
+      </div>
+    </section>
+    <section class="storm-alert">
+      <div class="storm-rail"></div>
+      <div>
+        <div class="storm-label"><span class="pulse-dot"></span>Active Storm Alert</div>
+        <div class="storm-title">Hail · 1.5in reported near Gilbert, AZ</div>
+        <div class="storm-sub">12 minutes ago · 3 severe reports in the last 24h</div>
+      </div>
+      <span class="arrow">→</span>
+    </section>
+    <section class="glimpse-grid" id="glimpseGrid">
+      <div class="glimpse-card stagger-in" style="--i:0">
+        <div class="glimpse-head"><span class="glimpse-title">Today's Schedule</span><span class="arrow">→</span></div>
+        <div class="schedule-row"><span class="time-chip tnum">9:00 AM</span><span class="schedule-text">Roof inspection — 4821 E Cactus Rd</span></div>
+        <div class="schedule-row"><span class="time-chip tnum">11:30 AM</span><span class="schedule-text">Adjuster meeting — Sanchez claim</span></div>
+        <div class="schedule-row"><span class="time-chip tnum">2:00 PM</span><span class="schedule-text">Estimate walkthrough — Ironwood Estates</span></div>
+        <div class="more-note">+1 more today</div>
+      </div>
+      <div class="glimpse-card stagger-in" style="--i:1">
+        <div class="glimpse-head"><span class="glimpse-title">Open Tasks</span><span class="arrow">→</span></div>
+        <div class="big-num tnum">7</div>
+        <div class="task-row"><span class="task-badge overdue">Overdue</span><span class="task-text">Send updated estimate to Whitmore</span></div>
+        <div class="task-row"><span class="task-badge today">Due Today</span><span class="task-text">Call insurance adjuster — Reyes</span></div>
+      </div>
+      <div class="glimpse-card stagger-in" style="--i:2">
+        <div class="glimpse-head"><span class="glimpse-title">Jump Back In</span><span class="arrow">→</span></div>
+        <div class="lead-name">Marcus Whitmore</div>
+        <div class="lead-address">4821 E Cactus Rd, Scottsdale, AZ</div>
+        <div class="lead-tags"><span class="stage-badge">Approved</span><span class="job-number">Job #10482</span></div>
+      </div>
+      <div class="glimpse-card stagger-in" style="--i:3">
+        <div class="glimpse-head"><span class="glimpse-title">Canvassing Today</span><span class="arrow">→</span></div>
+        <div class="canvass-grid">
+          <div><div class="canvass-num tnum">38</div><div class="canvass-lbl">Doors</div></div>
+          <div><div class="canvass-num tnum" style="color:var(--stage-completed)">11</div><div class="canvass-lbl">Convos</div></div>
+          <div><div class="canvass-num tnum" style="color:var(--stage-closed)">2</div><div class="canvass-lbl">Signed</div></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    var html = document.documentElement;
+    document.querySelectorAll('.lab-btn[data-set]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var set = btn.getAttribute('data-set');
+        var val = btn.getAttribute('data-val');
+        html.setAttribute('data-' + set, val);
+        document.querySelectorAll('.lab-btn[data-set="' + set + '"]').forEach(function (b) {
+          b.classList.toggle('active', b === btn);
+        });
+        if (set === 'mode') {
+          document.querySelector('h1.greeting').textContent = val === 'day' ? 'Good afternoon, Joe' : 'Good evening, Joe';
+        }
+      });
+    });
+    document.querySelectorAll('.stage-tile').forEach(function (tile) {
+      tile.addEventListener('click', function () {
+        document.querySelectorAll('.stage-tile').forEach(function (t) { t.classList.remove('active'); });
+        tile.classList.add('active');
+      });
+    });
+    var newLeadBtn = document.getElementById('newLeadBtn');
+    newLeadBtn.addEventListener('click', function () {
+      newLeadBtn.classList.remove('firing');
+      void newLeadBtn.offsetWidth;
+      newLeadBtn.classList.add('firing');
+    });
+    var replayBtn = document.getElementById('replayBtn');
+    replayBtn.addEventListener('click', function () {
+      var cards = document.querySelectorAll('.glimpse-card');
+      cards.forEach(function (c) { c.classList.remove('stagger-in'); });
+      void document.getElementById('glimpseGrid').offsetWidth;
+      cards.forEach(function (c) { c.classList.add('stagger-in'); });
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+---
+description: Summit · Visual & Animations (Colors) — file map (@ tag this chat)
+globs: app/globals.css,app/layout.tsx,design-mockups/**
+alwaysApply: false
+---
+
+# Summit · Visual & Animations
+
+**Chat name:** `Summit · Colors`  
+**Sidebar label:** n/a (app-wide theme)  
+**Agent starter:** `.cursor/agents/colors.md`
+
+## Files
+
+- `app/globals.css` — `data-theme`, page-fade, tally-pop, card styles
+- `app/layout.tsx` — theme init script, viewport `themeColor`, fonts
+- `app/page.tsx` — `ThemePreference`, `PIPELINE_STAGE_STYLES`, `applyThemeMode`
+- `design-mockups/00-index.html`
+- `design-mockups/01-job-site-bold.html`
+- `design-mockups/02-storm-command.html`
+- `design-mockups/03-warm-trade.html` — rejected direction
+- `design-mockups/04-hybrid-index.html`
+- `design-mockups/04-hybrid-a-ember-linen.html`
+- `design-mockups/04-hybrid-b-charcoal-ember.html`
+- `design-mockups/04-hybrid-c-copper-stone.html`
+- `design-mockups/04-hybrid-d-driftwood-flare.html`
+- `design-mockups/04-hybrid-e-sunset-craft.html`
+- `design-mockups/05-industrial-a-oxide-steel.html`
+- `design-mockups/05-industrial-b-concrete-cobalt.html`
+- `design-mockups/05-industrial-c-chrome-signal.html`
+- `design-mockups/06-material-concrete-blued-steel.html`
+- `design-mockups/06-material-corten-steel.html`
+- `design-mockups/07-material-lab.html`
+- `design-mockups/08-material-lab.html`
+- `design-mockups/09-material-lab-v3.html`
+- `design-mockups/10-material-lab-v4.html`
+- `design-mockups/11-material-lab-v5.html`

@@ -1,0 +1,25 @@
+---
+description: Summit · Pipeline — file map (@ tag this chat)
+globs: components/AddressAutocomplete.tsx,components/PhoneInput.tsx
+alwaysApply: false
+---
+
+# Summit · Pipeline
+
+**Chat name:** `Summit · Pipeline`  
+**Sidebar label:** Pipeline (`activeTab: leads`)  
+**Agent starter:** `.cursor/agents/pipeline.md`
+
+## Files
+
+- `app/page.tsx` — `activeTab === 'leads'` (~L24707); kanban, `PIPELINE_STAGES`, lead CRUD, lead profile tabs
+- `components/AddressAutocomplete.tsx` — shared
+- `components/PhoneInput.tsx` — shared
+- `lib/phone.ts` — shared
+- `lib/geocode.ts` — shared
+- `lib/supabase.ts` — shared; `leads` table
+- `app/api/geocode/route.ts`
+- `app/api/address-suggest/route.ts`
+- `supabase/soft_delete_leads.sql`
+- `supabase/enable_rls_pricing_open.sql` — shared; leads RLS
+- `supabase/harden_rls_step1.sql` — shared

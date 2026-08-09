@@ -1,0 +1,51 @@
+---
+description: Alive UX + sell path backlog — motion, onboarding, CRM, camera, App Store. Build AFTER UI color decision + deep scan.
+alwaysApply: true
+---
+
+# Alive product UX + sell path (planned)
+
+Product backlog — **do not start Phases A–F until Joe has (1) locked a UI color direction and (2) run a deep scan / lock pass.** Smaller parallel items (Instant Roofer smoke, whiteboard labor, missing prices) may proceed earlier if Joe asks.
+
+## Gates (required order)
+
+1. **UI color direction** — pick from `design-mockups/04-hybrid-index.html` (A–E charcoal/orange hybrids) or a refined mix. Warm Trade cozy/linen/terracotta is rejected. Orange accent still optional.
+2. **Deep scan + lock** — `tsc` / lint / build clean; pricing integrity; no regressions on home / pricing / canvassing / weather / estimates / orders.
+3. **Then** ship UX phases A→F below.
+
+## Product north star
+
+- **Distribution:** Web + App Store (AccuLynx-shaped), subscription-based.
+- **Feel:** Alive, smooth onboarding, almost fun — not a form farm. App does work for the user; motion celebrates completion.
+- **Motion levels:** Micro (press/hover) → Flow (nav) → Celebrate (rare: signed, order, save). Respect `prefers-reduced-motion`. No carnival / purple SaaS / cozy fall.
+
+## Phases (after gates) — open the **page chat** that matches
+
+| Phase | Ship | Chat |
+|-------|------|------|
+| **A** | Motion kit + living Home + celebrate moments | `Summit · Home` |
+| **B** | Progressive estimate + animate auto-fills | `Summit · Estimates` (+ `Summit · Takeoff` if needed) |
+| **C** | Apple/Google (+ email) auth onboarding | `Summit · Login & Settings` |
+| **D** | In-app camera for job photos | `Summit · Documents` |
+| **E** | CRM job-soul cards + next-action | `Summit · Pipeline` |
+| **F** | Stripe → phone install → App Store | `Summit · Website & App Store` (+ `Summit · Phone`) |
+
+Chat roster: `.cursor/rules/summit-agent-roster.mdc` · kits: `.cursor/agents/`
+
+## Also from this initiative (not blocked by color gate if Joe asks)
+
+- Instant Roofer: regenerated API key in `.env.local` + measure smoke test
+- Office whiteboard labor → `cost_sheet_labor` / Company Pricing
+- Fill remaining blank price rows (foam/coatings, flashing/tile labor, GAF/Malarkey H&R) — never invent
+- Mobile zoom/clutter polish; PWA home-screen
+- Slack agent “staff” — only after core product stable; assign models by job type
+
+## Explicitly not this backlog
+
+- Pitch deck — `pitch-deck-vision.mdc`
+- Cash/insurance contracts — `legal-contracts-backlog.mdc`
+- Canvassing phone/skip-trace — `canvassing-phone-lookup-backlog.mdc`
+
+## Agent reminder
+
+Do not implement Phases A–F until Joe confirms UI color + deep scan (or explicitly says to start a phase anyway). Prefer building toward AccuLynx-shaped web + store subscription and Chris-Raroque-style craft (microinteractions, onboarding, in-app camera) when Joe opens this work.

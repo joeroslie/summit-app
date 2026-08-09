@@ -19,7 +19,7 @@ type StormMapProps = {
   reports: StormReport[];
   selectedReportId: string | null;
   onSelectReport: (id: string) => void;
-  /** "You are here" blue dot — twin of Hail Recon/HailTrace's locator. */
+  /** "You are here" dot — twin of Hail Recon/HailTrace's locator. */
   userLocation?: LatLngPoint | null;
   /** Fly-to point — set after selecting a report / "Show my location". */
   center?: LatLngPoint | null;

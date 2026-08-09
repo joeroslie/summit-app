@@ -1,6 +1,10 @@
 -- =============================================================================
 -- Summit: ENABLE RLS on pricing/cost + critical tables (open anon policies)
 -- =============================================================================
+-- ⚠️ PARTLY SUPERSEDED by harden_rls_step1.sql, which makes the pricing/cost
+-- tables read-only to anon. Re-running THIS file will re-open anon writes to
+-- pricing and undo that lock. If you re-run it, run harden_rls_step1.sql after.
+--
 -- HOW TO RUN: Supabase → SQL Editor → paste ALL → Run
 --
 -- Keeps app working with NEXT_PUBLIC_SUPABASE_ANON_KEY (USING true).

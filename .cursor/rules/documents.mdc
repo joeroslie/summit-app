@@ -1,0 +1,26 @@
+---
+description: Summit · Documents — file map (@ tag this chat)
+globs: app/api/convert-heic/route.ts
+alwaysApply: false
+---
+
+# Summit · Documents
+
+**Chat name:** `Summit · Documents`  
+**Sidebar label:** Documents  
+**Agent starter:** `.cursor/agents/documents.md`
+
+## Files
+
+- `app/page.tsx` — `activeTab === 'documents'` (~L22465); photo reports, lead-photos/lead-docs Storage, PDF generation
+- `app/api/convert-heic/route.ts`
+- `components/AddressAutocomplete.tsx` — shared
+- `lib/supabase.ts` — shared; Storage buckets
+- `supabase/harden_rls_step1.sql` — lead-photos / lead-docs policies
+- `supabase/mitigation_price_tune.sql` — shared
+- `supabase/mitigation_apply_recommended.sql`
+- `supabase/mitigation_tarp_install_options.sql`
+- `supabase/hip_install_mitigation.sql`
+- `supabase/obstruction_sandbag_mitigation.sql`
+- `docs/emergency_services_agreement_prowest_az.pdf`
+- `types/heic-convert.d.ts`

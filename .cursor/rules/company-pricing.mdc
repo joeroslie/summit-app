@@ -1,0 +1,40 @@
+---
+description: Summit · Company Pricing — file map (@ tag this chat)
+globs: components/CompanyPricing.tsx,lib/pricingGuide.ts
+alwaysApply: false
+---
+
+# Summit · Company Pricing
+
+**Chat name:** `Summit · Company Pricing`  
+**Sidebar label:** none — Documents → Company pricing (`systemDocWorkspace: pricing`)  
+**Agent starter:** `.cursor/agents/company-pricing.md`
+
+## Files
+
+- `components/CompanyPricing.tsx`
+- `lib/pricingGuide.ts`
+- `app/page.tsx` — `systemDocWorkspace === 'pricing'` (~L21103); `getCost`, `priceSheet`, `cost_sheet_*` fetch
+- `supabase/enable_rls_pricing_open.sql`
+- `supabase/harden_rls_step1.sql`
+- `supabase/cost_sheets_cleanup_rename.sql`
+- `supabase/cost_sheets_full_cleanup.sql`
+- `supabase/armourshake_price_fix_2026.sql`
+- `docs/pricing/README.md`
+- `docs/pricing/ProWest_Full_Price_Book_2026.md`
+- `docs/pricing/ProWest_Missing_All_Prices_2026.md`
+- `docs/pricing/ProWest_Missing_Costs_2026.md`
+- `docs/pricing/ProWest_Missing_Labor_2026.md`
+- `docs/pricing/ProWest_Missing_Materials_2026.md`
+- `docs/pricing/ProWest_SRS_Missing_Materials_2026.md`
+- `docs/pricing/ProWest_Crew_Rates_2026.md`
+- `docs/pricing/Joe_Internal_Cost_List_with_Labor_Gaps_2026.md`
+- `docs/pricing/Miller_Wholesale_Lumber_Price_List_2026.md`
+- `docs/pricing/SRS_Supplier_Price_List_Combined_2026.md`
+- `docs/pricing/Supplier_Contacts_Internal.md`
+- `docs/pricing/Full_Price_Book_Print.html`
+- `docs/pricing/Miller_Lumber_Print.html`
+- `docs/pricing/Missing_All_Print.html`
+- `docs/pricing/print.html`
+- `docs/pricing/SRS_Missing_Materials_Print.html`
+- `docs/pricing/SRS_Supplier_Print.html`

@@ -1,0 +1,25 @@
+---
+description: Summit · Canvassing — file map (@ tag this chat)
+globs: components/CanvassingTool.tsx,components/CanvassMap.tsx,lib/canvassing.ts
+alwaysApply: false
+---
+
+# Summit · Canvassing
+
+**Chat name:** `Summit · Canvassing`  
+**Sidebar label:** none — Tools → Canvassing (`activeTab: canvassing`)  
+**Agent starter:** `.cursor/agents/canvassing.md`
+
+## Files
+
+- `components/CanvassingTool.tsx`
+- `components/CanvassMap.tsx`
+- `components/AddressAutocomplete.tsx` — shared
+- `lib/canvassing.ts`
+- `lib/supabase.ts` — shared; `canvass_pins` table
+- `app/api/property-lookup/route.ts`
+- `app/api/reverse-geocode/route.ts`
+- `app/api/address-suggest/route.ts` — shared
+- `supabase/canvass_pins.sql`
+- `supabase/canvass_tallies.sql`
+- `app/page.tsx` — `createLeadFromCanvassPin`; Tools hub; Home canvass card (~L24234)

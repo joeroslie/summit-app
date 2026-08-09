@@ -1,0 +1,56 @@
+---
+description: Summit app shell — shared files every page touches
+alwaysApply: false
+---
+
+# Summit · App Shell (shared)
+
+**When to @ tag:** Cross-page refactors, navigation, sidebar, or anything touching multiple tabs.
+
+## Monolith + layout
+
+- `app/page.tsx` — entire app UI (~29k lines); all `activeTab` routes
+- `app/layout.tsx`
+- `app/globals.css`
+
+## Shared components
+
+- `components/AddressAutocomplete.tsx` — Pipeline, Canvassing, Estimates
+- `components/PhoneInput.tsx` — Pipeline, Settings
+
+## Shared lib
+
+- `lib/supabase.ts`
+- `lib/supabase/client.ts`
+- `lib/supabase/server.ts`
+- `lib/pricingGuide.ts` — Estimates, Company Pricing, Orders, Takeoff
+- `lib/app-settings-sync.ts` — Settings, Calendar, Tasks
+- `lib/geocode.ts`
+- `lib/phone.ts`
+
+## Config
+
+- `middleware.ts`
+- `next.config.ts`
+- `tsconfig.json`
+- `package.json`
+
+## Sidebar tabs (`AppTab`)
+
+| Tab id | Sidebar label |
+|--------|---------------|
+| `home` | Home |
+| `leads` | Pipeline |
+| `estimates` | Estimates |
+| `invoices` | Invoices |
+| `calendar` | Calendar |
+| `tasks` | Tasks |
+| `performance` | Performance |
+| `orders` | Orders |
+| `tools` | Tools |
+| `documents` | Documents |
+| `canvassing` | Tools → Canvassing |
+| `weather` | Tools → Weather |
+| `settings` | Profile settings (profile menu) |
+
+Chat roster: `.cursor/rules/summit-agent-roster.mdc`

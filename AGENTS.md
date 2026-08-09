@@ -6,9 +6,10 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 ## Product backlog
 
+- Alive UX + sell path (planned): see `.cursor/rules/alive-product-ux-backlog.mdc` — motion/Home, progressive estimate, Apple/Google onboarding, in-app camera, CRM soul, Stripe → PWA → App Store. **After UI color decision + deep scan.**
 - Sales Pitch Deck (planned): see `.cursor/rules/pitch-deck-vision.mdc` — inspection → photo report → estimate → professional pitch. Do not build until Joe asks.
 - Cash + insurance contracts (planned): see `.cursor/rules/legal-contracts-backlog.mdc` — legal docs; twin UI/PDF system; **verbiage unchanged**. Do not build until Joe asks.
-- Auth / login (planned): see `.cursor/rules/auth-login-backlog.mdc` — password settings, proper user auth, tighten Supabase RLS. Do not build until Joe asks.
+- Auth / login (planned): see `.cursor/rules/auth-login-backlog.mdc` — Apple + Google onboarding, password settings, proper user auth, tighten Supabase RLS. Do not build until Joe asks.
 
 ## UI note
 

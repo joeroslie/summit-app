@@ -1,0 +1,16 @@
+---
+description: Summit · Quick Fixes — file map (@ tag this chat)
+alwaysApply: false
+---
+
+# Summit · Quick Fixes
+
+**Chat name:** `Summit · Quick Fixes`  
+**Agent starter:** `.cursor/agents/quick-fixes.md`  
+**Purpose:** Restarts, tiny copy, host down — no dedicated feature module
+
+## Touch files
+
+- `package.json` — `npm run dev` / `build` / `start`
+- `next.config.ts`
+- `app/page.tsx` — copy tweaks

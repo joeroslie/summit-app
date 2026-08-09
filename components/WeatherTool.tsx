@@ -268,7 +268,7 @@ export default function WeatherTool({ showToast }: WeatherToolProps) {
           <select
             value={stateFilter}
             onChange={(e) => setStateFilter(e.target.value)}
-            className="rounded-2xl border border-zinc-200 px-4 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300"
+            className="rounded-2xl border border-zinc-200 px-4 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-300"
           >
             <option value="">All states</option>
             {US_STATES.map((s) => (
@@ -337,7 +337,7 @@ export default function WeatherTool({ showToast }: WeatherToolProps) {
             disabled={damageZoneClusters.length === 0}
             className={`px-3.5 py-2 rounded-xl text-xs font-medium border transition-colors disabled:opacity-40 ${
               showDamageZones
-                ? 'border-sky-200 bg-sky-50 text-sky-700'
+                ? 'border-danger/40 bg-[var(--danger-soft)] text-danger'
                 : 'border-zinc-200 text-zinc-500'
             }`}
           >
@@ -368,7 +368,7 @@ export default function WeatherTool({ showToast }: WeatherToolProps) {
           type="button"
           onClick={() => setFitSignal((n) => n + 1)}
           disabled={filteredReports.length === 0}
-          className="text-xs font-medium text-sky-700 hover:text-sky-800 disabled:opacity-30"
+          className="text-xs font-medium text-zinc-600 hover:text-zinc-900 disabled:opacity-30"
         >
           Fit map to all reports
         </button>
@@ -467,7 +467,7 @@ function ReportDetail({ report, distanceMiles }: ReportDetailProps) {
           href={directionsUrl(report.lat, report.lng)}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs font-medium text-sky-700 hover:text-sky-800 shrink-0"
+          className="text-xs font-medium text-zinc-600 hover:text-zinc-900 shrink-0"
         >
           Get directions
         </a>

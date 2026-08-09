@@ -1,0 +1,56 @@
+---
+description: Page-named Summit chats — go to the chat that matches the app page you’re working on
+alwaysApply: true
+---
+
+# Summit chats = app pages
+
+**Mental model:** If you’re changing something on a page in Summit, open the chat with that page’s name. Pick the model once. Don’t use the giant mega-chat for new work.
+
+Paste starters from `.cursor/agents/`.
+
+## Page chats (everyday)
+
+| Chat name | App area | Model (Joe’s setup) |
+|-----------|----------|---------------------|
+| `Summit · Home` | Home dashboard | **Sonnet 5** |
+| `Summit · Pipeline` | Leads / CRM | **Sonnet 5** |
+| `Summit · Estimates` | Estimates / measure / IR | **Sonnet 5** |
+| `Summit · Takeoff` | Takeoff sheet | **Sonnet 5** |
+| `Summit · Orders` | Orders + Labor | **Sonnet 5** |
+| `Summit · Documents` | Docs / camera / PDFs | **Sonnet 5** |
+| `Summit · Calendar` | Calendar | **Grok 4.5** or Sonnet |
+| `Summit · Tasks` | Tasks | **Grok 4.5** or Sonnet |
+| `Summit · Performance` | Performance | **Grok 4.5** or Sonnet |
+| `Summit · Weather` | Weather tool | **Sonnet 5** |
+| `Summit · Canvassing` | Canvassing | **Sonnet 5** |
+| `Summit · Company Pricing` | Pricing locks | **Sonnet 5** (Opus to audit) |
+| `Summit · Login & Settings` | Auth / RLS | **Sonnet 5** or Opus if available |
+
+## Cross-cutting (not a sidebar page, but you’ll need them)
+
+| Chat name | What it’s for | Model (Joe’s setup) |
+|-----------|---------------|---------------------|
+| `Summit · Guide` | Conversation only — “which agent?” + opinions; **no coding** | **Grok 4.5** or Auto |
+| `Summit · Colors` | Whole-app color / theme | **Sonnet 5** |
+| `Summit · Phone` | Phone layout / Add to Home Screen | **Grok 4.5** or Sonnet |
+| `Summit · Website & App Store` | Marketing site, Stripe, App Store | **Sonnet 5** (Opus if billing gets hard) |
+| `Summit · Deep Scan` | Full QA lock | **Sonnet 5** (Opus if available) |
+| `Summit · Quick Fixes` | Restarts, tiny copy, host down | **Grok 4.5** |
+
+## Later (backlog pages / products)
+
+| Chat name | What it’s for | Model |
+|-----------|---------------|--------|
+| `Summit · Pitch Deck` | Sales pitch deck backlog | Sonnet |
+| `Summit · Contracts` | Cash / insurance contracts backlog | Opus (legal care) |
+
+## Slack later
+
+Keep Slack bots named simply: Pricing, Triage, Security, Print, Ship — see `.cursor/agents/slack-*.md`.
+
+## Rules
+
+- One page (or one money domain) per chat.
+- New work → new or matching page chat. Retire the days-long mega-chat.
+- Model sticks for that conversation after you pick it.

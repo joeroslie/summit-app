@@ -10,28 +10,62 @@
 :root,
 html[data-theme="day"] {
   color-scheme: light;
-  --background: #f2f3f5;
-  --foreground: #141618;
-  --surface: #fafbfc;
-  --surface-raised: #ffffff;
-  --chrome: #c5cad1;
-  --chrome-line: #d8dce2;
-  --chrome-soft: #eef0f3;
+  --background: #c8cdd2;
+  --foreground: #17191c;
+  --surface: #d6dadd;
+  --surface-raised: #eef0f2;
+  --chrome: #aeb4ba;
+  --chrome-line: #bcc1c6;
+  --chrome-soft: #e1e4e6;
   --graphite: #1c1e21;
   --graphite-hover: #2a2d32;
-  --steel: #4a6fa5;
-  --steel-soft: #eef3f9;
+  --steel: #5c6270;
+  --steel-soft: #e3e5e8;
   --emerald: #059669;
   --emerald-soft: #ecfdf5;
   --amber: #b45309;
   --amber-soft: #fffbeb;
-  --scrollbar: #c5cad1;
+  /* Muted brick — the one "needs attention" color app-wide (storm alerts, overdue, errors) */
+  --danger: #8a4433;
+  --danger-soft: rgba(138, 68, 51, 0.13);
+  --scrollbar: #aeb4ba;
+
+  /* CTA material — brushed metal, no accent hue to like/dislike. Dark chrome in
+     day mode too (v5): light silver read as washed out against the steel-gray page. */
+  --metal-1: #5a5e64;
+  --metal-2: #42454a;
+  --metal-3: #2e3034;
+  --metal-ink: #f4f5f6;
+  --metal-bevel: rgba(255, 255, 255, 0.18);
+  --metal-hover-brightness: 1.05;
+
+  /* Pipeline stage identity — spread across the wheel, not one warm-pastel family */
+  --stage-lead: #5c6270;
+  --stage-lead-soft: rgba(92, 98, 112, 0.13);
+  --stage-prospect: #a1751f;
+  --stage-prospect-soft: rgba(161, 117, 31, 0.13);
+  --stage-approved: #1f7d75;
+  --stage-approved-soft: rgba(31, 125, 117, 0.12);
+  --stage-completed: #5b4d9e;
+  --stage-completed-soft: rgba(91, 77, 158, 0.12);
+  --stage-invoiced: #a1521f;
+  --stage-invoiced-soft: rgba(161, 82, 31, 0.13);
+  --stage-closed: #227a55;
+  --stage-closed-soft: rgba(34, 122, 85, 0.15);
 
   /* Shared shell — twins pipeline / leads / calendar / docs (max-w-6xl) */
   --page-max: 72rem; /* 1152px */
   --page-pad-x: clamp(1rem, 2.5vw, 1.5rem);
   --page-pad-y: clamp(1.25rem, 2vw, 1.75rem);
-  --header-h: 3.5rem;
+  /* env() is 0 in a normal browser tab; only grows once launched standalone
+     with a notch/Dynamic Island exposed, so this stays correct everywhere. */
+  --header-h: calc(3.5rem + env(safe-area-inset-top, 0px));
+}
+
+@media (min-width: 640px) {
+  :root {
+    --header-h: calc(4rem + env(safe-area-inset-top, 0px));
+  }
 }
 
 /*
@@ -40,22 +74,44 @@ html[data-theme="day"] {
 */
 html[data-theme="night"] {
   color-scheme: dark;
-  --background: #0f1115;
+  --background: #131518;
   --foreground: #e8eaed;
-  --surface: #15181d;
-  --surface-raised: #1a1d24;
+  --surface: #1a1c20;
+  --surface-raised: #20232a;
   --chrome: #3a3f48;
   --chrome-line: #2c3038;
   --chrome-soft: #1c1f26;
   --graphite: #e8eaed;
   --graphite-hover: #f4f5f6;
-  --steel: #7ba3d4;
-  --steel-soft: #1a2433;
+  --steel: #8b93a3;
+  --steel-soft: #23262c;
   --emerald: #34d399;
   --emerald-soft: #0f2a22;
   --amber: #fbbf24;
   --amber-soft: #2a2110;
+  --danger: #b6604a;
+  --danger-soft: rgba(182, 96, 74, 0.16);
   --scrollbar: #3f4550;
+
+  --metal-1: #565a62;
+  --metal-2: #3c3f45;
+  --metal-3: #24262a;
+  --metal-ink: #f4f5f6;
+  --metal-bevel: rgba(255, 255, 255, 0.22);
+  --metal-hover-brightness: 1.08;
+
+  --stage-lead: #8b93a3;
+  --stage-lead-soft: rgba(139, 147, 163, 0.16);
+  --stage-prospect: #d9a441;
+  --stage-prospect-soft: rgba(217, 164, 65, 0.16);
+  --stage-approved: #3fb0a8;
+  --stage-approved-soft: rgba(63, 176, 168, 0.16);
+  --stage-completed: #8776d9;
+  --stage-completed-soft: rgba(135, 118, 217, 0.16);
+  --stage-invoiced: #d9743f;
+  --stage-invoiced-soft: rgba(217, 116, 63, 0.16);
+  --stage-closed: #47b881;
+  --stage-closed-soft: rgba(71, 184, 129, 0.18);
 
   /* Zinc inverted so bg-zinc-100 / text-zinc-900 work in both themes */
   --color-zinc-50: oklch(14.1% 0.005 285.823);
@@ -115,6 +171,28 @@ html[data-theme="night"] {
   --color-sky-200: oklch(32% 0.04 230);
   --color-sky-300: oklch(42% 0.06 230);
   --color-sky-500: oklch(68% 0.12 230);
+
+  /* Teal (Approved stage) + Indigo (Completed stage) — new hues for the stage palette,
+     inverted the same way as emerald/amber/sky above so their badges/dots/rings read as
+     dark tinted panels at night instead of a glaring light patch. */
+  --color-teal-50: oklch(22% 0.04 180);
+  --color-teal-100: oklch(26% 0.05 180);
+  --color-teal-200: oklch(32% 0.06 180);
+  --color-teal-300: oklch(42% 0.07 180);
+  --color-teal-400: oklch(55% 0.09 180);
+  --color-teal-500: oklch(65% 0.1 180);
+  --color-teal-700: oklch(72% 0.12 180);
+  --color-teal-800: oklch(78% 0.1 180);
+  --color-teal-900: oklch(86% 0.07 180);
+  --color-indigo-50: oklch(22% 0.05 275);
+  --color-indigo-100: oklch(26% 0.06 275);
+  --color-indigo-200: oklch(32% 0.07 275);
+  --color-indigo-300: oklch(42% 0.09 275);
+  --color-indigo-400: oklch(55% 0.12 275);
+  --color-indigo-500: oklch(65% 0.15 275);
+  --color-indigo-700: oklch(72% 0.16 275);
+  --color-indigo-800: oklch(78% 0.13 275);
+  --color-indigo-900: oklch(86% 0.09 275);
 }
 
 /* Pure white cards → raised night surface (keep text-white as real white) */
@@ -155,8 +233,24 @@ html[data-theme="night"] :where(.ring-white) {
   --color-graphite-hover: var(--graphite-hover);
   --color-steel: var(--steel);
   --color-steel-soft: var(--steel-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-stage-lead: var(--stage-lead);
+  --color-stage-prospect: var(--stage-prospect);
+  --color-stage-approved: var(--stage-approved);
+  --color-stage-completed: var(--stage-completed);
+  --color-stage-invoiced: var(--stage-invoiced);
+  --color-stage-closed: var(--stage-closed);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+}
+
+html {
+  /* Stop iOS auto-bumping text size on rotate — was reading as a random "zoom". */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  /* Kill the rubber-band/pull-to-refresh bounce so pages stop feeling like a browser tab. */
+  overscroll-behavior-y: none;
 }
 
 body {
@@ -165,6 +259,7 @@ body {
   font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior-y: none;
   transition:
     background-color 0.2s ease,
     color 0.15s ease;
@@ -175,64 +270,72 @@ button,
   touch-action: manipulation;
 }
 
+/* iOS auto-zooms the page into focus on any text input under 16px — force the
+   floor on touch devices only, so desktop text-sm/text-xs inputs are untouched. */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: max(16px, 1em);
+  }
+}
+
+/* Safe-area helpers — env() resolves to 0 in a normal browser tab (chrome covers
+   the notch there) and only kicks in once launched standalone with viewport-fit=cover,
+   so these are safe to leave unconditional rather than gating on display-mode. */
+.app-header-safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+/* Sticky/fixed bottom bars: extra clearance so Save/Next buttons and the toast
+   don't sit under the iOS home-indicator or Android gesture bar. */
+.safe-bottom {
+  margin-bottom: env(safe-area-inset-bottom, 0px);
+}
+/* Left-edge nav (sidebar/drawer): clears a landscape notch on the screen edge. */
+.safe-left {
+  padding-left: env(safe-area-inset-left, 0px);
+}
+
 * {
   scrollbar-color: var(--scrollbar) transparent;
 }
 
-/* Primary CTA — sky outline (forced so utilities don't win) */
+/* Primary CTA — brushed metal, no accent hue (forced so utilities don't win).
+   Dark chrome in both day and night (v5) — same gradient shape, tokens flip by theme. */
 .btn-primary {
   border-radius: 9999px !important;
   padding: 8px 16px !important;
-  font-weight: 500 !important;
-  background: transparent !important;
-  color: #0ea5e9 !important;
-  border: 2px solid #0ea5e9 !important;
-  box-shadow: none !important;
+  font-weight: 600 !important;
+  background: linear-gradient(165deg, var(--metal-1) 0%, var(--metal-2) 60%, var(--metal-3) 100%) !important;
+  color: var(--metal-ink) !important;
+  border: none !important;
+  box-shadow:
+    inset 0 1px 0 var(--metal-bevel),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.25) !important;
   transition:
-    background-color 0.15s ease,
-    color 0.15s ease,
-    border-color 0.15s ease,
+    filter 0.15s ease,
     box-shadow 0.15s ease,
     transform 0.15s ease;
 }
 
 .btn-primary:hover {
-  background: #0ea5e9 !important;
-  color: #fff !important;
-  border-color: #0ea5e9 !important;
-  box-shadow: 0 2px 4px rgba(14, 165, 233, 0.25), 0 8px 16px rgba(14, 165, 233, 0.15) !important;
+  filter: brightness(var(--metal-hover-brightness));
   transform: translateY(-1px);
 }
 .btn-primary:active {
-  transform: translateY(0);
-  box-shadow: none !important;
+  transform: translateY(0) scale(0.97);
+  filter: brightness(0.96);
 }
 .btn-primary:disabled {
   opacity: 0.35;
   transform: none;
-  box-shadow: none !important;
-  background: transparent !important;
-  color: #0ea5e9 !important;
+  filter: none;
 }
 /* Larger twin for full-width footers (takeoff / mitigation) */
 .btn-primary.btn-primary-lg {
   padding: 14px 32px !important;
   font-size: 1rem !important;
   font-weight: 600 !important;
-}
-/* Night: slightly brighter outline */
-html[data-theme="night"] .btn-primary {
-  background: transparent !important;
-  color: #38bdf8 !important;
-  border-color: #38bdf8 !important;
-  box-shadow: none !important;
-}
-html[data-theme="night"] .btn-primary:hover {
-  background: #0ea5e9 !important;
-  color: #fff !important;
-  border-color: #0ea5e9 !important;
-  box-shadow: 0 2px 4px rgba(14, 165, 233, 0.35), 0 8px 20px rgba(14, 165, 233, 0.2) !important;
-  transform: translateY(-1px);
 }
 
 .price-pos {
@@ -440,7 +543,7 @@ html[data-theme="night"] .leaflet-container {
   width: 14px;
   height: 14px;
   border-radius: 9999px;
-  background: #2563eb;
+  background: var(--graphite);
   border: 2.5px solid #ffffff;
   box-shadow: 0 1px 4px rgb(0 0 0 / 0.4);
 }
@@ -451,7 +554,7 @@ html[data-theme="night"] .leaflet-container {
   width: 14px;
   height: 14px;
   border-radius: 9999px;
-  background: rgb(37 99 235 / 0.45);
+  background: color-mix(in srgb, var(--graphite) 45%, transparent);
   animation: locate-pulse 2s ease-out infinite;
 }
 @keyframes locate-pulse {

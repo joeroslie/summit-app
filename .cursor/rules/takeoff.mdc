@@ -1,0 +1,16 @@
+---
+description: Summit · Takeoff — file map (@ tag this chat)
+globs: lib/pricingGuide.ts
+alwaysApply: false
+---
+
+# Summit · Takeoff
+
+**Chat name:** `Summit · Takeoff`  
+**Sidebar label:** none — Documents → Take off sheet, or lead profile → takeoff tab  
+**Agent starter:** `.cursor/agents/takeoff.md`
+
+## Files
+
+- `app/page.tsx` — `systemDocWorkspace === 'takeoff'`; takeoff sheet types, `renderTakeoffFields`, feeds estimate pitch/stories/layers
+- `lib/pricingGuide.ts` — shared; SKU labels for takeoff lines

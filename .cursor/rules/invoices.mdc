@@ -1,0 +1,20 @@
+---
+description: Summit · Invoices — file map (@ tag this chat)
+alwaysApply: false
+---
+
+# Summit · Invoices
+
+**Chat name:** use `Summit · Documents` or `Summit · Estimates` for mitigation invoice work  
+**Sidebar label:** Invoices (`activeTab: invoices`)  
+**Entry:** sidebar Invoices tab; mitigation workspace inside Documents
+
+## Files
+
+- `app/page.tsx` — `activeTab === 'invoices'` (~L22218); mitigation invoice index + workspace (`systemDocWorkspace` mitigation variants)
+- `supabase/mitigation_price_tune.sql`
+- `supabase/mitigation_apply_recommended.sql`
+- `supabase/mitigation_tarp_install_options.sql`
+- `supabase/hip_install_mitigation.sql`
+- `supabase/obstruction_sandbag_mitigation.sql`
+- `docs/emergency_services_agreement_prowest_az.pdf` — source reference

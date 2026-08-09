@@ -1,0 +1,30 @@
+---
+description: Summit · Calendar — file map (@ tag this chat)
+globs: components/CalendarErrorBoundary.tsx,lib/summit-calendar.ts,lib/google-calendar.ts
+alwaysApply: false
+---
+
+# Summit · Calendar
+
+**Chat name:** `Summit · Calendar`  
+**Sidebar label:** Calendar  
+**Agent starter:** `.cursor/agents/calendar.md`
+
+## Files
+
+- `app/page.tsx` — `activeTab === 'calendar'` (~L22515); month/week/day views, Google sync UI
+- `components/CalendarErrorBoundary.tsx`
+- `lib/summit-calendar.ts`
+- `lib/calendar-recurrence.ts`
+- `lib/calendar-sync.ts`
+- `lib/google-calendar.ts`
+- `lib/gcal-browser.ts`
+- `lib/gcal-cookie.ts`
+- `lib/app-settings-sync.ts` — shared; `summit_calendar_events` cloud backup
+- `app/api/google/calendar/auth/route.ts`
+- `app/api/google/calendar/callback/route.ts`
+- `app/api/google/calendar/status/route.ts`
+- `app/api/google/calendar/sync/route.ts`
+- `app/api/google/calendar/disconnect/route.ts`
+- `supabase/calendar_tasks_settings_sync.sql`
+- `supabase/company_user_settings_sync.sql` — shared

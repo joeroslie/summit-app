@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
@@ -16,6 +16,34 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Summit",
   description: "Summit Roofing OS",
+  appleWebApp: {
+    capable: true,
+    title: "Summit",
+    statusBarStyle: "black-translucent",
+  },
+  // Roofing addresses/phone numbers show up everywhere — stop iOS from
+  // auto-linking them into unstyled blue tap targets.
+  formatDetection: {
+    telephone: false,
+    email: false,
+    address: false,
+  },
+  other: {
+    // iOS ignored `mobile-web-app-capable` for a long time; keep both.
+    "apple-mobile-web-app-capable": "yes",
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f2f3f5" },
+    { media: "(prefers-color-scheme: dark)", color: "#0f1115" },
+  ],
 };
 
 /** Apply day/night before paint to avoid theme flash / hydration mismatch noise. */

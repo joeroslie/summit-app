@@ -112,7 +112,7 @@ export default function CompanyPricing({
                       className={`text-[11px] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-full shrink-0 ${
                         section.supplier === 'Miller'
                           ? 'bg-amber-50 text-amber-800 ring-1 ring-amber-100'
-                          : 'bg-sky-50 text-sky-800 ring-1 ring-sky-100'
+                          : 'bg-[var(--chrome-soft)] text-[var(--graphite)] ring-1 ring-[var(--chrome-line)]'
                       }`}
                     >
                       {section.supplier}

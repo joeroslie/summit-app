@@ -110,15 +110,13 @@ function GlimpseCard({ title, onOpen, children, accentClass }: GlimpseCardProps)
         e.preventDefault();
         onOpen();
       }}
-      className={`group bg-white border border-zinc-200/80 hover:border-sky-300/80 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-5 sm:p-6 cursor-pointer transition-all duration-200 ${
+      className={`group bg-white border border-zinc-200/80 hover:border-zinc-300 hover:shadow-md hover:-translate-y-0.5 rounded-3xl p-5 sm:p-6 cursor-pointer transition-all duration-200 ${
         accentClass || ''
       }`}
     >
       <div className="flex items-center justify-between mb-4">
-        <div className="text-base font-semibold text-zinc-900 group-hover:text-sky-900 transition-colors">
-          {title}
-        </div>
-        <span className="text-zinc-300 group-hover:text-sky-500 transition-colors text-lg leading-none">
+        <div className="text-base font-semibold text-zinc-900">{title}</div>
+        <span className="text-zinc-300 group-hover:text-zinc-500 transition-colors text-lg leading-none">
           →
         </span>
       </div>
@@ -299,7 +297,14 @@ export default function HomeDashboard({
         <button
           type="button"
           onClick={onCreateLead}
-          className="group inline-flex items-center justify-center gap-3 rounded-3xl bg-zinc-900 hover:bg-zinc-800 text-white px-6 py-4 shadow-sm hover:shadow-lg transition-all duration-200 hover:-translate-y-0.5 shrink-0"
+          className="group inline-flex items-center justify-center gap-3 rounded-3xl px-6 py-4 shadow-sm hover:shadow-lg transition-all duration-200 hover:-translate-y-0.5 shrink-0"
+          style={{
+            background:
+              'linear-gradient(165deg, var(--metal-1) 0%, var(--metal-2) 60%, var(--metal-3) 100%)',
+            color: 'var(--metal-ink)',
+            boxShadow:
+              'inset 0 1px 0 var(--metal-bevel), inset 0 -1px 0 rgba(0, 0, 0, 0.25)',
+          }}
         >
           <span className="w-8 h-8 rounded-2xl bg-white/15 group-hover:bg-white/25 flex items-center justify-center text-xl font-bold leading-none transition-colors">
             +
@@ -315,7 +320,7 @@ export default function HomeDashboard({
             <div className="text-xs uppercase tracking-widest text-zinc-400 font-medium">
               Pipeline value
             </div>
-            <div className="text-4xl sm:text-5xl font-bold tabular-nums text-emerald-700 mt-1">
+            <div className="text-4xl sm:text-5xl font-bold tabular-nums text-zinc-900 mt-1">
               ${totalPipelineValue.toLocaleString()}
             </div>
           </div>
@@ -384,19 +389,19 @@ export default function HomeDashboard({
         }}
         className={`group rounded-3xl border p-7 sm:p-9 cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md mb-6 ${
           topSevere
-            ? 'border-sky-300/70 bg-sky-50'
-            : 'border-zinc-200/80 bg-white hover:border-sky-300/80'
+            ? 'border-danger/40 bg-[var(--danger-soft)]'
+            : 'border-zinc-200/80 bg-white hover:border-zinc-300'
         }`}
       >
         <div className="flex items-start justify-between gap-5">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 mb-3">
               {topSevere && (
-                <span className="w-2 h-2 rounded-full bg-sky-500 animate-pulse shrink-0" />
+                <span className="w-2 h-2 rounded-full bg-danger animate-pulse shrink-0" />
               )}
               <span
                 className={`text-xs font-semibold uppercase tracking-widest ${
-                  topSevere ? 'text-sky-700' : 'text-zinc-400'
+                  topSevere ? 'text-danger' : 'text-zinc-400'
                 }`}
               >
                 {topSevere ? 'Active storm alert' : 'Storm watch'}
@@ -460,7 +465,7 @@ export default function HomeDashboard({
               </div>
             )}
           </div>
-          <span className="text-zinc-300 group-hover:text-sky-500 transition-colors text-lg leading-none shrink-0 mt-1">
+          <span className="text-zinc-300 group-hover:text-zinc-500 transition-colors text-lg leading-none shrink-0 mt-1">
             →
           </span>
         </div>
@@ -475,7 +480,7 @@ export default function HomeDashboard({
             <div className="space-y-2.5">
               {todaysEvents.map((ev) => (
                 <div key={ev.id} className="flex items-center gap-3">
-                  <div className="text-xs font-semibold tabular-nums text-sky-700 bg-sky-50 rounded-lg px-2 py-1 shrink-0 min-w-[4.25rem] text-center">
+                  <div className="text-xs font-semibold tabular-nums text-zinc-600 bg-zinc-100 border border-zinc-200 rounded-lg px-2 py-1 shrink-0 min-w-[4.25rem] text-center">
                     {ev.allDay ? 'All day' : formatEventTimeLabel(ev)}
                   </div>
                   <div className="text-sm text-zinc-700 truncate">{ev.title}</div>
@@ -564,13 +569,13 @@ export default function HomeDashboard({
                 <div className="text-[11px] text-zinc-400 mt-0.5">Doors</div>
               </div>
               <div>
-                <div className="text-2xl font-semibold tabular-nums text-sky-700">
+                <div className="text-2xl font-semibold tabular-nums text-stage-completed">
                   {canvassStats.conversation}
                 </div>
                 <div className="text-[11px] text-zinc-400 mt-0.5">Convos</div>
               </div>
               <div>
-                <div className="text-2xl font-semibold tabular-nums text-emerald-700">
+                <div className="text-2xl font-semibold tabular-nums text-stage-closed">
                   {canvassStats.signed}
                 </div>
                 <div className="text-[11px] text-zinc-400 mt-0.5">Signed</div>

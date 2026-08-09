@@ -1,0 +1,53 @@
+---
+description: Summit · Estimates — file map (@ tag this chat)
+globs: components/RoofTracer.tsx,lib/instant-roofer.ts,lib/roof-geometry.ts
+alwaysApply: false
+---
+
+# Summit · Estimates
+
+**Chat name:** `Summit · Estimates`  
+**Sidebar label:** Estimates (+ lead-profile Estimator tab)  
+**Agent starter:** `.cursor/agents/estimates.md`
+
+## Files
+
+- `app/page.tsx` — `activeTab === 'estimates'` (~L22344); estimator workspace, measure flow, PDF export
+- `components/RoofTracer.tsx`
+- `components/AddressAutocomplete.tsx` — shared
+- `lib/pricingGuide.ts` — shared with Company Pricing
+- `lib/roof-geometry.ts`
+- `lib/roof-outline.ts`
+- `lib/roof-snap.ts`
+- `lib/eagleview-parse.ts`
+- `lib/instant-roofer.ts`
+- `lib/instant-roofer-orders.ts`
+- `lib/geocode.ts` — shared
+- `app/api/instant-roofer/measure/route.ts`
+- `app/api/instant-roofer/human/route.ts`
+- `app/api/instant-roofer/webhook/route.ts`
+- `app/api/solar/measure/route.ts`
+- `app/api/roof/footprint/route.ts`
+- `app/api/measurements/parse/route.ts`
+- `app/api/geocode/route.ts` — shared
+- `supabase/enable_rls_pricing_open.sql` — shared
+- `supabase/armourshake_price_fix_2026.sql` — shared
+- `docs/pricing/README.md`
+- `docs/pricing/ProWest_Full_Price_Book_2026.md`
+- `docs/pricing/ProWest_Missing_All_Prices_2026.md`
+- `docs/pricing/ProWest_Missing_Costs_2026.md`
+- `docs/pricing/ProWest_Missing_Labor_2026.md`
+- `docs/pricing/ProWest_Missing_Materials_2026.md`
+- `docs/pricing/ProWest_SRS_Missing_Materials_2026.md`
+- `docs/pricing/ProWest_Crew_Rates_2026.md`
+- `docs/pricing/Joe_Internal_Cost_List_with_Labor_Gaps_2026.md`
+- `docs/pricing/Miller_Wholesale_Lumber_Price_List_2026.md`
+- `docs/pricing/SRS_Supplier_Price_List_Combined_2026.md`
+- `docs/pricing/Supplier_Contacts_Internal.md`
+- `docs/pricing/Full_Price_Book_Print.html`
+- `docs/pricing/Miller_Lumber_Print.html`
+- `docs/pricing/Missing_All_Print.html`
+- `docs/pricing/print.html`
+- `docs/pricing/SRS_Missing_Materials_Print.html`
+- `docs/pricing/SRS_Supplier_Print.html`
+- `.env.example` — `INSTANT_ROOFER_API_KEY`

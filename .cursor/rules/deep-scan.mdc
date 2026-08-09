@@ -1,0 +1,30 @@
+---
+description: Summit · Deep Scan — file map (@ tag this chat)
+alwaysApply: false
+---
+
+# Summit · Deep Scan
+
+**Chat name:** `Summit · Deep Scan`  
+**Agent starter:** `.cursor/agents/deep-scan.md`  
+**Purpose:** Cross-cutting QA — `tsc`, lint, build, pricing integrity, smoke paths
+
+## Key files
+
+- `package.json`
+- `package-lock.json`
+- `tsconfig.json`
+- `eslint.config.mjs`
+- `next.config.ts`
+- `middleware.ts`
+- `.env.example`
+- `app/page.tsx` — monolith; home, pricing, canvassing, weather, estimates
+- `components/HomeDashboard.tsx`
+- `components/CompanyPricing.tsx`
+- `components/CanvassingTool.tsx`
+- `components/WeatherTool.tsx`
+- `lib/pricingGuide.ts`
+- `lib/supabase.ts`
+- `supabase/enable_rls_pricing_open.sql`
+- `supabase/harden_rls_step1.sql`
+- `supabase/armourshake_price_fix_2026.sql`

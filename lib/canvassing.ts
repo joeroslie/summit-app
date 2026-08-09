@@ -39,10 +39,10 @@ export const DISPOSITIONS: DispositionStyle[] = [
   {
     id: 'follow_up',
     label: 'Follow up',
-    badge: 'bg-sky-50 text-sky-800 border-sky-100',
-    dot: 'bg-sky-500',
-    marker: '#38bdf8',
-    markerStroke: '#075985',
+    badge: 'bg-steel-soft text-graphite border-chrome',
+    dot: 'bg-steel',
+    marker: '#5c6270',
+    markerStroke: '#2e3034',
   },
   {
     id: 'not_interested',

@@ -1,13 +1,15 @@
 ---
-description: Backlog — auth / login (password settings, real user auth, RLS; not built yet)
+description: Backlog — auth / login (Apple + Google onboarding, password, RLS; not built yet)
 alwaysApply: true
 ---
 
 # Auth / login (planned — not built yet)
 
 When real login lands, include:
-- Password settings / change password
+- **Continue with Apple** + **Continue with Google** on first-run onboarding (conversion-critical — reduce download→delete)
+- Email / password as fallback; password settings / change password
 - Proper user auth (not anon-only)
+- Multi-tenant company isolation when selling SaaS
 - Tighten Supabase RLS (currently single-tenant anon policies on app_settings, etc.)
 
-Do not build until Joe asks.
+Tied to Alive UX **Phase C** — see `.cursor/rules/alive-product-ux-backlog.mdc`. Do not build until Joe asks (after UI color + deep scan gates unless he overrides).

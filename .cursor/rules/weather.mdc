@@ -1,0 +1,21 @@
+---
+description: Summit · Weather — file map (@ tag this chat)
+globs: components/WeatherTool.tsx,components/StormMap.tsx,lib/weather.ts
+alwaysApply: false
+---
+
+# Summit · Weather
+
+**Chat name:** `Summit · Weather`  
+**Sidebar label:** none — Tools → Weather (`activeTab: weather`)  
+**Agent starter:** `.cursor/agents/weather.md`
+
+## Files
+
+- `components/WeatherTool.tsx`
+- `components/StormMap.tsx`
+- `lib/weather.ts`
+- `lib/storm-clusters.ts`
+- `app/api/storm-reports/route.ts`
+- `app/page.tsx` — Tools hub (~L24196); `activeTab === 'weather'` (~L24232)
+- `components/HomeDashboard.tsx` — shared; storm watch card on Home

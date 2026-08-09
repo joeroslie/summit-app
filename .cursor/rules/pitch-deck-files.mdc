@@ -1,0 +1,16 @@
+---
+description: Summit · Pitch Deck — file map (@ tag this chat)
+alwaysApply: false
+---
+
+# Summit · Pitch Deck
+
+**Chat name:** `Summit · Pitch Deck`  
+**Agent starter:** `.cursor/agents/pitch-deck.md`  
+**Backlog vision:** `.cursor/rules/pitch-deck-vision.mdc`  
+**Status:** NOT BUILT
+
+## Related existing (future deck sources)
+
+- `app/page.tsx` — photo reports + estimate PDF infra
+- `AGENTS.md`

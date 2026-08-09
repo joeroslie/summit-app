@@ -1,0 +1,19 @@
+---
+description: Summit · Orders — file map (@ tag this chat)
+globs: lib/instant-roofer-orders.ts
+alwaysApply: false
+---
+
+# Summit · Orders
+
+**Chat name:** `Summit · Orders`  
+**Sidebar label:** Orders (Labor = second step inside Orders, not a top-level tab)  
+**Agent starter:** `.cursor/agents/orders.md`
+
+## Files
+
+- `app/page.tsx` — `activeTab === 'orders'` (~L24185); `ordersStep` material | labor; `renderOrdersFlow`
+- `lib/pricingGuide.ts` — shared; material/labor cost lookups
+- `lib/instant-roofer-orders.ts` — shared; human measure orders
+- `supabase/material_orders.sql`
+- `supabase/enable_rls_pricing_open.sql` — shared; `cost_sheet_*` reads

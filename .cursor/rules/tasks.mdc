@@ -1,0 +1,19 @@
+---
+description: Summit · Tasks — file map (@ tag this chat)
+globs: lib/google-tasks.ts
+alwaysApply: false
+---
+
+# Summit · Tasks
+
+**Chat name:** `Summit · Tasks`  
+**Sidebar label:** Tasks  
+**Agent starter:** `.cursor/agents/tasks.md`
+
+## Files
+
+- `app/page.tsx` — `activeTab === 'tasks'` (~L23571); Google Tasks sync
+- `lib/google-tasks.ts`
+- `lib/app-settings-sync.ts` — shared; `summit_tasks_bundle` cloud backup
+- `lib/gcal-browser.ts` — shared; Google Tasks OAuth scope
+- `supabase/calendar_tasks_settings_sync.sql`

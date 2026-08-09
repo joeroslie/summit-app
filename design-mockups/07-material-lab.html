@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en" data-mode="day" data-material="corten" data-font="manrope" data-texture="subtle" data-motion="on">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Summit — Material + Motion Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  html {
+    --font-manrope: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-inter: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-spacegrotesk: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-plex: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  html[data-font="manrope"] body { font-family: var(--font-manrope); }
+  html[data-font="inter"] body { font-family: var(--font-inter); }
+  html[data-font="spacegrotesk"] body { font-family: var(--font-spacegrotesk); }
+  html[data-font="plex"] body { font-family: var(--font-plex); }
+
+  /* ---------- Mode (day/night) neutrals ---------- */
+  html[data-mode="day"] {
+    --bg: #e4e3e0;
+    --surface: #eeede9;
+    --surface-2: #e7e6e2;
+    --border: rgba(0,0,0,0.1);
+    --border-strong: rgba(0,0,0,0.18);
+    --line: rgba(0,0,0,0.24);
+    --text-primary: #1d1e1c;
+    --text-secondary: #5b5c56;
+    --text-muted: #8a8b84;
+    --grain-mix: 0;
+    --grain-op-subtle: 0.028;
+    --grain-op-medium: 0.06;
+  }
+  html[data-mode="night"] {
+    --bg: #1c1c1b;
+    --surface: #232322;
+    --surface-2: #2a2a28;
+    --border: rgba(255,255,255,0.09);
+    --border-strong: rgba(255,255,255,0.16);
+    --line: rgba(255,255,255,0.22);
+    --text-primary: #f1f0ec;
+    --text-secondary: #a6a59e;
+    --text-muted: #77766f;
+    --grain-mix: 255;
+    --grain-op-subtle: 0.035;
+    --grain-op-medium: 0.07;
+  }
+
+  /* ---------- Material accents ---------- */
+  html[data-material="corten"][data-mode="day"] {
+    --accent: #a8502e; --accent-2: #c46a3f; --accent-ink: #fdf3ee;
+    --accent-soft: rgba(168,80,46,0.12); --accent-border: rgba(168,80,46,0.45);
+    --danger: #ad3f2d; --success: #2f7a54; --info: #5c6f66;
+  }
+  html[data-material="corten"][data-mode="night"] {
+    --accent: #cc7847; --accent-2: #e0956a; --accent-ink: #241005;
+    --accent-soft: rgba(204,120,71,0.16); --accent-border: rgba(204,120,71,0.5);
+    --danger: #d6584a; --success: #43b788; --info: #93a89b;
+  }
+  html[data-material="concrete"][data-mode="day"] {
+    --accent: #3c6483; --accent-2: #558099; --accent-ink: #eef4f8;
+    --accent-soft: rgba(60,100,131,0.12); --accent-border: rgba(60,100,131,0.45);
+    --danger: #a8412f; --success: #2f7a54; --info: #6b6a60;
+  }
+  html[data-material="concrete"][data-mode="night"] {
+    --accent: #6b9ab6; --accent-2: #8bb3cb; --accent-ink: #0c1a22;
+    --accent-soft: rgba(107,154,182,0.16); --accent-border: rgba(107,154,182,0.5);
+    --danger: #d6584a; --success: #43b788; --info: #948f80;
+  }
+
+  /* ---------- Grain overlay (very subtle, uniform — no directional stripes, no blotches) ---------- */
+  html { --grain-svg: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>"); }
+
+  body {
+    margin: 0; background: var(--bg); color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+    transition: background-color 0.25s ease, color 0.2s ease;
+  }
+  .grain { position: fixed; inset: 0; pointer-events: none; z-index: 0; background-image: var(--grain-svg); opacity: 0; transition: opacity 0.2s ease; }
+  html[data-texture="subtle"] .grain { opacity: var(--grain-op-subtle); }
+  html[data-texture="medium"] .grain { opacity: var(--grain-op-medium); }
+  html[data-texture="off"] .grain { opacity: 0; }
+
+  /* ---------- Lab control bar ---------- */
+  .lab-bar {
+    position: sticky; top: 0; z-index: 10;
+    background: var(--surface-2); border-bottom: 1px solid var(--border);
+    padding: 14px 28px; display: flex; align-items: center; gap: 28px; flex-wrap: wrap;
+    font-family: var(--font-inter);
+  }
+  .lab-group { display: flex; align-items: center; gap: 8px; }
+  .lab-group-label { font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); margin-right: 4px; }
+  .lab-btn {
+    font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--text-secondary);
+    background: transparent; border: 1px solid var(--border); border-radius: 999px;
+    padding: 6px 14px; cursor: pointer; transition: all 0.15s ease;
+  }
+  .lab-btn:hover { border-color: var(--border-strong); color: var(--text-primary); }
+  .lab-btn.active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .lab-note { margin-left: auto; font-size: 11.5px; color: var(--text-muted); }
+
+  .container { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 64px 44px 120px; }
+  .topbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 52px; flex-wrap: wrap; }
+  .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 14px; }
+  h1.greeting { font-size: 44px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.05; margin: 0; }
+
+  .btn-new-lead {
+    position: relative; overflow: hidden;
+    display: inline-flex; align-items: center; gap: 9px;
+    background-image:
+      linear-gradient(100deg, rgba(255,255,255,0.4) 0%, transparent 14%, transparent 42%, rgba(255,255,255,0.28) 52%, transparent 62%, transparent 90%, rgba(255,255,255,0.22) 100%),
+      linear-gradient(165deg, var(--accent-2) 0%, var(--accent) 60%, color-mix(in srgb, var(--accent) 65%, black) 100%);
+    border: none; border-radius: 10px;
+    padding: 14px 26px; cursor: pointer;
+    color: var(--accent-ink); font-size: 14.5px; font-weight: 700;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.35), inset 0 -1px 0 rgba(0,0,0,0.3), 0 10px 20px -10px rgba(0,0,0,0.45);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .btn-new-lead::after {
+    content: ''; position: absolute; top: 0; left: -60%; width: 40%; height: 100%;
+    background: linear-gradient(115deg, transparent, rgba(255,255,255,0.5), transparent);
+    transform: skewX(-20deg); transition: left 0.55s ease;
+  }
+  html[data-motion="on"] .btn-new-lead:hover::after { left: 130%; }
+  html[data-motion="on"] .btn-new-lead:hover { transform: translateY(-1px); box-shadow: inset 0 1px 0 rgba(255,255,255,0.4), inset 0 -1px 0 rgba(0,0,0,0.3), 0 14px 26px -10px rgba(0,0,0,0.5); }
+  html[data-motion="on"] .btn-new-lead:active { transform: translateY(0) scale(0.96); }
+  .btn-new-lead .plus { font-size: 18px; font-weight: 800; line-height: 1; }
+  .btn-new-lead.firing { animation: fire-pop 0.42s ease-out; }
+  @keyframes fire-pop {
+    0% { box-shadow: inset 0 1px 0 rgba(255,255,255,0.35), inset 0 -1px 0 rgba(0,0,0,0.3), 0 0 0 0 var(--accent-soft); }
+    40% { box-shadow: inset 0 1px 0 rgba(255,255,255,0.35), inset 0 -1px 0 rgba(0,0,0,0.3), 0 0 0 10px var(--accent-soft); }
+    100% { box-shadow: inset 0 1px 0 rgba(255,255,255,0.35), inset 0 -1px 0 rgba(0,0,0,0.3), 0 0 0 0 transparent; }
+  }
+
+  .panel {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border); border-radius: 18px; padding: 40px; margin-bottom: 24px;
+    transition: background-color 0.25s ease, border-color 0.2s ease;
+  }
+  .corners::before, .corners::after {
+    content: ''; position: absolute; width: 14px; height: 14px;
+    border-top: 1.5px solid var(--line); border-left: 1.5px solid var(--line);
+    top: 12px; left: 12px; opacity: 0.6;
+  }
+  .corners::after {
+    top: auto; left: auto; bottom: 12px; right: 12px;
+    border-top: none; border-left: none;
+    border-bottom: 1.5px solid var(--line); border-right: 1.5px solid var(--line);
+  }
+  .pipeline-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 34px; flex-wrap: wrap; }
+  .pv-label { font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 10px; }
+  .pv-value { font-family: 'JetBrains Mono', monospace; font-size: 42px; font-weight: 600; color: var(--accent); letter-spacing: -0.02em; }
+  .pipeline-meta { display: flex; gap: 40px; }
+  .meta-item .num { display: block; font-family: 'JetBrains Mono', monospace; font-size: 21px; font-weight: 600; }
+  .meta-item .lbl { font-size: 12px; color: var(--text-muted); margin-top: 5px; }
+  .stage-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+  .stage-tile {
+    background: transparent; border: 1px solid var(--border); border-radius: 12px;
+    padding: 22px 12px; text-align: center; cursor: pointer;
+    transition: border-color 0.15s ease, transform 0.15s ease, background-color 0.15s ease;
+  }
+  html[data-motion="on"] .stage-tile:hover { transform: translateY(-2px); }
+  .stage-tile.active { border-color: var(--accent-border); background: var(--accent-soft); }
+  .stage-dot-row { display: flex; align-items: center; justify-content: center; gap: 6px; margin-bottom: 11px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); transition: background-color 0.15s ease, transform 0.15s ease; }
+  .stage-tile.active .dot { background: var(--accent); transform: scale(1.15); }
+  .stage-name { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+  .stage-count { font-family: 'JetBrains Mono', monospace; font-size: 25px; font-weight: 600; margin: 7px 0 3px; }
+  .stage-value { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 500; color: var(--text-muted); }
+
+  .storm-alert {
+    position: relative; background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px; padding: 26px 30px; margin-bottom: 24px;
+    display: flex; align-items: center; justify-content: space-between; gap: 20px;
+    overflow: hidden; cursor: pointer; transition: border-color 0.15s ease, transform 0.15s ease;
+  }
+  html[data-motion="on"] .storm-alert:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+  .storm-alert::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--danger); }
+  .storm-label { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--danger); margin-bottom: 9px; }
+  .pulse-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
+  html[data-motion="on"] .pulse-dot { animation: pulse 1.9s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 var(--accent-soft); } 70% { box-shadow: 0 0 0 8px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+  .storm-title { font-size: 17px; font-weight: 600; }
+  .storm-sub { font-size: 12.5px; color: var(--text-secondary); margin-top: 4px; }
+  .arrow { color: var(--text-muted); font-size: 17px; display: inline-block; transition: transform 0.15s ease; }
+  html[data-motion="on"] .glimpse-card:hover .arrow, html[data-motion="on"] .storm-alert:hover .arrow { transform: translateX(4px); }
+
+  .glimpse-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  .glimpse-card {
+    position: relative; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 14px;
+    padding: 24px 26px; cursor: pointer; transition: border-color 0.15s ease, transform 0.15s ease;
+  }
+  html[data-motion="on"] .glimpse-card:hover { border-color: var(--border-strong); transform: translateY(-2px); }
+  .glimpse-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+  .glimpse-title { font-size: 14px; font-weight: 600; }
+  .schedule-row { display: flex; align-items: center; gap: 12px; margin-bottom: 11px; }
+  .time-chip { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 4px 8px; min-width: 62px; text-align: center; }
+  .schedule-text { font-size: 13.5px; color: var(--text-secondary); }
+  .more-note { font-size: 12px; color: var(--text-muted); }
+  .big-num { font-family: 'JetBrains Mono', monospace; font-size: 34px; font-weight: 600; margin-bottom: 14px; }
+  .task-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .task-badge { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; border-radius: 999px; padding: 3px 9px; }
+  .task-badge.overdue { background: rgba(173,63,45,0.14); color: var(--danger); }
+  .task-badge.today { background: var(--accent-soft); color: var(--accent); }
+  .task-text { font-size: 13.5px; color: var(--text-secondary); }
+  .lead-name { font-size: 16px; font-weight: 600; }
+  .lead-address { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+  .lead-tags { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+  .stage-badge { font-size: 11px; font-weight: 700; padding: 5px 12px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+  .job-number { font-size: 12px; color: var(--text-muted); }
+  .canvass-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; text-align: center; }
+  .canvass-num { font-family: 'JetBrains Mono', monospace; font-size: 26px; font-weight: 600; }
+  .canvass-lbl { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.06em; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  }
+</style>
+</head>
+<body>
+  <div class="grain"></div>
+  <div class="lab-bar">
+    <div class="lab-group">
+      <span class="lab-group-label">Material</span>
+      <button class="lab-btn active" data-set="material" data-val="corten">Corten (rust)</button>
+      <button class="lab-btn" data-set="material" data-val="concrete">Concrete (blue)</button>
+    </div>
+    <div class="lab-group">
+      <span class="lab-group-label">Mode</span>
+      <button class="lab-btn active" data-set="mode" data-val="day">Day</button>
+      <button class="lab-btn" data-set="mode" data-val="night">Night</button>
+    </div>
+    <div class="lab-group">
+      <span class="lab-group-label">Font</span>
+      <button class="lab-btn active" data-set="font" data-val="manrope">Manrope</button>
+      <button class="lab-btn" data-set="font" data-val="inter">Inter</button>
+      <button class="lab-btn" data-set="font" data-val="spacegrotesk">Space Grotesk</button>
+      <button class="lab-btn" data-set="font" data-val="plex">IBM Plex</button>
+    </div>
+    <div class="lab-group">
+      <span class="lab-group-label">Texture</span>
+      <button class="lab-btn" data-set="texture" data-val="off">Off</button>
+      <button class="lab-btn active" data-set="texture" data-val="subtle">Subtle</button>
+      <button class="lab-btn" data-set="texture" data-val="medium">Medium</button>
+    </div>
+    <span class="lab-note">Click stage tiles, hover cards, click New Lead — all live.</span>
+  </div>
+
+  <div class="container">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">Tuesday · Aug 6</div>
+        <h1 class="greeting">Good afternoon, Joe</h1>
+      </div>
+      <button class="btn-new-lead" id="newLeadBtn" type="button"><span class="plus">+</span> New Lead</button>
+    </header>
+    <section class="panel corners">
+      <div class="pipeline-header">
+        <div>
+          <div class="pv-label">Pipeline Value</div>
+          <div class="pv-value">$482,600</div>
+        </div>
+        <div class="pipeline-meta">
+          <div class="meta-item"><span class="num">14</span><span class="lbl">active jobs</span></div>
+          <div class="meta-item"><span class="num">9</span><span class="lbl">estimates on file</span></div>
+        </div>
+      </div>
+      <div class="stage-grid" id="stageGrid">
+        <div class="stage-tile active"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Lead</span></div><div class="stage-count">5</div><div class="stage-value">$86,200</div></div>
+        <div class="stage-tile"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Prospect</span></div><div class="stage-count">4</div><div class="stage-value">$142,900</div></div>
+        <div class="stage-tile"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Approved</span></div><div class="stage-count">3</div><div class="stage-value">$168,400</div></div>
+        <div class="stage-tile"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Completed</span></div><div class="stage-count">1</div><div class="stage-value">$52,000</div></div>
+        <div class="stage-tile"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Invoiced</span></div><div class="stage-count">1</div><div class="stage-value">$33,100</div></div>
+        <div class="stage-tile"><div class="stage-dot-row"><span class="dot"></span><span class="stage-name">Closed</span></div><div class="stage-count">0</div><div class="stage-value">$0</div></div>
+      </div>
+    </section>
+    <section class="storm-alert">
+      <div>
+        <div class="storm-label"><span class="pulse-dot"></span>Active Storm Alert</div>
+        <div class="storm-title">Hail · 1.5in reported near Gilbert, AZ</div>
+        <div class="storm-sub">12 minutes ago · 3 severe reports in the last 24h</div>
+      </div>
+      <span class="arrow">→</span>
+    </section>
+    <section class="glimpse-grid">
+      <div class="glimpse-card">
+        <div class="glimpse-head"><span class="glimpse-title">Today's Schedule</span><span class="arrow">→</span></div>
+        <div class="schedule-row"><span class="time-chip">9:00 AM</span><span class="schedule-text">Roof inspection — 4821 E Cactus Rd</span></div>
+        <div class="schedule-row"><span class="time-chip">11:30 AM</span><span class="schedule-text">Adjuster meeting — Sanchez claim</span></div>
+        <div class="schedule-row"><span class="time-chip">2:00 PM</span><span class="schedule-text">Estimate walkthrough — Ironwood Estates</span></div>
+        <div class="more-note">+1 more today</div>
+      </div>
+      <div class="glimpse-card">
+        <div class="glimpse-head"><span class="glimpse-title">Open Tasks</span><span class="arrow">→</span></div>
+        <div class="big-num">7</div>
+        <div class="task-row"><span class="task-badge overdue">Overdue</span><span class="task-text">Send updated estimate to Whitmore</span></div>
+        <div class="task-row"><span class="task-badge today">Due Today</span><span class="task-text">Call insurance adjuster — Reyes</span></div>
+      </div>
+      <div class="glimpse-card">
+        <div class="glimpse-head"><span class="glimpse-title">Jump Back In</span><span class="arrow">→</span></div>
+        <div class="lead-name">Marcus Whitmore</div>
+        <div class="lead-address">4821 E Cactus Rd, Scottsdale, AZ</div>
+        <div class="lead-tags"><span class="stage-badge">Approved</span><span class="job-number">Job #10482</span></div>
+      </div>
+      <div class="glimpse-card">
+        <div class="glimpse-head"><span class="glimpse-title">Canvassing Today</span><span class="arrow">→</span></div>
+        <div class="canvass-grid">
+          <div><div class="canvass-num">38</div><div class="canvass-lbl">Doors</div></div>
+          <div><div class="canvass-num" style="color:var(--info)">11</div><div class="canvass-lbl">Convos</div></div>
+          <div><div class="canvass-num" style="color:var(--success)">2</div><div class="canvass-lbl">Signed</div></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    var html = document.documentElement;
+    document.querySelectorAll('.lab-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var set = btn.getAttribute('data-set');
+        var val = btn.getAttribute('data-val');
+        html.setAttribute('data-' + set, val);
+        document.querySelectorAll('.lab-btn[data-set="' + set + '"]').forEach(function (b) {
+          b.classList.toggle('active', b === btn);
+        });
+        if (set === 'mode') {
+          document.querySelector('h1.greeting').textContent = val === 'day' ? 'Good afternoon, Joe' : 'Good evening, Joe';
+        }
+      });
+    });
+    document.querySelectorAll('.stage-tile').forEach(function (tile) {
+      tile.addEventListener('click', function () {
+        document.querySelectorAll('.stage-tile').forEach(function (t) { t.classList.remove('active'); });
+        tile.classList.add('active');
+      });
+    });
+    var newLeadBtn = document.getElementById('newLeadBtn');
+    newLeadBtn.addEventListener('click', function () {
+      newLeadBtn.classList.remove('firing');
+      void newLeadBtn.offsetWidth;
+      newLeadBtn.classList.add('firing');
+    });
+  </script>
+</body>
+</html>

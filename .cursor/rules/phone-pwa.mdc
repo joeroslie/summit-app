@@ -1,0 +1,26 @@
+---
+description: Summit · Phone / PWA — file map (@ tag this chat)
+globs: app/manifest.ts,app/icon.tsx,app/apple-icon.tsx
+alwaysApply: false
+---
+
+# Summit · Phone / PWA
+
+**Chat name:** `Summit · Phone`  
+**Sidebar label:** n/a  
+**Agent starter:** `.cursor/agents/phone.md`
+
+## Files
+
+- `app/manifest.ts`
+- `app/layout.tsx` — viewport, `appleWebApp`, `formatDetection`
+- `app/icon.tsx`
+- `app/apple-icon.tsx`
+- `app/icon-192.png/route.tsx`
+- `app/icon-512.png/route.tsx`
+- `app/icon-maskable-512.png/route.tsx`
+- `app/page.tsx` — mobile sidebar drawer, `beforeinstallprompt`, Add to Home Screen (~L11138)
+- `app/globals.css` — mobile layout helpers
+- `next.config.ts` — `allowedDevOrigins` for LAN phone testing
+- `lib/phone.ts` — shared
+- `components/PhoneInput.tsx` — shared
