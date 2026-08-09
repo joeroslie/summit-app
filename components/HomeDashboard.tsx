@@ -297,19 +297,9 @@ export default function HomeDashboard({
         <button
           type="button"
           onClick={onCreateLead}
-          className="group inline-flex items-center justify-center gap-3 rounded-3xl px-6 py-4 shadow-sm hover:shadow-lg transition-all duration-200 hover:-translate-y-0.5 shrink-0"
-          style={{
-            background:
-              'linear-gradient(165deg, var(--metal-1) 0%, var(--metal-2) 60%, var(--metal-3) 100%)',
-            color: 'var(--metal-ink)',
-            boxShadow:
-              'inset 0 1px 0 var(--metal-bevel), inset 0 -1px 0 rgba(0, 0, 0, 0.25)',
-          }}
+          className="btn-primary px-6 py-3 rounded-3xl font-medium shrink-0"
         >
-          <span className="w-8 h-8 rounded-2xl bg-white/15 group-hover:bg-white/25 flex items-center justify-center text-xl font-bold leading-none transition-colors">
-            +
-          </span>
-          <span className="text-lg font-semibold">New Lead</span>
+          New Lead
         </button>
       </div>
 

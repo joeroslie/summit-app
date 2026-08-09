@@ -1,6 +1,6 @@
 ---
 description: Summit · Pipeline — file map (@ tag this chat)
-globs: components/AddressAutocomplete.tsx,components/PhoneInput.tsx
+globs: components/PipelineBoard.tsx,components/AddressAutocomplete.tsx,components/PhoneInput.tsx,lib/pipeline.ts
 alwaysApply: false
 ---
 
@@ -12,7 +12,9 @@ alwaysApply: false
 
 ## Files
 
-- `app/page.tsx` — `activeTab === 'leads'` (~L24707); kanban, `PIPELINE_STAGES`, lead CRUD, lead profile tabs
+- `components/PipelineBoard.tsx` — kanban board, stage chips, trash list, New Lead header
+- `lib/pipeline.ts` — `PipelineStage`, `PIPELINE_STAGES`, `PIPELINE_STAGE_STYLES`, `normalizePipelineStage`
+- `app/page.tsx` — `activeTab === 'leads'` wires `PipelineBoard`; lead CRUD + lead profile tabs still live here
 - `components/AddressAutocomplete.tsx` — shared
 - `components/PhoneInput.tsx` — shared
 - `lib/phone.ts` — shared
