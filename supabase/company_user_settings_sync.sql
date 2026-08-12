@@ -3,8 +3,9 @@
 --
 -- Stores:
 --   app_settings.key = 'company_settings'  (jsonb: company fields + logo URL/path)
---   app_settings.key = 'user_profile'      (jsonb: name, title, company, phone, email)
+--   app_settings.key = 'user_profile'      (jsonb: name, title, company, phone, email, photo URL/path)
 -- Logo binary lives in Storage bucket `company-assets` (public), path logo/company-logo.png
+-- Profile photo lives in the same bucket, path profile/user-photo.jpg
 --
 -- Safe to re-run (IF NOT EXISTS / ON CONFLICT).
 

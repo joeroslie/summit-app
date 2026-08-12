@@ -12,6 +12,7 @@ export const APP_SETTINGS_CALENDAR_EVENTS_KEY = 'summit_calendar_events';
 export const APP_SETTINGS_TASKS_BUNDLE_KEY = 'summit_tasks_bundle';
 export const COMPANY_ASSETS_BUCKET = 'company-assets';
 export const COMPANY_LOGO_STORAGE_PATH = 'logo/company-logo.png';
+export const USER_PHOTO_STORAGE_PATH = 'profile/user-photo.jpg';
 
 export type SummitTasksCloudBundle = {
   tasks: unknown[];
@@ -25,6 +26,10 @@ export type UserProfileSettings = {
   company: string;
   phone: string;
   email: string;
+  /** Public URL or data URL (local preview). Prefer URL after cloud upload. */
+  photoDataUrl: string;
+  /** Storage object path when photo lives in company-assets. */
+  photoPath?: string;
 };
 
 export type CompanySettingsCloud = {
@@ -75,6 +80,8 @@ export function normalizeUserProfileSettings(
     company: typeof r.company === 'string' ? r.company : '',
     phone: typeof r.phone === 'string' ? r.phone : '',
     email: typeof r.email === 'string' ? r.email : '',
+    photoDataUrl: typeof r.photoDataUrl === 'string' ? r.photoDataUrl : '',
+    photoPath: typeof r.photoPath === 'string' ? r.photoPath.trim() : '',
   };
 }
 
@@ -151,37 +158,36 @@ export async function upsertAppSetting(
 }
 
 /**
- * Upload data-URL logo to company-assets (upsert). Returns public URL + path.
- * If logo is already http(s), returns it unchanged. Empty clears storage object.
+ * Upload a data-URL image to company-assets (upsert). Returns public URL + path.
+ * If the value is already http(s), returns it unchanged. Empty clears the object.
  */
-export async function syncCompanyLogoToStorage(
+async function syncImageDataUrlToStorage(
   supabase: SupabaseClient,
-  logoDataUrl: string
-): Promise<{ logoDataUrl: string; logoPath: string }> {
-  const logo = (logoDataUrl || '').trim();
-  if (!logo) {
+  dataUrl: string,
+  storagePath: string
+): Promise<{ dataUrl: string; path: string }> {
+  const value = (dataUrl || '').trim();
+  if (!value) {
     try {
-      await supabase.storage
-        .from(COMPANY_ASSETS_BUCKET)
-        .remove([COMPANY_LOGO_STORAGE_PATH]);
+      await supabase.storage.from(COMPANY_ASSETS_BUCKET).remove([storagePath]);
     } catch {
       /* ignore missing */
     }
-    return { logoDataUrl: '', logoPath: '' };
+    return { dataUrl: '', path: '' };
   }
 
-  if (/^https?:\/\//i.test(logo)) {
-    return { logoDataUrl: logo, logoPath: COMPANY_LOGO_STORAGE_PATH };
+  if (/^https?:\/\//i.test(value)) {
+    return { dataUrl: value, path: storagePath };
   }
 
-  if (!logo.startsWith('data:')) {
-    return { logoDataUrl: logo, logoPath: COMPANY_LOGO_STORAGE_PATH };
+  if (!value.startsWith('data:')) {
+    return { dataUrl: value, path: storagePath };
   }
 
-  const { blob, contentType } = dataUrlToBlob(logo);
+  const { blob, contentType } = dataUrlToBlob(value);
   const { error: upErr } = await supabase.storage
     .from(COMPANY_ASSETS_BUCKET)
-    .upload(COMPANY_LOGO_STORAGE_PATH, blob, {
+    .upload(storagePath, blob, {
       cacheControl: '3600',
       upsert: true,
       contentType,
@@ -190,13 +196,45 @@ export async function syncCompanyLogoToStorage(
 
   const { data: pub } = supabase.storage
     .from(COMPANY_ASSETS_BUCKET)
-    .getPublicUrl(COMPANY_LOGO_STORAGE_PATH);
+    .getPublicUrl(storagePath);
 
   const publicUrl = pub?.publicUrl || '';
-  if (!publicUrl) throw new Error('No public URL for company logo');
+  if (!publicUrl) throw new Error('No public URL for storage object');
   // Bust CDN/cache after replace
   const withBust = `${publicUrl}${publicUrl.includes('?') ? '&' : '?'}v=${Date.now()}`;
-  return { logoDataUrl: withBust, logoPath: COMPANY_LOGO_STORAGE_PATH };
+  return { dataUrl: withBust, path: storagePath };
+}
+
+/**
+ * Upload data-URL logo to company-assets (upsert). Returns public URL + path.
+ * If logo is already http(s), returns it unchanged. Empty clears storage object.
+ */
+export async function syncCompanyLogoToStorage(
+  supabase: SupabaseClient,
+  logoDataUrl: string
+): Promise<{ logoDataUrl: string; logoPath: string }> {
+  const synced = await syncImageDataUrlToStorage(
+    supabase,
+    logoDataUrl,
+    COMPANY_LOGO_STORAGE_PATH
+  );
+  return { logoDataUrl: synced.dataUrl, logoPath: synced.path };
+}
+
+/**
+ * Upload data-URL profile photo to company-assets (upsert).
+ * Empty clears the storage object.
+ */
+export async function syncUserPhotoToStorage(
+  supabase: SupabaseClient,
+  photoDataUrl: string
+): Promise<{ photoDataUrl: string; photoPath: string }> {
+  const synced = await syncImageDataUrlToStorage(
+    supabase,
+    photoDataUrl,
+    USER_PHOTO_STORAGE_PATH
+  );
+  return { photoDataUrl: synced.dataUrl, photoPath: synced.path };
 }
 
 export async function loadCloudCompanySettings(
@@ -245,20 +283,44 @@ export async function loadCloudUserProfile(
   supabase: SupabaseClient
 ): Promise<UserProfileSettings | null> {
   const raw = await fetchAppSetting(supabase, APP_SETTINGS_USER_PROFILE_KEY);
-  return normalizeUserProfileSettings(raw);
+  const parsed = normalizeUserProfileSettings(raw);
+  if (!parsed) return null;
+
+  let photoDataUrl = parsed.photoDataUrl;
+  const photoPath = (parsed.photoPath || '').trim();
+  if (!photoDataUrl && photoPath) {
+    const { data: pub } = supabase.storage
+      .from(COMPANY_ASSETS_BUCKET)
+      .getPublicUrl(photoPath);
+    photoDataUrl = pub?.publicUrl || '';
+  }
+
+  return {
+    ...parsed,
+    photoDataUrl,
+    photoPath: photoPath || (photoDataUrl ? USER_PHOTO_STORAGE_PATH : ''),
+  };
 }
 
 export async function saveCloudUserProfile(
   supabase: SupabaseClient,
   profile: UserProfileSettings
-): Promise<void> {
-  await upsertAppSetting(supabase, APP_SETTINGS_USER_PROFILE_KEY, {
+): Promise<UserProfileSettings> {
+  const syncedPhoto = await syncUserPhotoToStorage(
+    supabase,
+    profile.photoDataUrl || ''
+  );
+  const payload: UserProfileSettings = {
     name: profile.name || '',
     title: profile.title || '',
     company: profile.company || '',
     phone: profile.phone || '',
     email: profile.email || '',
-  });
+    photoDataUrl: syncedPhoto.photoDataUrl,
+    photoPath: syncedPhoto.photoPath,
+  };
+  await upsertAppSetting(supabase, APP_SETTINGS_USER_PROFILE_KEY, payload);
+  return payload;
 }
 
 export async function saveCloudCompanySettings(

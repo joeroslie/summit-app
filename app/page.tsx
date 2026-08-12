@@ -18,6 +18,7 @@ import {
   type RoofType,
 } from '@/lib/roof-geometry';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import { authCallbackUrl, loadAuthMembership, withTimeout } from '@/lib/auth-session';
 import {
   loadCloudCompanySettings,
   loadCloudUserProfile,
@@ -320,6 +321,8 @@ const DEFAULT_USER_PROFILE = {
   company: '',
   phone: '',
   email: '',
+  photoDataUrl: '',
+  photoPath: '',
 } as const;
 
 /** Appearance: Day, Night, or Auto (by local clock). */
@@ -4575,6 +4578,16 @@ export default function SummitApp() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const [authMode, setAuthMode] = useState<'login' | 'recovery'>('login');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [authBlockReason, setAuthBlockReason] = useState<null | 'no-company'>(
+    null
+  );
+  const [authUserEmail, setAuthUserEmail] = useState<string | null>(null);
+  const signedInRef = useRef(false);
   /** Signed-in user contact — used on estimates / PDF */
   const [userName, setUserName] = useState<string>(DEFAULT_USER_PROFILE.name);
   const [userTitle, setUserTitle] = useState<string>(DEFAULT_USER_PROFILE.title);
@@ -4585,6 +4598,12 @@ export default function SummitApp() {
     displayPhoneUS(DEFAULT_USER_PROFILE.phone)
   );
   const [userEmail, setUserEmail] = useState<string>(DEFAULT_USER_PROFILE.email);
+  const [userPhotoDataUrl, setUserPhotoDataUrl] = useState<string>(
+    DEFAULT_USER_PROFILE.photoDataUrl
+  );
+  const [userPhotoPath, setUserPhotoPath] = useState<string>(
+    DEFAULT_USER_PROFILE.photoPath
+  );
   /** Company billing entity (ProWest) — used on company mitigation + estimates when set. */
   const [companySettings, setCompanySettings] = useState<CompanySettings>(
     emptyCompanySettings
@@ -4795,7 +4814,7 @@ export default function SummitApp() {
   };
 
   const scheduleCloudCalendarSave = (events: SummitCalendarEvent[]) => {
-    if (!supabaseEnabled || !supabase) return;
+    if (!supabaseEnabled || !supabase || !signedInRef.current) return;
     if (calendarCloudSaveTimer.current) {
       clearTimeout(calendarCloudSaveTimer.current);
     }
@@ -4811,7 +4830,7 @@ export default function SummitApp() {
     nextLists: SummitTaskList[],
     nextActiveId: string
   ) => {
-    if (!supabaseEnabled || !supabase) return;
+    if (!supabaseEnabled || !supabase || !signedInRef.current) return;
     if (tasksCloudSaveTimer.current) {
       clearTimeout(tasksCloudSaveTimer.current);
     }
@@ -5192,6 +5211,39 @@ export default function SummitApp() {
     );
   };
 
+  /** Avatar: uploaded photo, else name/email initial. */
+  const renderUserAvatar = (opts?: {
+    size?: 'sm' | 'md' | 'lg';
+    shape?: 'circle' | 'rounded';
+    className?: string;
+  }) => {
+    const size = opts?.size ?? 'md';
+    const box =
+      size === 'sm' ? 'w-7 h-7' : size === 'lg' ? 'w-14 h-14' : 'w-9 h-9';
+    const text =
+      size === 'sm' ? 'text-xs' : size === 'lg' ? 'text-xl' : 'text-sm';
+    const radius = opts?.shape === 'rounded' ? 'rounded-lg' : 'rounded-full';
+    const initial = (userName || email || 'J').charAt(0).toUpperCase();
+    const photo = (userPhotoDataUrl || '').trim();
+    if (photo) {
+      return (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={photo}
+          alt=""
+          className={`${box} ${radius} object-cover shrink-0 ring-1 ring-black/10 ${opts?.className || ''}`}
+        />
+      );
+    }
+    return (
+      <div
+        className={`${box} ${radius} bg-zinc-800 flex items-center justify-center ${text} font-semibold text-white shrink-0 ${opts?.className || ''}`}
+      >
+        {initial}
+      </div>
+    );
+  };
+
   const handleCompanyLogoFile = async (file: File) => {
     try {
       const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -5242,6 +5294,54 @@ export default function SummitApp() {
       showToast('Logo updated — save Settings to keep');
     } catch {
       showToast('Could not read logo image');
+    }
+  };
+
+  const handleUserPhotoFile = async (file: File) => {
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const img = new Image();
+        const objectUrl = URL.createObjectURL(file);
+        img.onload = () => {
+          try {
+            const srcW = img.naturalWidth;
+            const srcH = img.naturalHeight;
+            if (!srcW || !srcH) {
+              reject(new Error('size'));
+              return;
+            }
+            const side = Math.min(srcW, srcH);
+            const sx = Math.floor((srcW - side) / 2);
+            const sy = Math.floor((srcH - side) / 2);
+            const max = 512;
+            const out = Math.min(side, max);
+            const canvas = document.createElement('canvas');
+            canvas.width = out;
+            canvas.height = out;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              reject(new Error('canvas'));
+              return;
+            }
+            ctx.drawImage(img, sx, sy, side, side, 0, 0, out, out);
+            URL.revokeObjectURL(objectUrl);
+            resolve(canvas.toDataURL('image/jpeg', 0.88));
+          } catch (e) {
+            URL.revokeObjectURL(objectUrl);
+            reject(e);
+          }
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(objectUrl);
+          reject(new Error('load'));
+        };
+        img.src = objectUrl;
+      });
+      setUserPhotoDataUrl(dataUrl);
+      setUserPhotoPath('');
+      showToast('Photo updated — save Settings to keep');
+    } catch {
+      showToast('Could not read photo');
     }
   };
 
@@ -7323,8 +7423,63 @@ export default function SummitApp() {
    * the first client render (avoids header/nav hydration mismatches).
    */
   useEffect(() => {
+    let authReady = Promise.resolve();
     try {
-      setIsLoggedIn(readStoredBool('summitLoggedIn', false));
+      try {
+        localStorage.removeItem('summitLoggedIn');
+      } catch {
+        /* ignore */
+      }
+      if (typeof window !== 'undefined') {
+        const err = new URLSearchParams(window.location.search).get(
+          'auth_error'
+        );
+        if (err === 'callback') {
+          setAuthMessage('Sign-in did not finish. Try again.');
+        }
+      }
+      if (supabaseEnabled && supabase) {
+        authReady = (async () => {
+          try {
+            const result = await withTimeout(supabase.auth.getUser());
+            const user = result?.data.user ?? null;
+            if (!user) {
+              signedInRef.current = false;
+              setIsLoggedIn(false);
+              setAuthBlockReason(null);
+              setAuthUserEmail(null);
+              return;
+            }
+            setAuthUserEmail(user.email ?? null);
+            if (user.email) setEmail(user.email);
+            const { companyId, unreachable } = await loadAuthMembership(
+              supabase,
+              user
+            );
+            if (unreachable) {
+              signedInRef.current = false;
+              setIsLoggedIn(false);
+              setAuthBlockReason(null);
+              setAuthMessage('Could not reach the server. Check signal and retry.');
+              return;
+            }
+            if (!companyId) {
+              signedInRef.current = false;
+              setAuthBlockReason('no-company');
+              setIsLoggedIn(false);
+              return;
+            }
+            signedInRef.current = true;
+            setAuthBlockReason(null);
+            setIsLoggedIn(true);
+          } catch {
+            signedInRef.current = false;
+            setIsLoggedIn(false);
+          }
+        })();
+      } else {
+        setIsLoggedIn(false);
+      }
       setActiveTab(readStoredTab());
       setCurrentLeadId(readStoredLeadId());
       setIsEditingLead(readStoredBool('summitEditingLead', false));
@@ -7338,6 +7493,8 @@ export default function SummitApp() {
         company: '',
         phone: '',
         email: '',
+        photoDataUrl: '',
+        photoPath: '',
       };
       try {
         const up = localStorage.getItem('summitUserProfile');
@@ -7348,6 +7505,8 @@ export default function SummitApp() {
             company?: string;
             phone?: string;
             email?: string;
+            photoDataUrl?: string;
+            photoPath?: string;
           };
           localProfile = {
             name: p.name || '',
@@ -7355,12 +7514,16 @@ export default function SummitApp() {
             company: p.company || '',
             phone: p.phone || '',
             email: p.email || '',
+            photoDataUrl: p.photoDataUrl || '',
+            photoPath: p.photoPath || '',
           };
           if (p.name) setUserName(p.name);
           if (p.title) setUserTitle(p.title);
           if (p.company) setUserCompany(p.company);
           if (p.phone) setUserPhone(displayPhoneUS(p.phone));
           if (p.email) setUserEmail(p.email);
+          if (p.photoDataUrl) setUserPhotoDataUrl(p.photoDataUrl);
+          if (p.photoPath) setUserPhotoPath(p.photoPath);
         }
       } catch {
         /* ignore */
@@ -7384,6 +7547,8 @@ export default function SummitApp() {
       // Cloud merge (keeps local cache; does not wipe until round-trip works)
       if (supabaseEnabled && supabase) {
         void (async () => {
+          await authReady;
+          if (!signedInRef.current) return;
           try {
             const [cloudProfile, cloudCompany] = await Promise.all([
               loadCloudUserProfile(supabase),
@@ -7399,15 +7564,30 @@ export default function SummitApp() {
                 (cloudProfile.phone || '').trim() || localProfile.phone;
               const email =
                 (cloudProfile.email || '').trim() || localProfile.email;
+              const photoDataUrl =
+                (cloudProfile.photoDataUrl || '').trim() ||
+                localProfile.photoDataUrl;
+              const photoPath =
+                (cloudProfile.photoPath || '').trim() || localProfile.photoPath;
               if (name) setUserName(name);
               if (title) setUserTitle(title);
               if (company) setUserCompany(company);
               if (phone) setUserPhone(displayPhoneUS(phone));
               if (email) setUserEmail(email);
+              if (photoDataUrl) setUserPhotoDataUrl(photoDataUrl);
+              if (photoPath) setUserPhotoPath(photoPath);
               try {
                 localStorage.setItem(
                   'summitUserProfile',
-                  JSON.stringify({ name, title, company, phone, email })
+                  JSON.stringify({
+                    name,
+                    title,
+                    company,
+                    phone,
+                    email,
+                    photoDataUrl,
+                    photoPath,
+                  })
                 );
               } catch {
                 /* ignore */
@@ -7467,6 +7647,8 @@ export default function SummitApp() {
         // Cloud backup for calendar + tasks (merge over local when present)
         if (supabaseEnabled && supabase) {
           void (async () => {
+            await authReady;
+            if (!signedInRef.current) return;
             try {
               const [cloudEvents, cloudTasks] = await Promise.all([
                 loadCloudCalendarEvents(supabase),
@@ -7859,6 +8041,8 @@ export default function SummitApp() {
       // Supabase is source of truth when configured (leads + estimates)
       if (supabaseEnabled && supabase) {
         void (async () => {
+          await authReady;
+          if (!signedInRef.current) return;
           try {
             const { data: leadRows, error: leadErr } = await supabase
               .from('leads')
@@ -8148,6 +8332,15 @@ export default function SummitApp() {
       }
 
       if (supabaseEnabled && supabase) {
+        void (async () => {
+          await authReady;
+          if (!signedInRef.current) {
+            setPricesReady(true);
+            setCostsReady(true);
+            setMitigationPricesReady(true);
+            setMitigationCostsReady(true);
+            return;
+          }
         void supabase
           .from('price_sheet')
           .select('item_key, price, region, active')
@@ -8387,6 +8580,7 @@ export default function SummitApp() {
             setMitigationCostsReady(true);
           }
         })();
+        })();
       } else {
         setPricesReady(true);
         setCostsReady(true);
@@ -8404,8 +8598,63 @@ export default function SummitApp() {
     } catch {
       // ignore corrupt storage
     } finally {
-      setSessionReady(true);
+      void authReady.finally(() => setSessionReady(true));
     }
+  }, [supabase, supabaseEnabled]);
+
+  useEffect(() => {
+    if (!supabaseEnabled || !supabase) return;
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        signedInRef.current = false;
+        setAuthMode('recovery');
+        setIsLoggedIn(false);
+        setAuthBlockReason(null);
+        return;
+      }
+      if (event === 'SIGNED_OUT') {
+        signedInRef.current = false;
+        setIsLoggedIn(false);
+        setAuthBlockReason(null);
+        setAuthUserEmail(null);
+        setAuthMode('login');
+        return;
+      }
+      const user = session?.user;
+      if (!user) {
+        signedInRef.current = false;
+        setIsLoggedIn(false);
+        setAuthUserEmail(null);
+        return;
+      }
+      setAuthUserEmail(user.email ?? null);
+      if (user.email) setEmail(user.email);
+      void loadAuthMembership(supabase, user).then(
+        ({ companyId, unreachable }) => {
+          if (unreachable) {
+            signedInRef.current = false;
+            setIsLoggedIn(false);
+            setAuthBlockReason(null);
+            setAuthMessage(
+              'Could not reach the server. Check signal and retry.'
+            );
+            return;
+          }
+          if (!companyId) {
+            signedInRef.current = false;
+            setAuthBlockReason('no-company');
+            setIsLoggedIn(false);
+            return;
+          }
+          signedInRef.current = true;
+          setAuthBlockReason(null);
+          setIsLoggedIn(true);
+        }
+      );
+    });
+    return () => subscription.unsubscribe();
   }, [supabase, supabaseEnabled]);
 
   // Persist navigation only after bootstrap (don't overwrite stored tab with default)
@@ -8445,12 +8694,23 @@ export default function SummitApp() {
           company: userCompany,
           phone: userPhone,
           email: userEmail,
+          photoDataUrl: userPhotoDataUrl,
+          photoPath: userPhotoPath,
         })
       );
     } catch {
       /* ignore */
     }
-  }, [sessionReady, userName, userTitle, userCompany, userPhone, userEmail]);
+  }, [
+    sessionReady,
+    userName,
+    userTitle,
+    userCompany,
+    userPhone,
+    userEmail,
+    userPhotoDataUrl,
+    userPhotoPath,
+  ]);
 
   useEffect(() => {
     if (!sessionReady) return;
@@ -8686,10 +8946,184 @@ export default function SummitApp() {
     }
   }, [leads, currentLeadId, sessionReady]);
 
-  const handleLogin = () => {
-    setIsLoggedIn(true);
-    localStorage.setItem('summitLoggedIn', 'true');
-    if (email.trim()) localStorage.setItem('summitUserEmail', email.trim());
+  const handleLogin = async () => {
+    setAuthMessage(null);
+    if (!supabaseEnabled || !supabase) {
+      setAuthMessage('Supabase is not configured.');
+      return;
+    }
+    const trimmed = email.trim();
+    if (!trimmed || !password) {
+      setAuthMessage('Email and password are required.');
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: trimmed,
+        password,
+      });
+      if (error) {
+        setAuthMessage(error.message);
+        return;
+      }
+      localStorage.setItem('summitUserEmail', trimmed);
+      setPassword('');
+      window.location.replace('/');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleCreateAccount = async () => {
+    setAuthMessage(null);
+    if (!supabaseEnabled || !supabase) {
+      setAuthMessage('Supabase is not configured.');
+      return;
+    }
+    const trimmed = email.trim();
+    if (!trimmed || !password) {
+      setAuthMessage('Email and password are required.');
+      return;
+    }
+    if (password.length < 6) {
+      setAuthMessage('Password must be at least 6 characters.');
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: trimmed,
+        password,
+        options: { emailRedirectTo: authCallbackUrl() },
+      });
+      if (error) {
+        setAuthMessage(error.message);
+        return;
+      }
+      localStorage.setItem('summitUserEmail', trimmed);
+      if (!data.session) {
+        setAuthMessage(
+          'Check your email to confirm the account, then sign in.'
+        );
+        setPassword('');
+      } else {
+        window.location.replace('/');
+      }
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    setAuthMessage(null);
+    if (!supabaseEnabled || !supabase) {
+      setAuthMessage('Supabase is not configured.');
+      return;
+    }
+    const trimmed = email.trim();
+    if (!trimmed) {
+      setAuthMessage('Enter your email first.');
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(trimmed, {
+        redirectTo: authCallbackUrl(),
+      });
+      if (error) {
+        setAuthMessage(error.message);
+        return;
+      }
+      setAuthMessage('Check your email for the reset link.');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleOAuth = async (provider: 'google' | 'azure') => {
+    setAuthMessage(null);
+    if (!supabaseEnabled || !supabase) {
+      setAuthMessage('Supabase is not configured.');
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo: authCallbackUrl(),
+          scopes: provider === 'azure' ? 'email' : undefined,
+        },
+      });
+      if (error) setAuthMessage(error.message);
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleUpdateRecoveryPassword = async () => {
+    setAuthMessage(null);
+    if (!supabaseEnabled || !supabase) {
+      setAuthMessage('Supabase is not configured.');
+      return;
+    }
+    if (newPassword.length < 6) {
+      setAuthMessage('Password must be at least 6 characters.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setAuthMessage('Passwords do not match.');
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+      if (error) {
+        setAuthMessage(error.message);
+        return;
+      }
+      setNewPassword('');
+      setConfirmPassword('');
+      setAuthMode('login');
+      setAuthMessage(null);
+      window.location.replace('/');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    setAuthMessage(null);
+    if (!supabaseEnabled || !supabase) {
+      showToast('Supabase is not configured.');
+      return;
+    }
+    if (newPassword.length < 6) {
+      showToast('Password must be at least 6 characters.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      showToast('Passwords do not match.');
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword,
+      });
+      if (error) {
+        showToast(error.message);
+        return;
+      }
+      setNewPassword('');
+      setConfirmPassword('');
+      showToast('Password updated');
+    } finally {
+      setAuthBusy(false);
+    }
   };
 
   const handleSignOut = () => {
@@ -8704,6 +9138,11 @@ export default function SummitApp() {
     setSidebarOpen(false);
     setShowUserMenu(false);
     setIsLoggedIn(false);
+    setAuthBlockReason(null);
+    setAuthUserEmail(null);
+    setAuthMode('login');
+    setPassword('');
+    signedInRef.current = false;
     localStorage.removeItem('summitLoggedIn');
     localStorage.removeItem('summitActiveTab');
     localStorage.removeItem('summitCurrentLeadId');
@@ -8713,6 +9152,7 @@ export default function SummitApp() {
     setEstimatorSourceLeadId(null);
     setShowProfessionalEstimate(false);
     setHasUnsavedChanges(false);
+    if (supabase) void supabase.auth.signOut();
   };
 
   /** Explicit save for Profile settings (profile + company + appearance). */
@@ -8723,6 +9163,8 @@ export default function SummitApp() {
       company: userCompany,
       phone: userPhone,
       email: userEmail,
+      photoDataUrl: userPhotoDataUrl,
+      photoPath: userPhotoPath,
     };
     try {
       localStorage.setItem('summitUserProfile', JSON.stringify(profile));
@@ -8745,7 +9187,21 @@ export default function SummitApp() {
     }
 
     try {
-      await saveCloudUserProfile(supabase, profile);
+      const cloudProfile = await saveCloudUserProfile(supabase, profile);
+      setUserPhotoDataUrl(cloudProfile.photoDataUrl || '');
+      setUserPhotoPath(cloudProfile.photoPath || '');
+      try {
+        localStorage.setItem(
+          'summitUserProfile',
+          JSON.stringify({
+            ...profile,
+            photoDataUrl: cloudProfile.photoDataUrl || '',
+            photoPath: cloudProfile.photoPath || '',
+          })
+        );
+      } catch {
+        /* ignore */
+      }
       const cloudCompany = await saveCloudCompanySettings(
         supabase,
         companySettings
@@ -16844,7 +17300,6 @@ export default function SummitApp() {
     const displayName = userName || (email ? email.split('@')[0] : 'Account');
     const subtitle =
       userCompany.trim() || userTitle.trim() || userEmail || email || '';
-    const initial = (userName || email || 'J').charAt(0).toUpperCase();
     const profileActive = activeTab === 'settings' && !showProfessionalEstimate;
 
     return (
@@ -16914,9 +17369,7 @@ export default function SummitApp() {
           aria-expanded={sidebarProfileOpen}
           aria-haspopup="menu"
         >
-          <div className="w-9 h-9 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-semibold text-white shrink-0">
-            {initial}
-          </div>
+          {renderUserAvatar({ size: 'md' })}
           {!collapsed && (
             <>
               <div className="min-w-0 flex-1">
@@ -17191,9 +17644,7 @@ export default function SummitApp() {
             }`}
             aria-label="User menu"
           >
-            <div className="w-7 h-7 rounded-lg bg-zinc-800 flex items-center justify-center text-xs font-semibold text-white">
-              {(userName || email || 'J').charAt(0).toUpperCase()}
-            </div>
+            {renderUserAvatar({ size: 'sm', shape: 'rounded' })}
             <span className="hidden sm:block text-sm text-zinc-700 font-medium truncate max-w-[8rem]">
               {userName || (email ? email.split('@')[0] : 'Account')}
             </span>
@@ -17252,6 +17703,28 @@ export default function SummitApp() {
     );
   }
 
+  if (authBlockReason === 'no-company') {
+    return (
+      <div className="min-h-screen bg-zinc-100 flex items-center justify-center p-6">
+        <div className="w-full max-w-md text-center space-y-6">
+          <div className="font-bold text-5xl tracking-tighter text-zinc-900">
+            {appDisplayName()}
+          </div>
+          <p className="text-zinc-700">
+            {authUserEmail || 'This account'} is not on the company yet.
+          </p>
+          <button
+            type="button"
+            onClick={() => void handleSignOut()}
+            className="btn-primary w-full py-4 rounded-3xl font-semibold text-lg"
+          >
+            Sign out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!isLoggedIn) {
     return (
       <div className="min-h-screen bg-zinc-100 flex items-center justify-center p-6">
@@ -17269,46 +17742,121 @@ export default function SummitApp() {
           </div>
           <p className="text-zinc-500 mb-12">Roofing OS</p>
 
-          <div className="space-y-6">
-            <div>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleLogin();
-                }}
-                className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
-                placeholder="you@summitroofing.com"
-              />
-            </div>
-
-            <div>
+          {authMode === 'recovery' ? (
+            <div className="space-y-6">
               <input
                 type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
+                placeholder="New password"
+                autoComplete="new-password"
+              />
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleLogin();
+                  if (e.key === 'Enter') void handleUpdateRecoveryPassword();
                 }}
                 className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
-                placeholder="Password"
+                placeholder="Confirm password"
+                autoComplete="new-password"
               />
-            </div>
-
-            <button
-              onClick={handleLogin}
-              className="btn-primary w-full py-4 rounded-3xl font-semibold text-lg"
-            >
-              Sign In
-            </button>
-
-            <div className="text-center">
-              <button type="button" className="text-sm text-zinc-500 hover:text-zinc-700">
-                Forgot password?
+              {authMessage ? (
+                <p className="text-sm text-zinc-700">{authMessage}</p>
+              ) : null}
+              <button
+                type="button"
+                disabled={authBusy}
+                onClick={() => void handleUpdateRecoveryPassword()}
+                className="btn-primary w-full py-4 rounded-3xl font-semibold text-lg disabled:opacity-50"
+              >
+                Update password
               </button>
             </div>
-          </div>
+          ) : (
+            <div className="space-y-6">
+              <div>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void handleLogin();
+                  }}
+                  className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
+                  placeholder="you@summitroofing.com"
+                  autoComplete="email"
+                />
+              </div>
+
+              <div>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void handleLogin();
+                  }}
+                  className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
+                  placeholder="Password"
+                  autoComplete="current-password"
+                />
+              </div>
+
+              {authMessage ? (
+                <p className="text-sm text-zinc-700">{authMessage}</p>
+              ) : null}
+
+              <button
+                type="button"
+                disabled={authBusy}
+                onClick={() => void handleLogin()}
+                className="btn-primary w-full py-4 rounded-3xl font-semibold text-lg disabled:opacity-50"
+              >
+                Sign In
+              </button>
+
+              <button
+                type="button"
+                disabled={authBusy}
+                onClick={() => void handleCreateAccount()}
+                className="w-full py-4 rounded-3xl font-semibold text-lg border border-zinc-200 bg-white text-zinc-800 disabled:opacity-50"
+              >
+                Create account
+              </button>
+
+              <button
+                type="button"
+                disabled={authBusy}
+                onClick={() => void handleOAuth('google')}
+                className="w-full py-4 rounded-3xl font-semibold text-lg border border-zinc-200 bg-white text-zinc-800 disabled:opacity-50"
+              >
+                Continue with Google
+              </button>
+
+              <button
+                type="button"
+                disabled={authBusy}
+                onClick={() => void handleOAuth('azure')}
+                className="w-full py-4 rounded-3xl font-semibold text-lg border border-zinc-200 bg-white text-zinc-800 disabled:opacity-50"
+              >
+                Continue with Microsoft
+              </button>
+
+              <div className="text-center">
+                <button
+                  type="button"
+                  disabled={authBusy}
+                  onClick={() => void handleForgotPassword()}
+                  className="text-sm text-zinc-500 hover:text-zinc-700 disabled:opacity-50"
+                >
+                  Forgot password?
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -24122,54 +24670,49 @@ export default function SummitApp() {
 
             <div className="space-y-6">
               <section className="bg-white border border-[var(--chrome-line)] rounded-3xl p-5 sm:p-6 space-y-4">
+                <h2 className="text-lg font-semibold text-[var(--graphite)]">
+                  Account
+                </h2>
                 <div>
-                  <h2 className="text-lg font-semibold text-[var(--graphite)]">
-                    Cloud (Supabase)
-                  </h2>
-                  <p className="text-sm text-[var(--steel)] mt-1">
-                    Backend client for future lead sync. Keys live in{' '}
-                    <code className="text-xs bg-[var(--chrome-soft)] px-1 rounded">
-                      .env.local
-                    </code>
-                    , not in source.
-                  </p>
+                  <div className="text-xs font-medium uppercase tracking-wide text-[var(--steel)] mb-1.5">
+                    Signed in
+                  </div>
+                  <div className="text-sm text-[var(--graphite)] truncate">
+                    {authUserEmail || userEmail || email || '—'}
+                  </div>
                 </div>
-                <div
-                  className={`rounded-2xl border px-4 py-3 text-sm ${
-                    supabaseEnabled
-                      ? 'border-[var(--chrome-line)] bg-[var(--chrome-soft)] text-[var(--graphite)]'
-                      : 'border-dashed border-[var(--chrome-line)] bg-[var(--chrome-soft)] text-[var(--steel)]'
-                  }`}
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-[var(--steel)] mb-1.5">
+                    New password
+                  </div>
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full border border-[var(--chrome-line)] rounded-2xl px-4 py-3 text-base text-[var(--graphite)] focus:outline-none focus:border-[var(--steel)] bg-white"
+                    autoComplete="new-password"
+                  />
+                </div>
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-[var(--steel)] mb-1.5">
+                    Confirm password
+                  </div>
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="w-full border border-[var(--chrome-line)] rounded-2xl px-4 py-3 text-base text-[var(--graphite)] focus:outline-none focus:border-[var(--steel)] bg-white"
+                    autoComplete="new-password"
+                  />
+                </div>
+                <button
+                  type="button"
+                  disabled={authBusy}
+                  onClick={() => void handleChangePassword()}
+                  className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold disabled:opacity-50"
                 >
-                  {supabaseEnabled ? (
-                    <>
-                      <div className="font-semibold text-[var(--graphite)]">Connected</div>
-                      <div className="text-xs text-[var(--steel)] mt-0.5 truncate">
-                        {process.env.NEXT_PUBLIC_SUPABASE_URL || 'Supabase project'}
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="font-medium text-[var(--graphite)]">Not configured</div>
-                      <p className="mt-1 text-xs">
-                        Set{' '}
-                        <code className="bg-[var(--chrome)]/50 px-1 rounded">
-                          NEXT_PUBLIC_SUPABASE_URL
-                        </code>{' '}
-                        and{' '}
-                        <code className="bg-[var(--chrome)]/50 px-1 rounded">
-                          NEXT_PUBLIC_SUPABASE_ANON_KEY
-                        </code>
-                        , then restart the dev server.
-                      </p>
-                    </>
-                  )}
-                </div>
-                {supabaseEnabled && supabase ? (
-                  <p className="text-xs text-[var(--steel)]">
-                    Browser client ready for cloud sync.
-                  </p>
-                ) : null}
+                  Update password
+                </button>
               </section>
 
               <section className="bg-white border border-[var(--chrome-line)] rounded-3xl p-5 sm:p-6 space-y-4">
@@ -24335,6 +24878,42 @@ export default function SummitApp() {
 
               <section className="bg-white border border-[var(--chrome-line)] rounded-3xl p-5 sm:p-6 space-y-4">
                 <h2 className="text-lg font-semibold text-[var(--graphite)]">Profile</h2>
+                <div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-[var(--steel)] mb-1.5">
+                    Photo
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="flex flex-col items-start gap-1.5">
+                      {renderUserAvatar({ size: 'lg' })}
+                      {userPhotoDataUrl ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setUserPhotoDataUrl('');
+                            setUserPhotoPath('');
+                          }}
+                          className="text-xs text-[var(--steel)] hover:text-[var(--graphite)] underline-offset-2 hover:underline"
+                        >
+                          Remove
+                        </button>
+                      ) : null}
+                    </div>
+                    <label className="inline-flex items-center justify-center btn-primary px-8 py-3 rounded-full text-sm font-semibold cursor-pointer">
+                      Upload +
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        aria-label="Upload profile photo"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) void handleUserPhotoFile(f);
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
+                  </div>
+                </div>
                 <div>
                   <div className="text-xs font-medium uppercase tracking-wide text-[var(--steel)] mb-1.5">
                     Full name

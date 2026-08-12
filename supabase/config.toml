@@ -1,0 +1,6 @@
+# Linked to live project "Summit OS".
+# GitHub integration working directory: repository root (`.` → this supabase/ folder).
+project_id = "fakvxwchxgolvwilaneo"
+
+[auth]
+enabled = true
