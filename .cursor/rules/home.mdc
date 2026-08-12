@@ -1,12 +1,12 @@
 ---
-description: Summit · Home — file map (@ tag this chat)
-globs: components/HomeDashboard.tsx
+description: Home — file map (@ tag this chat)
+globs: components/HomeDashboard.tsx,lib/storm-clusters.ts
 alwaysApply: false
 ---
 
-# Summit · Home
+# Home
 
-**Chat name:** `Summit · Home`  
+**Chat name:** `Home`  
 **Sidebar label:** Home  
 **Agent starter:** `.cursor/agents/home.md`
 

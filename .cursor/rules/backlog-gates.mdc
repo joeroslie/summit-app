@@ -1,0 +1,22 @@
+---
+description: Do not build planned backlogs unless Joe asks — details live in named backlog rules
+alwaysApply: true
+---
+
+# Backlog gates
+
+Do **not** implement these until Joe asks, or you are continuing an active task he already started:
+
+| Backlog | Detail rule (read when working on it) | Chat |
+|---------|--------------------------------------|------|
+| Alive UX Phases A–F | `.cursor/rules/alive-product-ux-backlog.mdc` | matching page chat |
+| Auth / Apple+Google login | `.cursor/rules/auth-login-backlog.mdc` | `Login & Settings` |
+| Sales pitch deck | `.cursor/rules/pitch-deck-vision.mdc` | `Pitch Deck` |
+| Cash / insurance contracts | `.cursor/rules/legal-contracts-backlog.mdc` | `Contracts` |
+| Canvassing phone / skip-trace | `.cursor/rules/canvassing-phone-lookup-backlog.mdc` | `Canvassing` |
+
+**Alive UX gate order:** (1) UI color direction locked, (2) deep scan / lock pass, (3) then phases A→F. Smaller items (IR smoke, whiteboard labor, missing prices Joe confirms) may proceed earlier if he asks.
+
+**Money:** Never invent prices or coverage numbers. Leave blanks blank until Joe confirms.
+
+When Joe opens backlog work, `@` the detail rule or read it from the path above.

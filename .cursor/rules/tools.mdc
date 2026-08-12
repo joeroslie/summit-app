@@ -1,18 +1,14 @@
 ---
-description: Summit · Tools hub — file map (@ tag this chat)
+description: Tools hub — file map (@ tag when editing the Tools landing)
 alwaysApply: false
 ---
 
-# Summit · Tools
+# Tools
 
 **Sidebar label:** Tools (`activeTab: tools`)  
 **Purpose:** Hub cards that launch Weather and Canvassing
 
 ## Files
 
-- `app/page.tsx` — `activeTab === 'tools'` (~L24196)
-
-## Child features (use their own rules)
-
-- Weather → `@weather` (`.cursor/rules/weather.mdc`)
-- Canvassing → `@canvassing` (`.cursor/rules/canvassing.mdc`)
+- Tools hub UI in `app/page.tsx`
+- Feature work → `Weather` or `Canvassing` chats, not this hub

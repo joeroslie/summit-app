@@ -1,6 +1,6 @@
 ---
-description: Backlog — cash contracts + insurance contracts (legal docs, not built yet)
-alwaysApply: true
+description: Backlog — cash contracts + insurance contracts (legal docs, not built yet). @ when building contracts.
+alwaysApply: false
 ---
 
 # Legal contracts (planned — not built yet)

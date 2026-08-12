@@ -1,12 +1,12 @@
 ---
-description: Summit · Calendar — file map (@ tag this chat)
-globs: components/CalendarErrorBoundary.tsx,lib/summit-calendar.ts,lib/google-calendar.ts
+description: Calendar — file map (@ tag this chat)
+globs: components/CalendarErrorBoundary.tsx,lib/summit-calendar.ts,lib/google-calendar.ts,app/api/google/calendar/**
 alwaysApply: false
 ---
 
-# Summit · Calendar
+# Calendar
 
-**Chat name:** `Summit · Calendar`  
+**Chat name:** `Calendar`  
 **Sidebar label:** Calendar  
 **Agent starter:** `.cursor/agents/calendar.md`
 

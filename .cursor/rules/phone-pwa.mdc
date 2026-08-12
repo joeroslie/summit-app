@@ -1,12 +1,12 @@
 ---
-description: Summit · Phone / PWA — file map (@ tag this chat)
+description: Phone / PWA — file map (@ tag this chat)
 globs: app/manifest.ts,app/icon.tsx,app/apple-icon.tsx
 alwaysApply: false
 ---
 
-# Summit · Phone / PWA
+# Phone / PWA
 
-**Chat name:** `Summit · Phone`  
+**Chat name:** `Phone`  
 **Sidebar label:** n/a  
 **Agent starter:** `.cursor/agents/phone.md`
 

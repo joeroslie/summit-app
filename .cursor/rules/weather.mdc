@@ -1,12 +1,12 @@
 ---
-description: Summit · Weather — file map (@ tag this chat)
-globs: components/WeatherTool.tsx,components/StormMap.tsx,lib/weather.ts
+description: Weather — file map (@ tag this chat)
+globs: components/WeatherTool.tsx,components/StormMap.tsx,lib/weather.ts,lib/storm-clusters.ts
 alwaysApply: false
 ---
 
-# Summit · Weather
+# Weather
 
-**Chat name:** `Summit · Weather`  
+**Chat name:** `Weather`  
 **Sidebar label:** none — Tools → Weather (`activeTab: weather`)  
 **Agent starter:** `.cursor/agents/weather.md`
 

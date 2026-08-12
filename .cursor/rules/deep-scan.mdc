@@ -1,11 +1,11 @@
 ---
-description: Summit · Deep Scan — file map (@ tag this chat)
+description: Deep Scan — QA file map (@ tag this chat)
 alwaysApply: false
 ---
 
-# Summit · Deep Scan
+# Deep Scan
 
-**Chat name:** `Summit · Deep Scan`  
+**Chat name:** `Deep Scan`  
 **Agent starter:** `.cursor/agents/deep-scan.md`  
 **Purpose:** Cross-cutting QA — `tsc`, lint, build, pricing integrity, smoke paths
 

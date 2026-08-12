@@ -1,0 +1,60 @@
+---
+description: Page-named chats — open the chat that matches the app area you’re working on
+alwaysApply: true
+---
+
+# Chats = app pages
+
+**Mental model:** Work on a page → open a chat with that page’s name. Pick the model once. Prefer a fresh chat when the slice is done (1 active chat is fine; don’t run a farm of agents at once).
+
+Paste starters from `.cursor/agents/`.
+
+**Product name:** Do not hardcode the product brand in chat titles. Chat names are area-only (`Home`, `Pipeline`, …). If the product renames, update display copy in the app — not every agent file.
+
+## Page chats (everyday)
+
+| Chat name | App area | Model (Joe’s setup) |
+|-----------|----------|---------------------|
+| `Home` | Home dashboard | **Sonnet 5** |
+| `Pipeline` | Leads / CRM | **Sonnet 5** |
+| `Estimates` | Estimates / measure / IR | **Sonnet 5** |
+| `Takeoff` | Takeoff sheet | **Sonnet 5** |
+| `Orders` | Orders + Labor | **Sonnet 5** |
+| `Documents` | Docs / camera / PDFs | **Sonnet 5** |
+| `Calendar` | Calendar | **Grok 4.5** or Sonnet |
+| `Tasks` | Tasks | **Grok 4.5** or Sonnet |
+| `Performance` | Performance | **Grok 4.5** or Sonnet |
+| `Weather` | Weather tool | **Sonnet 5** |
+| `Canvassing` | Canvassing | **Sonnet 5** |
+| `Company Pricing` | Pricing locks | **Sonnet 5** (Opus to audit) |
+| `Login & Settings` | Auth / RLS | **Sonnet 5** or Opus if available |
+
+## Cross-cutting
+
+| Chat name | What it’s for | Model (Joe’s setup) |
+|-----------|---------------|---------------------|
+| `Guide` | Talk only — which chat? + opinions; **no coding** | **Grok 4.5** or Auto |
+| `Colors` | Whole-app color / theme | **Sonnet 5** |
+| `Phone` | Phone layout / Add to Home Screen | **Grok 4.5** or Sonnet |
+| `Website & App Store` | Marketing site, Stripe, App Store | **Sonnet 5** (Opus if billing gets hard) |
+| `Deep Scan` | Full QA lock | **Sonnet 5** (Opus if available) |
+| `Quick Fixes` | Restarts, tiny copy, host down | **Grok 4.5** |
+| `Rules` | `.cursor/rules` / `.cursor/agents` maintenance | Sonnet |
+
+## Later (backlog)
+
+| Chat name | What it’s for | Model |
+|-----------|---------------|--------|
+| `Pitch Deck` | Sales pitch deck backlog | Sonnet |
+| `Contracts` | Cash / insurance contracts backlog | Opus (legal care) |
+
+## Slack later
+
+Name bots simply: Pricing, Triage, Security, Print, Ship — see `.cursor/agents/slack-*.md`.
+
+## Rules
+
+- One page (or one money domain) per chat.
+- New work → matching page chat (fresh is fine). Avoid days-long mega-chats.
+- Model sticks for that conversation after you pick it.
+- Stay in-scope for the chat’s starter; don’t wander into other pages unless required.

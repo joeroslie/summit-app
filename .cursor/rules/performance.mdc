@@ -1,11 +1,11 @@
 ---
-description: Summit · Performance — file map (@ tag this chat)
+description: Performance — file map (@ tag this chat)
 alwaysApply: false
 ---
 
-# Summit · Performance
+# Performance
 
-**Chat name:** `Summit · Performance`  
+**Chat name:** `Performance`  
 **Sidebar label:** Performance  
 **Agent starter:** `.cursor/agents/performance.md`
 

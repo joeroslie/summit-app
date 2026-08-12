@@ -20,7 +20,7 @@ Joe hates small descriptions under titles that only restate what the screen alre
 // ❌ BAD — count/status essay under title
 <h1>Tasks</h1>
 <p>My Tasks · 0 open</p>
-<p>Google not connected — showing Summit tasks only</p>
+<p>Google not connected — showing app tasks only</p>
 
 // ✅ GOOD — title + real action
 <h1>Tasks</h1>

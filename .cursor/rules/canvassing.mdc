@@ -1,12 +1,12 @@
 ---
-description: Summit · Canvassing — file map (@ tag this chat)
-globs: components/CanvassingTool.tsx,components/CanvassMap.tsx,lib/canvassing.ts
+description: Canvassing — file map (@ tag this chat)
+globs: components/CanvassingTool.tsx,components/CanvassMap.tsx,lib/canvassing.ts,app/api/property-lookup/**
 alwaysApply: false
 ---
 
-# Summit · Canvassing
+# Canvassing
 
-**Chat name:** `Summit · Canvassing`  
+**Chat name:** `Canvassing`  
 **Sidebar label:** none — Tools → Canvassing (`activeTab: canvassing`)  
 **Agent starter:** `.cursor/agents/canvassing.md`
 

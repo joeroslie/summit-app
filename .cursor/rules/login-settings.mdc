@@ -1,12 +1,12 @@
 ---
-description: Summit · Login & Settings — file map (@ tag this chat)
-globs: middleware.ts,lib/supabase/client.ts,lib/supabase/server.ts
+description: Login & Settings — file map (@ tag this chat)
+globs: middleware.ts,lib/supabase/client.ts,lib/supabase/server.ts,lib/app-settings-sync.ts
 alwaysApply: false
 ---
 
-# Summit · Login & Settings
+# Login & Settings
 
-**Chat name:** `Summit · Login & Settings`  
+**Chat name:** `Login & Settings`  
 **Sidebar label:** Profile settings (`activeTab: settings`; profile menu, not primary sidebar)  
 **Agent starter:** `.cursor/agents/login-settings.md`  
 **Status:** Auth not built — anon Supabase client; middleware disabled

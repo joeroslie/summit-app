@@ -1,12 +1,12 @@
 ---
-description: Summit · Orders — file map (@ tag this chat)
+description: Orders — file map (@ tag this chat)
 globs: lib/instant-roofer-orders.ts
 alwaysApply: false
 ---
 
-# Summit · Orders
+# Orders
 
-**Chat name:** `Summit · Orders`  
+**Chat name:** `Orders`  
 **Sidebar label:** Orders (Labor = second step inside Orders, not a top-level tab)  
 **Agent starter:** `.cursor/agents/orders.md`
 

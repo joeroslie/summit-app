@@ -1,12 +1,12 @@
 ---
-description: Summit · Pipeline — file map (@ tag this chat)
-globs: components/PipelineBoard.tsx,components/AddressAutocomplete.tsx,components/PhoneInput.tsx,lib/pipeline.ts
+description: Pipeline — file map (@ tag this chat)
+globs: components/PipelineBoard.tsx,lib/pipeline.ts
 alwaysApply: false
 ---
 
-# Summit · Pipeline
+# Pipeline
 
-**Chat name:** `Summit · Pipeline`  
+**Chat name:** `Pipeline`  
 **Sidebar label:** Pipeline (`activeTab: leads`)  
 **Agent starter:** `.cursor/agents/pipeline.md`
 
@@ -15,8 +15,8 @@ alwaysApply: false
 - `components/PipelineBoard.tsx` — kanban board, stage chips, trash list, New Lead header
 - `lib/pipeline.ts` — `PipelineStage`, `PIPELINE_STAGES`, `PIPELINE_STAGE_STYLES`, `normalizePipelineStage`
 - `app/page.tsx` — `activeTab === 'leads'` wires `PipelineBoard`; lead CRUD + lead profile tabs still live here
-- `components/AddressAutocomplete.tsx` — shared
-- `components/PhoneInput.tsx` — shared
+- `components/AddressAutocomplete.tsx` — shared (see App Shell)
+- `components/PhoneInput.tsx` — shared (see App Shell)
 - `lib/phone.ts` — shared
 - `lib/geocode.ts` — shared
 - `lib/supabase.ts` — shared; `leads` table

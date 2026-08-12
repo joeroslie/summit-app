@@ -1,12 +1,12 @@
 ---
-description: Summit · Estimates — file map (@ tag this chat)
-globs: components/RoofTracer.tsx,lib/instant-roofer.ts,lib/roof-geometry.ts
+description: Estimates — file map (@ tag this chat)
+globs: components/RoofTracer.tsx,lib/instant-roofer.ts,lib/roof-geometry.ts,app/api/instant-roofer/**,app/api/measure/**
 alwaysApply: false
 ---
 
-# Summit · Estimates
+# Estimates
 
-**Chat name:** `Summit · Estimates`  
+**Chat name:** `Estimates`  
 **Sidebar label:** Estimates (+ lead-profile Estimator tab)  
 **Agent starter:** `.cursor/agents/estimates.md`
 
@@ -15,7 +15,7 @@ alwaysApply: false
 - `app/page.tsx` — `activeTab === 'estimates'` (~L22344); estimator workspace, measure flow, PDF export
 - `components/RoofTracer.tsx`
 - `components/AddressAutocomplete.tsx` — shared
-- `lib/pricingGuide.ts` — shared with Company Pricing
+- `lib/pricingGuide.ts` — consume only; price locks live in Company Pricing
 - `lib/roof-geometry.ts`
 - `lib/roof-outline.ts`
 - `lib/roof-snap.ts`

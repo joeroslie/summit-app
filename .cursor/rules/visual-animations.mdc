@@ -1,12 +1,12 @@
 ---
-description: Summit · Visual & Animations (Colors) — file map (@ tag this chat)
+description: Colors / theme — file map (@ tag this chat)
 globs: app/globals.css,app/layout.tsx,design-mockups/**
 alwaysApply: false
 ---
 
-# Summit · Visual & Animations
+# Visual & Animations
 
-**Chat name:** `Summit · Colors`  
+**Chat name:** `Colors`  
 **Sidebar label:** n/a (app-wide theme)  
 **Agent starter:** `.cursor/agents/colors.md`
 

@@ -1,16 +1,13 @@
 ---
-description: Summit · Contracts — file map (@ tag this chat)
+description: Contracts — file map (@ tag this chat)
 alwaysApply: false
 ---
 
-# Summit · Contracts
+# Contracts
 
-**Chat name:** `Summit · Contracts`  
+**Chat name:** `Contracts`  
 **Agent starter:** `.cursor/agents/contracts.md`  
 **Backlog vision:** `.cursor/rules/legal-contracts-backlog.mdc`  
 **Status:** NOT BUILT — cash/insurance contracts
 
-## Related existing (not cash/insurance contracts)
-
-- `app/page.tsx` — mitigation service agreement + estimate PDF chrome
-- `docs/emergency_services_agreement_prowest_az.pdf`
+Legal verbiage must stay exact — never invent or “improve” contract language.

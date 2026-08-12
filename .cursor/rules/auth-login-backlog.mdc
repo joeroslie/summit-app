@@ -1,6 +1,6 @@
 ---
-description: Backlog — auth / login (Apple + Google onboarding, password, RLS; not built yet)
-alwaysApply: true
+description: Backlog — auth / login (Apple + Google onboarding, password, RLS; not built yet). @ when building auth.
+alwaysApply: false
 ---
 
 # Auth / login (planned — not built yet)

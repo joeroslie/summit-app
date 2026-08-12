@@ -1,6 +1,6 @@
 ---
-description: Backlog — homeowner phone number lookup for canvassing (skip-tracing, not built yet)
-alwaysApply: true
+description: Backlog — homeowner phone / skip-trace for canvassing (not built yet). @ when building phone lookup.
+alwaysApply: false
 ---
 
 # Canvassing homeowner phone lookup (planned — not built yet)

@@ -1,12 +1,12 @@
 ---
-description: Summit · Tasks — file map (@ tag this chat)
-globs: lib/google-tasks.ts
+description: Tasks — file map (@ tag this chat)
+globs: lib/google-tasks.ts,app/api/google/tasks/**
 alwaysApply: false
 ---
 
-# Summit · Tasks
+# Tasks
 
-**Chat name:** `Summit · Tasks`  
+**Chat name:** `Tasks`  
 **Sidebar label:** Tasks  
 **Agent starter:** `.cursor/agents/tasks.md`
 

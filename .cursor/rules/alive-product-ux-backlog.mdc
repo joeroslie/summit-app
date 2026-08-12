@@ -1,6 +1,6 @@
 ---
-description: Alive UX + sell path backlog — motion, onboarding, CRM, camera, App Store. Build AFTER UI color decision + deep scan.
-alwaysApply: true
+description: Alive UX + sell path backlog — motion, onboarding, CRM, camera, App Store. Build AFTER UI color + deep scan. @ when doing Alive UX.
+alwaysApply: false
 ---
 
 # Alive product UX + sell path (planned)
@@ -23,14 +23,14 @@ Product backlog — **do not start Phases A–F until Joe has (1) locked a UI co
 
 | Phase | Ship | Chat |
 |-------|------|------|
-| **A** | Motion kit + living Home + celebrate moments | `Summit · Home` |
-| **B** | Progressive estimate + animate auto-fills | `Summit · Estimates` (+ `Summit · Takeoff` if needed) |
-| **C** | Apple/Google (+ email) auth onboarding | `Summit · Login & Settings` |
-| **D** | In-app camera for job photos | `Summit · Documents` |
-| **E** | CRM job-soul cards + next-action | `Summit · Pipeline` |
-| **F** | Stripe → phone install → App Store | `Summit · Website & App Store` (+ `Summit · Phone`) |
+| **A** | Motion kit + living Home + celebrate moments | `Home` |
+| **B** | Progressive estimate + animate auto-fills | `Estimates` (+ `Takeoff` if needed) |
+| **C** | Apple/Google (+ email) auth onboarding | `Login & Settings` |
+| **D** | In-app camera for job photos | `Documents` |
+| **E** | CRM job-soul cards + next-action | `Pipeline` |
+| **F** | Stripe → phone install → App Store | `Website & App Store` (+ `Phone`) |
 
-Chat roster: `.cursor/rules/summit-agent-roster.mdc` · kits: `.cursor/agents/`
+Chat roster: `.cursor/rules/agent-roster.mdc` · kits: `.cursor/agents/`
 
 ## Also from this initiative (not blocked by color gate if Joe asks)
 

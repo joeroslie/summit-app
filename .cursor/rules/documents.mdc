@@ -1,12 +1,12 @@
 ---
-description: Summit · Documents — file map (@ tag this chat)
+description: Documents — file map (@ tag this chat)
 globs: app/api/convert-heic/route.ts
 alwaysApply: false
 ---
 
-# Summit · Documents
+# Documents
 
-**Chat name:** `Summit · Documents`  
+**Chat name:** `Documents`  
 **Sidebar label:** Documents  
 **Agent starter:** `.cursor/agents/documents.md`
 

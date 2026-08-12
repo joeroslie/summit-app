@@ -1,21 +1,17 @@
 ---
-description: Summit · Website & App Store — file map (@ tag this chat)
+description: Website & App Store — file map (@ tag this chat)
 alwaysApply: false
 ---
 
-# Summit · Website & App Store
+# Website & App Store
 
-**Chat name:** `Summit · Website & App Store`  
+**Chat name:** `Website & App Store`  
 **Sidebar label:** n/a — not built (Alive UX Phase F)  
 **Agent starter:** `.cursor/agents/website-app-store.md`  
 **Status:** No marketing site, Stripe, or App Store submission code yet
 
-## Existing shell (shared with Phone/PWA)
+## Notes
 
-- `app/manifest.ts`
-- `app/layout.tsx`
-- `app/icon.tsx`
-- `app/apple-icon.tsx`
-- `app/icon-192.png/route.tsx`
-- `app/icon-512.png/route.tsx`
-- `app/icon-maskable-512.png/route.tsx`
+- Prefer web billing + login on iOS unless Joe wants IAP
+- Phone layout / A2HS → `Phone` chat
+- Alive Phase F detail: `.cursor/rules/alive-product-ux-backlog.mdc`
