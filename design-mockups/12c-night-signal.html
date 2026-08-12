@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Summit — Night Signal (Salesforce dark invoices reproduction)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0b0e14;
+    --card: #14181f;
+    --card-2: #1a1f28;
+    --line: rgba(255,255,255,0.08);
+    --ink: #f5f6f8;
+    --muted: #8b9099;
+    --lime: #a2ff32;
+    --lime-ink: #0e1408;
+    --danger: #ff6a5a;
+    --radius-lg: 28px;
+    --radius-md: 22px;
+    --radius-sm: 16px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--ink); font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  .lab-strip { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 14px; background: #000; color: #fff; padding: 10px 24px; font-size: 12.5px; border-bottom: 1px solid var(--line); }
+  .lab-strip a { color: #fff; text-decoration: none; opacity: 0.75; }
+  .lab-strip a:hover { opacity: 1; }
+  .lab-strip .sep { opacity: 0.35; }
+  .lab-strip .thesis { opacity: 0.75; }
+  .lab-strip .thesis b { color: var(--lime); font-weight: 700; opacity: 1; }
+
+  .topnav { display: flex; align-items: center; justify-content: space-between; padding: 22px 40px 0; }
+  .logo { font-size: 18px; font-weight: 800; letter-spacing: -0.01em; }
+  .pillnav { display: flex; align-items: center; gap: 2px; background: var(--card); border-radius: 999px; padding: 5px; }
+  .pillnav a { padding: 9px 16px; border-radius: 999px; font-size: 12.5px; font-weight: 700; color: var(--muted); text-decoration: none; }
+  .pillnav a.active { background: var(--lime); color: var(--lime-ink); }
+  .topnav-right { display: flex; align-items: center; gap: 12px; }
+  .icon-btn { width: 36px; height: 36px; border-radius: 50%; background: var(--card); display: flex; align-items: center; justify-content: center; font-size: 14px; color: var(--muted); }
+  .avatar { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #3a4150, #20242c); }
+
+  .main { max-width: 1200px; margin: 0 auto; padding: 32px 40px 90px; }
+  .topbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 26px; flex-wrap: wrap; }
+  .eyebrow { font-size: 12.5px; font-weight: 600; color: var(--muted); margin-bottom: 8px; }
+  h1.greeting { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; margin: 0; }
+  .btn-new-lead { background: var(--lime); color: var(--lime-ink); border: none; border-radius: 999px; padding: 13px 24px; font-size: 14px; font-weight: 800; cursor: pointer; }
+
+  .kpi-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1.2fr; gap: 14px; margin-bottom: 20px; }
+  .kpi-card { background: var(--card); border-radius: var(--radius-md); padding: 22px; }
+  .kpi-label { font-size: 11px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+  .kpi-val { font-size: 24px; font-weight: 800; }
+  .kpi-sub { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+  .kpi-bar { height: 5px; border-radius: 4px; background: rgba(162,255,50,0.16); margin-top: 12px; overflow: hidden; }
+  .kpi-bar span { display: block; height: 100%; background: var(--lime); border-radius: 4px; }
+  .facepile { display: flex; margin-top: 12px; }
+  .facepile span { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--card); margin-left: -7px; background: linear-gradient(135deg, #3a4150, #20242c); }
+  .facepile span:first-child { margin-left: 0; }
+
+  /* payout-style card — signature widget with payment-method capsules */
+  .payout-methods { display: flex; gap: 8px; margin-top: 14px; }
+  .method-chip { font-size: 10.5px; font-weight: 700; padding: 5px 11px; border-radius: 999px; background: var(--card-2); color: var(--muted); border: 1px solid var(--line); }
+  .method-chip.hi { background: var(--lime); color: var(--lime-ink); border-color: var(--lime); }
+
+  .storm-alert { background: var(--card); border-radius: var(--radius-md); padding: 20px 24px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border: 1px solid rgba(255,106,90,0.22); }
+  .storm-label { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--danger); margin-bottom: 8px; }
+  .pulse-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
+  .storm-title { font-size: 15.5px; font-weight: 700; }
+  .storm-sub { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+  .arrow-circle { width: 34px; height: 34px; border-radius: 50%; background: var(--lime); color: var(--lime-ink); display: flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0; }
+
+  .split { display: grid; grid-template-columns: 1.2fr 1fr; gap: 18px; }
+  .white-panel { background: #f2f3f5; color: #14161a; border-radius: var(--radius-lg); padding: 24px 26px; }
+  .white-title { font-size: 13.5px; font-weight: 800; margin-bottom: 16px; }
+  .lead-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid rgba(20,22,26,0.08); }
+  .lead-row:last-child { border-bottom: none; }
+  .lead-row-left { display: flex; align-items: center; gap: 12px; }
+  .lead-row-avatar { width: 34px; height: 34px; border-radius: 50%; background: linear-gradient(135deg, #c9d0da, #8b95a3); }
+  .lead-row-name { font-size: 13.5px; font-weight: 700; }
+  .lead-row-addr { font-size: 11.5px; color: #6b7078; margin-top: 2px; }
+  .lead-row-val { font-size: 14px; font-weight: 800; }
+  .status-pill { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; border-radius: 999px; padding: 3px 10px; background: #e6e8ea; color: #55595f; margin-top: 4px; display: inline-block; }
+  .status-pill.hot { background: var(--lime-ink); color: var(--lime); }
+
+  .detail-panel { background: var(--card); border-radius: var(--radius-lg); padding: 24px 26px; }
+  .detail-id { font-size: 24px; font-weight: 800; }
+  .detail-sub { font-size: 12.5px; color: var(--muted); margin-top: 4px; margin-bottom: 18px; }
+
+  /* cost-breakdown grid with trend arrows — the signature detail-panel widget */
+  .cost-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 6px; }
+  .cost-item { background: var(--card-2); border-radius: 14px; padding: 12px 14px; }
+  .cost-item .lbl { font-size: 10.5px; color: var(--muted); margin-bottom: 6px; }
+  .cost-item .row { display: flex; align-items: baseline; justify-content: space-between; }
+  .cost-item .val { font-size: 15px; font-weight: 800; }
+  .cost-item .trend { font-size: 10.5px; font-weight: 700; color: var(--lime); }
+  .cost-item .trend.down { color: var(--danger); }
+
+  .btn-pay { width: 100%; margin-top: 16px; background: var(--lime); color: var(--lime-ink); border: none; border-radius: 14px; padding: 15px; font-size: 14px; font-weight: 800; cursor: pointer; }
+
+  @media (max-width: 1080px) {
+    .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    .split { grid-template-columns: 1fr; }
+    .pillnav { display: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="lab-strip">
+    <a href="12-index.html">← Back to index</a>
+    <span class="sep">·</span>
+    <span class="thesis">Sample C — 1:1 reproduction of the <b>Salesforce dark invoices</b> screenshot: multi-tab pill nav, payout card w/ method chips, cost-breakdown grid with trend arrows</span>
+  </div>
+
+  <nav class="topnav">
+    <div class="logo">Summit</div>
+    <div class="pillnav">
+      <a>Pipeline</a>
+      <a>Estimates</a>
+      <a class="active">Home</a>
+      <a>Orders</a>
+      <a>Documents</a>
+      <a>Payouts</a>
+    </div>
+    <div class="topnav-right">
+      <span class="icon-btn">⚙</span>
+      <span class="icon-btn">🔔</span>
+      <span class="avatar"></span>
+    </div>
+  </nav>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">Tuesday · Aug 6</div>
+        <h1 class="greeting">Good evening, Joe</h1>
+      </div>
+      <button class="btn-new-lead">+ New Lead</button>
+    </header>
+
+    <section class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-label">Overdue Estimates</div>
+        <div class="kpi-val tnum">3</div>
+        <div class="kpi-sub">$61,200 awaiting reply</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Due This Month</div>
+        <div class="kpi-val tnum">$142,900</div>
+        <div class="kpi-sub">4 contracts</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Avg. Time to Close</div>
+        <div class="kpi-val tnum">11d</div>
+        <div class="kpi-bar"><span style="width:68%"></span></div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Payout Method</div>
+        <div class="kpi-val tnum">$52,000</div>
+        <div class="kpi-sub">Job #10482 · Whitmore</div>
+        <div class="payout-methods">
+          <span class="method-chip">Check</span>
+          <span class="method-chip hi">ACH</span>
+          <span class="method-chip">Card</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="storm-alert">
+      <div>
+        <div class="storm-label"><span class="pulse-dot"></span>Active Storm Alert</div>
+        <div class="storm-title">Hail · 1.5in reported near Gilbert, AZ</div>
+        <div class="storm-sub">12 minutes ago · 3 severe reports in the last 24h</div>
+      </div>
+      <span class="arrow-circle">→</span>
+    </section>
+
+    <section class="split">
+      <div class="white-panel">
+        <div class="white-title">Hot Leads</div>
+        <div class="lead-row">
+          <div class="lead-row-left">
+            <span class="lead-row-avatar"></span>
+            <div>
+              <div class="lead-row-name">Marcus Whitmore</div>
+              <div class="lead-row-addr">4821 E Cactus Rd, Scottsdale</div>
+            </div>
+          </div>
+          <div style="text-align:right;">
+            <div class="lead-row-val tnum">$52,000</div>
+            <span class="status-pill hot">Approved</span>
+          </div>
+        </div>
+        <div class="lead-row">
+          <div class="lead-row-left">
+            <span class="lead-row-avatar"></span>
+            <div>
+              <div class="lead-row-name">Sanchez Family</div>
+              <div class="lead-row-addr">771 E Broadway Rd, Tempe</div>
+            </div>
+          </div>
+          <div style="text-align:right;">
+            <div class="lead-row-val tnum">$41,200</div>
+            <span class="status-pill">Prospect</span>
+          </div>
+        </div>
+        <div class="lead-row">
+          <div class="lead-row-left">
+            <span class="lead-row-avatar"></span>
+            <div>
+              <div class="lead-row-name">Ray Thomas</div>
+              <div class="lead-row-addr">3390 E Fry Rd, Gilbert</div>
+            </div>
+          </div>
+          <div style="text-align:right;">
+            <div class="lead-row-val tnum">$22,100</div>
+            <span class="status-pill">Lead</span>
+          </div>
+        </div>
+      </div>
+      <div class="detail-panel">
+        <div class="detail-id">Job #10482</div>
+        <div class="detail-sub">Marcus Whitmore — Scottsdale, AZ</div>
+        <div class="cost-grid">
+          <div class="cost-item"><div class="lbl">Tear-off</div><div class="row"><span class="val tnum">$6,200</span><span class="trend">▲ 3%</span></div></div>
+          <div class="cost-item"><div class="lbl">Underlayment</div><div class="row"><span class="val tnum">$4,100</span><span class="trend down">▼ 1%</span></div></div>
+          <div class="cost-item"><div class="lbl">Shingles</div><div class="row"><span class="val tnum">$28,400</span><span class="trend">▲ 6%</span></div></div>
+          <div class="cost-item"><div class="lbl">Flashing</div><div class="row"><span class="val tnum">$3,900</span><span class="trend">▲ 2%</span></div></div>
+        </div>
+        <button class="btn-pay">Call homeowner now</button>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

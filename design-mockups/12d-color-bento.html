@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Summit — Color Stack (Interaction History reproduction)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #ebedf0;
+    --ink: #14161a;
+    --ink-soft: #4c515a;
+    --muted: #878d97;
+    --white: #ffffff;
+    --blue: #2b65ec;
+    --yellow: #f2ea4e;
+    --graphite: #1c1e22;
+    --teal: #4a828f;
+    --radius-lg: 32px;
+    --radius-sm: 16px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--ink); font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  .lab-strip { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 14px; background: var(--ink); color: #fff; padding: 10px 24px; font-size: 12.5px; }
+  .lab-strip a { color: #fff; text-decoration: none; opacity: 0.75; }
+  .lab-strip a:hover { opacity: 1; }
+  .lab-strip .sep { opacity: 0.35; }
+  .lab-strip .thesis { opacity: 0.75; }
+  .lab-strip .thesis b { color: var(--yellow); font-weight: 700; opacity: 1; }
+
+  /* phone-frame stage — this reference is a mobile screen, shown at its own device width, not stretched full-bleed desktop */
+  .stage { display: flex; justify-content: center; padding: 44px 20px 90px; }
+  .phone { width: 390px; background: var(--bg); border-radius: 44px; padding: 14px; box-shadow: 0 40px 80px -30px rgba(20,22,26,0.35); }
+  .phone-screen { background: var(--bg); border-radius: 32px; overflow: hidden; min-height: 760px; padding: 22px 18px 28px; }
+
+  .ph-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+  .ph-back { width: 34px; height: 34px; border-radius: 50%; background: var(--white); display: flex; align-items: center; justify-content: center; font-size: 15px; }
+  /* smaller than card content on purpose — chrome sits below the data it frames */
+  .ph-title { font-size: 12.5px; font-weight: 800; letter-spacing: 0.02em; text-transform: uppercase; color: var(--ink-soft); }
+  .ph-search { width: 34px; height: 34px; border-radius: 50%; background: var(--white); display: flex; align-items: center; justify-content: center; font-size: 13px; }
+
+  .deal-stack { display: flex; flex-direction: column; gap: 14px; }
+  .deal-card { border-radius: var(--radius-lg); padding: 22px; min-height: 132px; display: flex; flex-direction: column; justify-content: space-between; }
+  .deal-card .date { font-size: 10.5px; opacity: 0.65; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; }
+  .deal-card .name { font-size: 17px; font-weight: 800; margin: 10px 0 6px; line-height: 1.25; }
+  .deal-card .price { font-size: 26px; font-weight: 800; margin-top: 2px; }
+  .deal-card .foot { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
+  .deal-card .avatars { display: flex; }
+  .deal-card .avatars span { width: 24px; height: 24px; border-radius: 50%; border: 2px solid; margin-left: -8px; }
+  .deal-card .avatars span:first-child { margin-left: 0; }
+
+  .deal-card.blue { background: var(--blue); color: #fff; }
+  .deal-card.blue .avatars span { border-color: var(--blue); background: rgba(255,255,255,0.35); }
+  .deal-card.yellow { background: var(--yellow); color: var(--ink); }
+  .deal-card.yellow .avatars span { border-color: var(--yellow); background: rgba(20,22,26,0.2); }
+  .deal-card.graphite { background: var(--graphite); color: #fff; }
+  .deal-card.graphite .avatars span { border-color: var(--graphite); background: rgba(255,255,255,0.3); }
+  .deal-card.teal { background: var(--teal); color: #fff; }
+  .deal-card.teal .avatars span { border-color: var(--teal); background: rgba(255,255,255,0.3); }
+
+  .circle-arrow { width: 42px; height: 42px; border-radius: 50%; background: rgba(255,255,255,0.95); color: var(--graphite); display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+
+  .side-note { max-width: 390px; margin: 0 auto; padding: 0 20px 60px; text-align: center; }
+  .side-note p { font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+</style>
+</head>
+<body>
+  <div class="lab-strip">
+    <a href="12-index.html">← Back to index</a>
+    <span class="sep">·</span>
+    <span class="thesis">Sample D — 1:1 reproduction of the mobile <b>"Interaction History"</b> screenshot: full-width stacked solid-color deal cards on a light phone screen, not a desktop grid</span>
+  </div>
+
+  <div class="stage">
+    <div class="phone">
+      <div class="phone-screen">
+        <div class="ph-topbar">
+          <span class="ph-back">←</span>
+          <span class="ph-title">Your Pipeline</span>
+          <span class="ph-search">🔍</span>
+        </div>
+        <div class="deal-stack">
+          <div class="deal-card blue">
+            <div class="date">Job #10482 · Aug 6</div>
+            <div>
+              <div class="name">Marcus Whitmore — Approved Estimate</div>
+              <div class="price tnum">$52,000</div>
+            </div>
+            <div class="foot">
+              <div class="avatars"><span></span><span></span></div>
+              <span class="circle-arrow">↗</span>
+            </div>
+          </div>
+          <div class="deal-card yellow">
+            <div class="date">Storm Lead · Aug 5</div>
+            <div>
+              <div class="name">Sanchez Family — Adjuster Scheduled</div>
+              <div class="price tnum">$41,200</div>
+            </div>
+            <div class="foot">
+              <div class="avatars"><span></span></div>
+              <span class="circle-arrow">↗</span>
+            </div>
+          </div>
+          <div class="deal-card graphite">
+            <div class="date">Contract Signed · Aug 4</div>
+            <div>
+              <div class="name">Ironwood Estates HOA — Phase 1</div>
+              <div class="price tnum">$168,400</div>
+            </div>
+            <div class="foot">
+              <div class="avatars"><span></span><span></span><span></span></div>
+              <span class="circle-arrow">↗</span>
+            </div>
+          </div>
+          <div class="deal-card teal">
+            <div class="date">Invoiced · Jul 29</div>
+            <div>
+              <div class="name">Kevin Park — Payment Pending</div>
+              <div class="price tnum">$33,100</div>
+            </div>
+            <div class="foot">
+              <div class="avatars"><span></span></div>
+              <span class="circle-arrow">↗</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="side-note">
+    <p>Rendered at the reference's own device width (390px) rather than stretched into a desktop grid — that phone-native stack of solid color cards is the thing being tested here.</p>
+  </div>
+</body>
+</html>

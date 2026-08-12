@@ -55,10 +55,10 @@ export const DISPOSITIONS: DispositionStyle[] = [
   {
     id: 'signed',
     label: 'Signed',
-    badge: 'bg-emerald-50 text-emerald-800 border-emerald-100',
-    dot: 'bg-emerald-500',
-    marker: '#34d399',
-    markerStroke: '#065f46',
+    badge: 'bg-[var(--accent-green-soft)] text-[var(--accent-green-ink)] border-transparent',
+    dot: 'bg-[var(--accent-green)]',
+    marker: '#7bc9a6',
+    markerStroke: '#111111',
   },
 ];
 

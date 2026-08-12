@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Summit — Lime Bento (RealtyHub reproduction)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --cream: #f1efe6;
+    --cream-2: #e9e6d8;
+    --white: rgba(255,255,255,0.72);
+    --white-solid: #ffffff;
+    --ink: #14161a;
+    --ink-soft: #4d5158;
+    --muted: #8a8778;
+    --line: rgba(20,22,26,0.08);
+    --lime: #d4f000;
+    --lime-ink: #1c2000;
+    --danger: #c9503f;
+    --radius-lg: 32px;
+    --radius-md: 24px;
+    --radius-sm: 16px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: linear-gradient(160deg, #f5f3e9 0%, #eeebdd 45%, #e7e4d4 100%);
+    color: var(--ink);
+    font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  .lab-strip { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 14px; background: var(--ink); color: #fff; padding: 10px 24px; font-size: 12.5px; }
+  .lab-strip a { color: #fff; text-decoration: none; opacity: 0.75; }
+  .lab-strip a:hover { opacity: 1; }
+  .lab-strip .sep { opacity: 0.35; }
+  .lab-strip .thesis { opacity: 0.75; }
+  .lab-strip .thesis b { color: var(--lime); font-weight: 700; opacity: 1; }
+
+  .shell { display: flex; min-height: calc(100vh - 41px); }
+  .rail { width: 76px; flex-shrink: 0; padding: 28px 0; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .rail-icon { width: 44px; height: 44px; border-radius: 16px; background: var(--white); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; font-size: 16px; color: var(--ink-soft); backdrop-filter: blur(8px); }
+  .rail-icon.active { background: var(--ink); color: var(--lime); border-color: var(--ink); }
+  .rail-bottom { margin-top: auto; }
+  .rail-avatar { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #c9d0da, #8b95a3); }
+
+  .main { flex: 1; padding: 30px 40px 90px; max-width: 1240px; }
+  .topbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 28px; flex-wrap: wrap; }
+  .eyebrow { font-size: 12.5px; font-weight: 600; color: var(--muted); margin-bottom: 8px; }
+  h1.greeting { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; margin: 0; }
+  .btn-new-lead { background: var(--ink); color: #fff; border: none; border-radius: 999px; padding: 12px 22px; font-size: 13.5px; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+  .btn-new-lead .plus { color: var(--lime); font-weight: 800; }
+
+  /* asymmetric bento grid — the actual signature of the RealtyHub reference, not a uniform card row */
+  .bento { display: grid; grid-template-columns: 1.05fr 1.05fr 1fr 1.1fr; grid-template-rows: auto auto; gap: 16px; }
+  .card { border-radius: var(--radius-md); padding: 22px; }
+  .card-label { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+
+  /* Main Goals — combined striped/solid progress bar is the signature element */
+  .goals { grid-column: 1 / 3; background: var(--white-solid); }
+  .goals-metrics { display: flex; gap: 34px; margin: 14px 0 20px; }
+  .goals-metric .val { font-size: 24px; font-weight: 800; }
+  .goals-metric .lbl { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .goals-metric .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .progress-combo { height: 20px; border-radius: 10px; overflow: hidden; display: flex; background: #eee; }
+  .progress-combo .won { background: var(--lime); }
+  .progress-combo .quoted { background: repeating-linear-gradient(135deg, #cfcbb8 0 4px, #e3e0d2 4px 9px); }
+  .progress-legend { display: flex; gap: 20px; margin-top: 12px; font-size: 11.5px; color: var(--ink-soft); }
+  .progress-legend span { display: flex; align-items: center; gap: 6px; }
+  .legend-sw { width: 10px; height: 10px; border-radius: 3px; }
+
+  /* Gauge cards — real half-circle SVG gauges */
+  .gauge-card { background: var(--white-solid); text-align: center; }
+  .gauge-trend { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; display: inline-block; margin-top: 6px; }
+  .gauge-trend.up { background: #eaf7d6; color: #4a7a1a; }
+  .gauge-trend.down { background: #fbe6e2; color: var(--danger); }
+  .gauge-svg-num { font-size: 22px; font-weight: 800; margin-top: -34px; }
+
+  /* Storm response — the "AI feature" sunburst card equivalent */
+  .sunburst-card { grid-column: 3 / 5; grid-row: 1 / 2; background: var(--ink); color: #fff; position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; min-height: 180px; }
+  .sunburst-card::before {
+    content: ''; position: absolute; right: -40px; top: -40px; width: 240px; height: 240px; border-radius: 50%;
+    background: radial-gradient(circle, var(--lime) 0%, rgba(212,240,0,0.25) 45%, transparent 70%);
+  }
+  .sunburst-title { font-size: 16px; font-weight: 800; position: relative; z-index: 1; max-width: 60%; }
+  .sunburst-sub { font-size: 12px; color: rgba(255,255,255,0.6); margin-top: 6px; position: relative; z-index: 1; max-width: 60%; }
+  .sunburst-avatars { display: flex; position: relative; z-index: 1; }
+  .sunburst-avatars span { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--ink); margin-left: -9px; background: linear-gradient(135deg, #c9d0da, #8b95a3); }
+  .sunburst-avatars span:first-child { margin-left: 0; }
+  .btn-sunburst { align-self: flex-start; background: var(--lime); color: var(--lime-ink); border: none; border-radius: 999px; padding: 9px 18px; font-size: 12.5px; font-weight: 700; margin-top: 14px; position: relative; z-index: 1; cursor: pointer; }
+
+  /* Featured job — solid lime card with photo */
+  .featured-card { grid-column: 1 / 3; background: var(--lime); color: var(--lime-ink); display: flex; gap: 18px; align-items: stretch; }
+  .featured-photo { width: 40%; border-radius: var(--radius-sm); background: linear-gradient(150deg, #2b2f22 0%, #4a5238 55%, #6b7a4a 100%); flex-shrink: 0; min-height: 120px; }
+  .featured-body { flex: 1; display: flex; flex-direction: column; justify-content: space-between; }
+  .featured-name { font-size: 17px; font-weight: 800; }
+  .featured-addr { font-size: 12px; opacity: 0.75; margin-top: 2px; }
+  .featured-stats { display: flex; gap: 22px; margin-top: 12px; }
+  .featured-stats .val { font-size: 15px; font-weight: 800; }
+  .featured-stats .lbl { font-size: 10.5px; opacity: 0.7; }
+
+  /* Average sale value — capsule bar chart, the signature data-viz */
+  .capsule-card { grid-column: 3 / 5; background: var(--white-solid); }
+  .capsule-chart { display: flex; align-items: flex-end; gap: 10px; height: 90px; margin-top: 16px; }
+  .capsule { width: 20px; border-radius: 999px; }
+  .capsule.solid { background: var(--ink); }
+  .capsule.hollow { background: transparent; border: 2px solid var(--ink); }
+  .capsule.striped { background: repeating-linear-gradient(135deg, var(--lime) 0 4px, #eef0c8 4px 8px); }
+  .capsule-labels { display: flex; gap: 10px; margin-top: 8px; }
+  .capsule-labels span { width: 20px; font-size: 9.5px; text-align: center; color: var(--muted); }
+
+  /* Job table */
+  .table-section { margin-top: 18px; background: var(--white-solid); border-radius: var(--radius-lg); padding: 24px 26px; }
+  .table-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 12px; }
+  .table-title { font-size: 15px; font-weight: 800; }
+  .filters { display: flex; gap: 8px; }
+  .filter-chip { font-size: 12px; font-weight: 600; color: var(--ink-soft); background: var(--cream); border-radius: 999px; padding: 7px 14px; }
+  .job-row { display: grid; grid-template-columns: 52px 2fr 1fr 1fr 0.8fr 0.8fr; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .job-row:last-child { border-bottom: none; }
+  .job-thumb { width: 44px; height: 44px; border-radius: 12px; flex-shrink: 0; }
+  .job-name { font-weight: 700; }
+  .job-addr { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .job-val { font-weight: 700; }
+  .pill-active { background: var(--lime); color: var(--lime-ink); font-size: 10.5px; font-weight: 700; border-radius: 999px; padding: 4px 12px; justify-self: start; }
+
+  @media (max-width: 1100px) {
+    .rail { display: none; }
+    .bento { grid-template-columns: 1fr 1fr; }
+    .goals, .featured-card { grid-column: 1 / 3; }
+    .sunburst-card, .capsule-card { grid-column: 1 / 3; }
+    .job-row { grid-template-columns: 44px 2fr 1fr; }
+    .job-row > :nth-child(4), .job-row > :nth-child(5) { display: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="lab-strip">
+    <a href="12-index.html">← Back to index</a>
+    <span class="sep">·</span>
+    <span class="thesis">Sample A — 1:1 reproduction of the <b>RealtyHub lime bento</b> screenshot: striped/solid progress bar, half-circle gauges, sunburst feature card, capsule bar chart, filterable table</span>
+  </div>
+  <div class="shell">
+    <aside class="rail">
+      <div class="rail-icon active">⌂</div>
+      <div class="rail-icon">◧</div>
+      <div class="rail-icon">▦</div>
+      <div class="rail-icon">📄</div>
+      <div class="rail-icon">⚙</div>
+      <div class="rail-bottom rail-avatar"></div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">Tuesday · Aug 6</div>
+          <h1 class="greeting">Good evening, Joe</h1>
+        </div>
+        <button class="btn-new-lead"><span class="plus">+</span> New Lead</button>
+      </header>
+
+      <section class="bento">
+        <div class="card goals">
+          <div class="goals-metrics">
+            <div class="goals-metric"><span class="dot" style="background:var(--lime)"></span><span class="val tnum">$382,400</span> <span class="lbl">Closed this quarter</span></div>
+            <div class="goals-metric"><span class="dot" style="background:#cfcbb8"></span><span class="val tnum">$100,200</span> <span class="lbl">Quoted, awaiting signature</span></div>
+          </div>
+          <div class="progress-combo">
+            <div class="won" style="width:68%"></div>
+            <div class="quoted" style="width:32%"></div>
+          </div>
+          <div class="progress-legend">
+            <span><span class="legend-sw" style="background:var(--lime)"></span>Closed won</span>
+            <span><span class="legend-sw" style="background:repeating-linear-gradient(135deg,#cfcbb8 0 3px,#e3e0d2 3px 6px)"></span>Quoted</span>
+          </div>
+        </div>
+
+        <div class="card gauge-card">
+          <div class="card-label">Win Rate</div>
+          <svg viewBox="0 0 120 66" width="120" height="66" style="margin-top:6px;">
+            <path d="M10 60 A50 50 0 0 1 110 60" fill="none" stroke="#ece9da" stroke-width="12" stroke-linecap="round"/>
+            <path d="M10 60 A50 50 0 0 1 92 22" fill="none" stroke="#d4f000" stroke-width="12" stroke-linecap="round"/>
+          </svg>
+          <div class="gauge-svg-num tnum">68%</div>
+          <span class="gauge-trend up">▲ 4% this month</span>
+        </div>
+
+        <div class="card sunburst-card">
+          <div>
+            <div class="sunburst-title">Gilbert hail event — 6 homes matched</div>
+            <div class="sunburst-sub">Auto-matched from today's storm radar pull</div>
+          </div>
+          <div>
+            <div class="sunburst-avatars"><span></span><span></span><span></span><span></span></div>
+            <button class="btn-sunburst">View storm map →</button>
+          </div>
+        </div>
+
+        <div class="card gauge-card">
+          <div class="card-label">Pipeline Value</div>
+          <svg viewBox="0 0 120 66" width="120" height="66" style="margin-top:6px;">
+            <path d="M10 60 A50 50 0 0 1 110 60" fill="none" stroke="#ece9da" stroke-width="12" stroke-linecap="round"/>
+            <path d="M10 60 A50 50 0 0 1 100 46" fill="none" stroke="#14161a" stroke-width="12" stroke-linecap="round"/>
+          </svg>
+          <div class="gauge-svg-num tnum">$482K</div>
+          <span class="gauge-trend up">▲ 11% week</span>
+        </div>
+
+        <div class="card featured-card">
+          <div class="featured-photo"></div>
+          <div class="featured-body">
+            <div>
+              <div class="featured-name">Ironwood Estates HOA</div>
+              <div class="featured-addr">90-unit re-roof, phase 1 — contract signed</div>
+            </div>
+            <div class="featured-stats">
+              <div><div class="val tnum">$168,400</div><div class="lbl">Contract value</div></div>
+              <div><div class="val tnum">14</div><div class="lbl">Days to start</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card capsule-card">
+          <div class="card-label">Average Job Value · Last 8 Weeks</div>
+          <div class="capsule-chart">
+            <div class="capsule solid" style="height:55%"></div>
+            <div class="capsule hollow" style="height:70%"></div>
+            <div class="capsule striped" style="height:40%"></div>
+            <div class="capsule solid" style="height:85%"></div>
+            <div class="capsule hollow" style="height:60%"></div>
+            <div class="capsule striped" style="height:75%"></div>
+            <div class="capsule solid" style="height:50%"></div>
+            <div class="capsule hollow" style="height:65%"></div>
+          </div>
+          <div class="capsule-labels"><span>W1</span><span>W2</span><span>W3</span><span>W4</span><span>W5</span><span>W6</span><span>W7</span><span>W8</span></div>
+        </div>
+      </section>
+
+      <section class="table-section">
+        <div class="table-head">
+          <div class="table-title">Active Jobs</div>
+          <div class="filters">
+            <span class="filter-chip">Area ▾</span>
+            <span class="filter-chip">Trade ▾</span>
+            <span class="filter-chip">Stage ▾</span>
+            <span class="filter-chip">Budget ▾</span>
+          </div>
+        </div>
+        <div class="job-row">
+          <div class="job-thumb" style="background:linear-gradient(135deg,#dfe3d2,#a9b48c)"></div>
+          <div><div class="job-name">Marcus Whitmore</div><div class="job-addr">4821 E Cactus Rd, Scottsdale, AZ</div></div>
+          <div>Danny Reyes</div>
+          <div class="job-val tnum">$52,000</div>
+          <div class="tnum">38 doors</div>
+          <span class="pill-active">Active</span>
+        </div>
+        <div class="job-row">
+          <div class="job-thumb" style="background:linear-gradient(135deg,#e3d9c7,#b99a6b)"></div>
+          <div><div class="job-name">Sanchez Family</div><div class="job-addr">771 E Broadway Rd, Tempe, AZ</div></div>
+          <div>Mia Torres</div>
+          <div class="job-val tnum">$41,200</div>
+          <div class="tnum">22 doors</div>
+          <span class="pill-active">Active</span>
+        </div>
+        <div class="job-row">
+          <div class="job-thumb" style="background:linear-gradient(135deg,#d6dfe3,#8ba0ac)"></div>
+          <div><div class="job-name">Ironwood Estates HOA</div><div class="job-addr">90 units, phase 1</div></div>
+          <div>Danny Reyes</div>
+          <div class="job-val tnum">$168,400</div>
+          <div class="tnum">—</div>
+          <span class="pill-active">Active</span>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

@@ -76,16 +76,16 @@ const STAT_ACCENTS: Record<TallyType, StatAccent> = {
     chip: 'bg-steel',
   },
   signed: {
-    text: 'text-emerald-700',
-    ring: 'focus-visible:ring-emerald-300',
-    chip: 'bg-emerald-600',
+    text: 'text-[var(--accent-green-ink)]',
+    ring: 'focus-visible:ring-[var(--accent-green)]',
+    chip: 'bg-[var(--accent-green)]',
   },
 };
 
 const STAT_FLASH: Record<TallyType, string> = {
   door: 'rgba(24, 24, 27, 0.18)',
   conversation: 'color-mix(in srgb, var(--steel) 20%, transparent)',
-  signed: 'rgba(5, 150, 105, 0.2)',
+  signed: 'color-mix(in srgb, var(--accent-green) 22%, transparent)',
 };
 
 const STAT_CARDS: { type: TallyType; label: string }[] = [

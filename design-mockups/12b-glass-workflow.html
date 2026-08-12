@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Summit — Glass Flowchart (SugarCRM reproduction)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --ink: #171a1f;
+    --ink-soft: #4c515a;
+    --muted: #868c96;
+    --blue: #6d9eeb;
+    --blue-soft: rgba(109,158,235,0.16);
+    --coral: #e67c73;
+    --coral-soft: rgba(230,124,115,0.16);
+    --glass: rgba(255,255,255,0.6);
+    --glass-strong: rgba(255,255,255,0.8);
+    --glass-border: rgba(255,255,255,0.65);
+    --radius-lg: 30px;
+    --radius-md: 22px;
+    --radius-sm: 16px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    background:
+      radial-gradient(900px 600px at 6% -10%, rgba(109,158,235,0.22), transparent 60%),
+      radial-gradient(900px 700px at 96% 8%, rgba(230,124,115,0.16), transparent 60%),
+      radial-gradient(1000px 800px at 50% 115%, rgba(200,210,220,0.5), transparent 60%),
+      #eef1f5;
+    color: var(--ink);
+    font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  .lab-strip { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 14px; background: var(--ink); color: #fff; padding: 10px 24px; font-size: 12.5px; }
+  .lab-strip a { color: #fff; text-decoration: none; opacity: 0.75; }
+  .lab-strip a:hover { opacity: 1; }
+  .lab-strip .sep { opacity: 0.35; }
+  .lab-strip .thesis { opacity: 0.75; }
+  .lab-strip .thesis b { color: var(--blue); font-weight: 700; opacity: 1; }
+
+  .glass { background: var(--glass); border: 1px solid var(--glass-border); backdrop-filter: blur(20px) saturate(1.3); -webkit-backdrop-filter: blur(20px) saturate(1.3); box-shadow: 0 20px 44px -22px rgba(20,24,30,0.18); }
+
+  .topnav { display: flex; align-items: center; justify-content: space-between; padding: 20px 40px 0; }
+  .logo { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
+  .pillnav { display: flex; align-items: center; gap: 4px; background: var(--glass); border: 1px solid var(--glass-border); backdrop-filter: blur(16px); border-radius: 999px; padding: 5px; }
+  .pillnav a { padding: 8px 16px; border-radius: 999px; font-size: 13px; font-weight: 600; color: var(--ink-soft); text-decoration: none; }
+  .pillnav a.active { background: var(--ink); color: #fff; }
+  .topnav-right { display: flex; align-items: center; gap: 12px; }
+  .icon-btn { width: 36px; height: 36px; border-radius: 50%; background: var(--glass); border: 1px solid var(--glass-border); display: flex; align-items: center; justify-content: center; font-size: 14px; }
+  .avatar { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #c9d0da, #8b95a3); }
+
+  .shell { display: flex; }
+  .rail { width: 70px; flex-shrink: 0; padding: 26px 0; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .rail-icon { width: 40px; height: 40px; border-radius: 50%; background: var(--glass); border: 1px solid var(--glass-border); display: flex; align-items: center; justify-content: center; font-size: 15px; color: var(--ink-soft); }
+  .rail-icon.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .rail-bottom { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
+  .toggle-pill { width: 40px; height: 60px; border-radius: 999px; background: var(--glass); border: 1px solid var(--glass-border); display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 8px 0; font-size: 12px; }
+
+  .main { flex: 1; padding: 20px 40px 90px; max-width: 1200px; }
+
+  /* avatar strip — signature element: pill of avatars each with a colored status dot */
+  .avatar-strip { display: inline-flex; align-items: center; gap: 14px; background: var(--glass); border: 1px solid var(--glass-border); backdrop-filter: blur(16px); border-radius: 999px; padding: 10px 20px; margin-bottom: 26px; }
+  .avatar-strip-item { position: relative; }
+  .avatar-strip-item .av { width: 34px; height: 34px; border-radius: 50%; background: linear-gradient(135deg, #c9d0da, #8b95a3); }
+  .avatar-strip-item .status-dot { position: absolute; bottom: -2px; right: -2px; width: 11px; height: 11px; border-radius: 50%; border: 2px solid #fff; }
+  .avatar-strip-item .status-dot.blue { background: var(--blue); }
+  .avatar-strip-item .status-dot.coral { background: var(--coral); }
+  .avatar-strip-label { font-size: 12px; color: var(--ink-soft); font-weight: 600; padding-left: 4px; }
+
+  h1.greeting { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; margin: 0 0 20px; }
+
+  /* flowchart — real SVG connector lines between column nodes, the actual signature of this reference */
+  .flowchart-wrap { position: relative; margin-bottom: 26px; }
+  .flow-cols { display: grid; grid-template-columns: repeat(4, 1fr); gap: 40px; position: relative; z-index: 2; }
+  .flow-col-label { font-size: 11px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; text-align: center; }
+  .flow-node { background: var(--glass-strong); border: 1px solid var(--glass-border); border-radius: var(--radius-sm); padding: 16px; margin-bottom: 14px; text-align: center; }
+  .flow-node .fn-title { font-size: 12.5px; font-weight: 700; }
+  .flow-node .fn-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .flow-node .fn-avatar { width: 30px; height: 30px; border-radius: 50%; margin: 0 auto 8px; background: linear-gradient(135deg, #c9d0da, #8b95a3); }
+  .flow-connectors { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+
+  .row-2col { display: grid; grid-template-columns: 1.3fr 1fr; gap: 20px; }
+
+  .list-panel { border-radius: var(--radius-md); padding: 22px 24px; }
+  .list-title { font-size: 13px; font-weight: 700; margin-bottom: 14px; }
+  .list-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid rgba(20,24,30,0.06); }
+  .list-row:last-child { border-bottom: none; }
+  .list-name { font-size: 12.5px; font-weight: 600; }
+  .list-date { font-size: 11px; color: var(--muted); }
+  .tag { font-size: 10.5px; font-weight: 700; border-radius: 999px; padding: 3px 10px; }
+  .tag.blue { background: var(--blue-soft); color: #345f9e; }
+  .tag.coral { background: var(--coral-soft); color: #a34a41; }
+
+  /* donut charts — the "Ticket Journey" signature widget */
+  .donut-panel { border-radius: var(--radius-md); padding: 22px 24px; display: flex; gap: 20px; }
+  .donut-item { flex: 1; text-align: center; }
+  .donut-svg { position: relative; width: 96px; height: 96px; margin: 0 auto 10px; }
+  .donut-num { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 21px; font-weight: 800; }
+  .donut-lbl { font-size: 11px; color: var(--muted); font-weight: 600; }
+
+  @media (max-width: 1080px) {
+    .rail { display: none; }
+    .flow-cols { grid-template-columns: repeat(2, 1fr); }
+    .row-2col { grid-template-columns: 1fr; }
+    .pillnav { display: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="lab-strip">
+    <a href="12-index.html">← Back to index</a>
+    <span class="sep">·</span>
+    <span class="thesis">Sample B — 1:1 reproduction of the <b>SugarCRM Customer Journeys</b> screenshot: avatar-status strip, real SVG flowchart connectors, donut charts</span>
+  </div>
+
+  <nav class="topnav">
+    <div class="logo">Summit</div>
+    <div class="pillnav">
+      <a class="active">Home</a>
+      <a>Pipeline</a>
+      <a>Estimates</a>
+      <a>Orders</a>
+      <a>Calendar</a>
+    </div>
+    <div class="topnav-right">
+      <span class="icon-btn">🔍</span>
+      <span class="icon-btn">✉</span>
+      <span class="avatar"></span>
+    </div>
+  </nav>
+
+  <div class="shell">
+    <aside class="rail">
+      <div class="rail-icon active">⌂</div>
+      <div class="rail-icon">◧</div>
+      <div class="rail-icon">▤</div>
+      <div class="rail-icon">▦</div>
+      <div class="rail-bottom">
+        <div class="toggle-pill">
+          <span>☀</span>
+          <span>☾</span>
+        </div>
+      </div>
+    </aside>
+    <main class="main">
+      <div class="avatar-strip">
+        <div class="avatar-strip-item"><span class="av"></span><span class="status-dot blue"></span></div>
+        <div class="avatar-strip-item"><span class="av"></span><span class="status-dot coral"></span></div>
+        <div class="avatar-strip-item"><span class="av"></span><span class="status-dot blue"></span></div>
+        <div class="avatar-strip-item"><span class="av"></span><span class="status-dot blue"></span></div>
+        <div class="avatar-strip-item"><span class="av"></span><span class="status-dot coral"></span></div>
+        <span class="avatar-strip-label">5 crew members active today</span>
+      </div>
+
+      <h1 class="greeting">New Lead → Signed Contract</h1>
+
+      <div class="flowchart-wrap">
+        <svg class="flow-connectors" viewBox="0 0 1120 260" preserveAspectRatio="none">
+          <path d="M 250 70 C 300 70, 300 70, 350 70" fill="none" stroke="#6d9eeb" stroke-width="2" opacity="0.6"/>
+          <path d="M 250 150 C 300 150, 300 90, 350 90" fill="none" stroke="#e67c73" stroke-width="2" opacity="0.6"/>
+          <path d="M 530 70 C 580 70, 580 130, 630 130" fill="none" stroke="#6d9eeb" stroke-width="2" opacity="0.6"/>
+          <path d="M 530 150 C 580 150, 580 60, 630 60" fill="none" stroke="#e67c73" stroke-width="2" opacity="0.6"/>
+          <path d="M 810 130 C 860 130, 860 80, 910 80" fill="none" stroke="#6d9eeb" stroke-width="2" opacity="0.6"/>
+          <path d="M 810 60 C 860 60, 860 160, 910 160" fill="none" stroke="#e67c73" stroke-width="2" opacity="0.6"/>
+          <circle cx="350" cy="70" r="4" fill="#6d9eeb"/>
+          <circle cx="350" cy="90" r="4" fill="#e67c73"/>
+          <circle cx="630" cy="130" r="4" fill="#6d9eeb"/>
+          <circle cx="630" cy="60" r="4" fill="#e67c73"/>
+          <circle cx="910" cy="80" r="4" fill="#6d9eeb"/>
+          <circle cx="910" cy="160" r="4" fill="#e67c73"/>
+        </svg>
+        <div class="flow-cols">
+          <div>
+            <div class="flow-col-label">Lead Intake</div>
+            <div class="flow-node"><div class="fn-avatar"></div><div class="fn-title">Angela Cortez</div><div class="fn-sub">Storm lead, first contact</div></div>
+            <div class="flow-node"><div class="fn-avatar"></div><div class="fn-title">Ray Thomas</div><div class="fn-sub">Inspection requested</div></div>
+          </div>
+          <div>
+            <div class="flow-col-label">Inspection</div>
+            <div class="flow-node"><div class="fn-title">Roof Inspection</div><div class="fn-sub">✓ Photos logged</div></div>
+            <div class="flow-node"><div class="fn-title">Damage Report</div><div class="fn-sub">✓ Sent to adjuster</div></div>
+          </div>
+          <div>
+            <div class="flow-col-label">Estimate</div>
+            <div class="flow-node"><div class="fn-title">Estimate Drafted</div><div class="fn-sub">3 line items</div></div>
+            <div class="flow-node"><div class="fn-title">Sent to Homeowner</div><div class="fn-sub">Awaiting review</div></div>
+          </div>
+          <div>
+            <div class="flow-col-label">Contract</div>
+            <div class="flow-node"><div class="fn-title">Signature Requested</div><div class="fn-sub">DocuSign pending</div></div>
+            <div class="flow-node"><div class="fn-title">Job Scheduled</div><div class="fn-sub">Crew assigned</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row-2col">
+        <div class="list-panel glass">
+          <div class="list-title">Suggested Follow-ups</div>
+          <div class="list-row"><span class="list-name">Marcus Whitmore — updated estimate</span><span class="tag coral">Overdue</span></div>
+          <div class="list-row"><span class="list-name">Reyes claim — adjuster call</span><span class="tag blue">Scheduled</span></div>
+          <div class="list-row"><span class="list-name">Sanchez — send contract</span><span class="tag blue">Executed</span></div>
+          <div class="list-row"><span class="list-name">Cortez — first inspection</span><span class="tag coral">Overdue</span></div>
+        </div>
+        <div class="donut-panel glass">
+          <div class="donut-item">
+            <div class="donut-svg">
+              <svg viewBox="0 0 100 100" width="96" height="96">
+                <circle cx="50" cy="50" r="42" fill="none" stroke="#e9ebee" stroke-width="12"/>
+                <circle cx="50" cy="50" r="42" fill="none" stroke="#6d9eeb" stroke-width="12" stroke-dasharray="184 264" stroke-linecap="round" transform="rotate(-90 50 50)"/>
+              </svg>
+              <div class="donut-num tnum">9</div>
+            </div>
+            <div class="donut-lbl">Estimates sent</div>
+          </div>
+          <div class="donut-item">
+            <div class="donut-svg">
+              <svg viewBox="0 0 100 100" width="96" height="96">
+                <circle cx="50" cy="50" r="42" fill="none" stroke="#e9ebee" stroke-width="12"/>
+                <circle cx="50" cy="50" r="42" fill="none" stroke="#e67c73" stroke-width="12" stroke-dasharray="132 264" stroke-linecap="round" transform="rotate(-90 50 50)"/>
+              </svg>
+              <div class="donut-num tnum">5</div>
+            </div>
+            <div class="donut-lbl">Contracts signed</div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

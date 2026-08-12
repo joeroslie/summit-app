@@ -10,48 +10,91 @@
 :root,
 html[data-theme="day"] {
   color-scheme: light;
-  --background: #c8cdd2;
-  --foreground: #17191c;
-  --surface: #d6dadd;
-  --surface-raised: #eef0f2;
-  --chrome: #aeb4ba;
-  --chrome-line: #bcc1c6;
-  --chrome-soft: #e1e4e6;
-  --graphite: #1c1e21;
-  --graphite-hover: #2a2d32;
-  --steel: #5c6270;
-  --steel-soft: #e3e5e8;
-  --emerald: #059669;
-  --emerald-soft: #ecfdf5;
-  --amber: #b45309;
-  --amber-soft: #fffbeb;
-  /* Muted brick — the one "needs attention" color app-wide (storm alerts, overdue, errors) */
-  --danger: #8a4433;
-  --danger-soft: rgba(138, 68, 51, 0.13);
-  --scrollbar: #aeb4ba;
+  --background: #f3f5f8;
+  --foreground: #111111;
+  --surface: #f3f5f8;
+  --surface-raised: #ffffff;
+  --chrome: #d5dae2;
+  --chrome-line: #e2e6ec;
+  --chrome-soft: #f3f5f8;
+  --graphite: #111111;
+  --graphite-hover: #2a2a2a;
+  --steel: #5c6066;
+  --steel-soft: #e8ebf0;
+  --emerald: #7bc9a6;
+  --emerald-soft: rgba(123, 201, 166, 0.16);
+  --amber: #ffb07a;
+  --amber-soft: rgba(255, 176, 122, 0.16);
+  --danger: #ff7a7a;
+  --danger-soft: rgba(255, 122, 122, 0.16);
+  --scrollbar: #c5cad3;
 
-  /* CTA material — brushed metal, no accent hue to like/dislike. Dark chrome in
-     day mode too (v5): light silver read as washed out against the steel-gray page. */
-  --metal-1: #5a5e64;
-  --metal-2: #42454a;
-  --metal-3: #2e3034;
-  --metal-ink: #f4f5f6;
-  --metal-bevel: rgba(255, 255, 255, 0.18);
-  --metal-hover-brightness: 1.05;
+  /* CTA — flat ink, not chrome. */
+  --metal-1: #111111;
+  --metal-2: #111111;
+  --metal-3: #111111;
+  --metal-ink: #f3f5f8;
+  --metal-bevel: rgba(255, 255, 255, 0.08);
+  --metal-hover-brightness: 1.08;
 
-  /* Pipeline stage identity — spread across the wheel, not one warm-pastel family */
-  --stage-lead: #5c6270;
-  --stage-lead-soft: rgba(92, 98, 112, 0.13);
-  --stage-prospect: #a1751f;
-  --stage-prospect-soft: rgba(161, 117, 31, 0.13);
-  --stage-approved: #1f7d75;
-  --stage-approved-soft: rgba(31, 125, 117, 0.12);
-  --stage-completed: #5b4d9e;
-  --stage-completed-soft: rgba(91, 77, 158, 0.12);
-  --stage-invoiced: #a1521f;
-  --stage-invoiced-soft: rgba(161, 82, 31, 0.13);
-  --stage-closed: #227a55;
-  --stage-closed-soft: rgba(34, 122, 85, 0.15);
+  /* Seasoning — only these hues. */
+  --accent-blue: #6ba6ff;
+  --accent-blue-strong: #6ba6ff;
+  --accent-blue-soft: rgba(107, 166, 255, 0.16);
+  --accent-blue-ink: #111111;
+  --accent-blue-ring: rgba(107, 166, 255, 0.35);
+  --accent-green: #7bc9a6;
+  --accent-green-strong: #7bc9a6;
+  --accent-green-soft: rgba(123, 201, 166, 0.16);
+  --accent-green-ink: #111111;
+  --emphasis-gradient: #111111;
+  --emphasis-shadow: 0 18px 40px -18px rgba(17, 17, 17, 0.28);
+
+  /* Pipeline — exact order. Closed is solid ink. */
+  --stage-lead: #f5d36b;
+  --stage-lead-soft: rgba(245, 211, 107, 0.28);
+  --stage-prospect: #ffb07a;
+  --stage-prospect-soft: rgba(255, 176, 122, 0.24);
+  --stage-approved: #7bc9a6;
+  --stage-approved-soft: rgba(123, 201, 166, 0.22);
+  --stage-completed: #6ba6ff;
+  --stage-completed-soft: rgba(107, 166, 255, 0.22);
+  --stage-invoiced: #ff7a7a;
+  --stage-invoiced-soft: rgba(255, 122, 122, 0.2);
+  --stage-closed: #111111;
+  --stage-closed-soft: rgba(17, 17, 17, 0.1);
+  --stage-closed-ink: #f3f5f8;
+  --dot-ring: rgba(17, 17, 17, 0.12);
+
+  /* Opaque solids — no blur. */
+  --solid-graphite: #111111;
+  --solid-graphite-ink: #f3f5f8;
+  --solid-blue: #6ba6ff;
+  --solid-blue-ink: #111111;
+  --solid-green: #7bc9a6;
+  --solid-green-ink: #111111;
+  --solid-coral: #ff7a7a;
+  --solid-coral-ink: #111111;
+  --solid-danger-soft: var(--solid-coral);
+  --solid-danger-ink: var(--solid-coral-ink);
+
+  /* Frosted glass — low fill so the page wash reads through. */
+  --glass-bg: rgba(255, 255, 255, 0.3);
+  --glass-bg-strong: rgba(255, 255, 255, 0.46);
+  --glass-border: rgba(255, 255, 255, 0.7);
+  --glass-highlight: rgba(255, 255, 255, 0.95);
+  --glass-sheen: rgba(255, 255, 255, 0.5);
+  --glass-shadow:
+    0 18px 40px -18px rgba(17, 17, 17, 0.12),
+    0 4px 12px -4px rgba(17, 17, 17, 0.06);
+  --glass-blur: 32px;
+  --glass-saturate: 1.55;
+  --glass-tint: linear-gradient(transparent, transparent);
+  --page-wash:
+    radial-gradient(circle at 8% -12%, rgba(255, 255, 255, 0.95), transparent 36%),
+    radial-gradient(circle at 88% 4%, rgba(210, 218, 230, 0.55), transparent 42%),
+    radial-gradient(circle at 10% 94%, rgba(186, 196, 210, 0.42), transparent 46%),
+    radial-gradient(circle at 96% 98%, rgba(255, 255, 255, 0.7), transparent 44%);
 
   /* Shared shell — twins pipeline / leads / calendar / docs (max-w-6xl) */
   --page-max: 72rem; /* 1152px */
@@ -74,44 +117,87 @@ html[data-theme="day"] {
 */
 html[data-theme="night"] {
   color-scheme: dark;
-  --background: #131518;
-  --foreground: #e8eaed;
-  --surface: #1a1c20;
-  --surface-raised: #20232a;
-  --chrome: #3a3f48;
-  --chrome-line: #2c3038;
-  --chrome-soft: #1c1f26;
-  --graphite: #e8eaed;
-  --graphite-hover: #f4f5f6;
-  --steel: #8b93a3;
-  --steel-soft: #23262c;
-  --emerald: #34d399;
-  --emerald-soft: #0f2a22;
-  --amber: #fbbf24;
-  --amber-soft: #2a2110;
-  --danger: #b6604a;
-  --danger-soft: rgba(182, 96, 74, 0.16);
-  --scrollbar: #3f4550;
+  --background: #111111;
+  --foreground: #f3f5f8;
+  --surface: #111111;
+  --surface-raised: #111111;
+  --chrome: #2a2a2a;
+  --chrome-line: #2a2a2a;
+  --chrome-soft: #111111;
+  --graphite: #f3f5f8;
+  --graphite-hover: #ffffff;
+  --steel: #a8abb0;
+  --steel-soft: #1c1c1c;
+  --emerald: #7bc9a6;
+  --emerald-soft: rgba(123, 201, 166, 0.16);
+  --amber: #ffb07a;
+  --amber-soft: rgba(255, 176, 122, 0.16);
+  --danger: #ff7a7a;
+  --danger-soft: rgba(255, 122, 122, 0.18);
+  --scrollbar: #3a3a3a;
 
-  --metal-1: #565a62;
-  --metal-2: #3c3f45;
-  --metal-3: #24262a;
-  --metal-ink: #f4f5f6;
-  --metal-bevel: rgba(255, 255, 255, 0.22);
-  --metal-hover-brightness: 1.08;
+  --metal-1: #f3f5f8;
+  --metal-2: #f3f5f8;
+  --metal-3: #f3f5f8;
+  --metal-ink: #111111;
+  --metal-bevel: rgba(17, 17, 17, 0.08);
+  --metal-hover-brightness: 1.04;
 
-  --stage-lead: #8b93a3;
-  --stage-lead-soft: rgba(139, 147, 163, 0.16);
-  --stage-prospect: #d9a441;
-  --stage-prospect-soft: rgba(217, 164, 65, 0.16);
-  --stage-approved: #3fb0a8;
-  --stage-approved-soft: rgba(63, 176, 168, 0.16);
-  --stage-completed: #8776d9;
-  --stage-completed-soft: rgba(135, 118, 217, 0.16);
-  --stage-invoiced: #d9743f;
-  --stage-invoiced-soft: rgba(217, 116, 63, 0.16);
-  --stage-closed: #47b881;
-  --stage-closed-soft: rgba(71, 184, 129, 0.18);
+  /* Same seasoning hexes — not a second palette. */
+  --accent-blue: #6ba6ff;
+  --accent-blue-strong: #6ba6ff;
+  --accent-blue-soft: rgba(107, 166, 255, 0.18);
+  --accent-blue-ink: #f3f5f8;
+  --accent-blue-ring: rgba(107, 166, 255, 0.4);
+  --accent-green: #7bc9a6;
+  --accent-green-strong: #7bc9a6;
+  --accent-green-soft: rgba(123, 201, 166, 0.18);
+  --accent-green-ink: #f3f5f8;
+  --emphasis-gradient: #f3f5f8;
+  --emphasis-shadow: 0 18px 40px -16px rgba(0, 0, 0, 0.55);
+
+  --stage-lead: #f5d36b;
+  --stage-lead-soft: rgba(245, 211, 107, 0.22);
+  --stage-prospect: #ffb07a;
+  --stage-prospect-soft: rgba(255, 176, 122, 0.2);
+  --stage-approved: #7bc9a6;
+  --stage-approved-soft: rgba(123, 201, 166, 0.2);
+  --stage-completed: #6ba6ff;
+  --stage-completed-soft: rgba(107, 166, 255, 0.2);
+  --stage-invoiced: #ff7a7a;
+  --stage-invoiced-soft: rgba(255, 122, 122, 0.2);
+  /* Ink pair flips so Closed stays a focal solid on #111111 ground. */
+  --stage-closed: #f3f5f8;
+  --stage-closed-soft: rgba(243, 245, 248, 0.14);
+  --stage-closed-ink: #111111;
+  --dot-ring: rgba(255, 255, 255, 0.2);
+
+  --solid-graphite: #f3f5f8;
+  --solid-graphite-ink: #111111;
+  --solid-blue: #6ba6ff;
+  --solid-blue-ink: #111111;
+  --solid-green: #7bc9a6;
+  --solid-green-ink: #111111;
+  --solid-coral: #ff7a7a;
+  --solid-coral-ink: #111111;
+  --solid-danger-soft: var(--solid-coral);
+  --solid-danger-ink: var(--solid-coral-ink);
+
+  /* Frosted film on matte #111111 — faint wash so blur has an edge to catch. */
+  --glass-bg: rgba(255, 255, 255, 0.07);
+  --glass-bg-strong: rgba(255, 255, 255, 0.11);
+  --glass-border: rgba(255, 255, 255, 0.14);
+  --glass-highlight: rgba(255, 255, 255, 0.1);
+  --glass-sheen: rgba(255, 255, 255, 0.06);
+  --glass-shadow:
+    0 18px 40px -16px rgba(0, 0, 0, 0.45),
+    0 4px 12px -4px rgba(0, 0, 0, 0.3);
+  --glass-blur: 24px;
+  --glass-saturate: 1.12;
+  --glass-tint: linear-gradient(transparent, transparent);
+  --page-wash:
+    radial-gradient(circle at 16% -8%, rgba(255, 255, 255, 0.06), transparent 42%),
+    radial-gradient(circle at 92% 100%, rgba(255, 255, 255, 0.04), transparent 50%);
 
   /* Zinc inverted so bg-zinc-100 / text-zinc-900 work in both themes */
   --color-zinc-50: oklch(14.1% 0.005 285.823);
@@ -140,12 +226,12 @@ html[data-theme="night"] {
   --color-slate-950: oklch(98.5% 0 0);
 
   /* Soft washes → deep tinted panels */
-  --color-emerald-50: oklch(22% 0.04 160);
-  --color-emerald-100: oklch(26% 0.05 160);
-  --color-emerald-200: oklch(32% 0.06 160);
-  --color-emerald-700: oklch(72% 0.14 160);
-  --color-emerald-800: oklch(78% 0.12 160);
-  --color-emerald-900: oklch(86% 0.08 160);
+  --color-emerald-50: oklch(22% 0.025 150);
+  --color-emerald-100: oklch(26% 0.03 150);
+  --color-emerald-200: oklch(32% 0.035 150);
+  --color-emerald-700: oklch(72% 0.07 150);
+  --color-emerald-800: oklch(78% 0.06 150);
+  --color-emerald-900: oklch(86% 0.04 150);
   --color-amber-50: oklch(24% 0.04 80);
   --color-amber-100: oklch(28% 0.05 80);
   --color-amber-200: oklch(34% 0.06 80);
@@ -153,12 +239,12 @@ html[data-theme="night"] {
   --color-amber-800: oklch(82% 0.12 75);
   --color-amber-900: oklch(88% 0.08 80);
   --color-amber-950: oklch(92% 0.05 80);
-  --color-sky-50: oklch(22% 0.03 230);
-  --color-sky-100: oklch(26% 0.04 230);
-  --color-sky-700: oklch(72% 0.1 230);
-  --color-sky-800: oklch(78% 0.09 230);
-  --color-sky-900: oklch(86% 0.06 230);
-  --color-sky-950: oklch(92% 0.03 230);
+  --color-sky-50: oklch(22% 0.02 230);
+  --color-sky-100: oklch(26% 0.025 230);
+  --color-sky-700: oklch(72% 0.06 230);
+  --color-sky-800: oklch(78% 0.05 230);
+  --color-sky-900: oklch(86% 0.04 230);
+  --color-sky-950: oklch(92% 0.02 230);
   --color-red-50: oklch(24% 0.05 25);
   --color-red-100: oklch(28% 0.06 25);
   --color-red-200: oklch(34% 0.07 25);
@@ -168,13 +254,11 @@ html[data-theme="night"] {
   --color-orange-50: oklch(24% 0.04 55);
   --color-orange-100: oklch(28% 0.05 55);
   --color-orange-200: oklch(34% 0.06 55);
-  --color-sky-200: oklch(32% 0.04 230);
-  --color-sky-300: oklch(42% 0.06 230);
-  --color-sky-500: oklch(68% 0.12 230);
+  --color-sky-200: oklch(32% 0.03 230);
+  --color-sky-300: oklch(42% 0.04 230);
+  --color-sky-500: oklch(68% 0.07 230);
 
-  /* Teal (Approved stage) + Indigo (Completed stage) — new hues for the stage palette,
-     inverted the same way as emerald/amber/sky above so their badges/dots/rings read as
-     dark tinted panels at night instead of a glaring light patch. */
+  /* Night invert for leftover teal/indigo utilities — stages themselves use --stage-* tokens. */
   --color-teal-50: oklch(22% 0.04 180);
   --color-teal-100: oklch(26% 0.05 180);
   --color-teal-200: oklch(32% 0.06 180);
@@ -216,8 +300,8 @@ html[data-theme="night"] :where(.bg-white\/10) {
 }
 /* Inverted zinc-900 is light — intentional dark chrome stays graphite */
 html[data-theme="night"] :where(.bg-zinc-900, .bg-zinc-800) {
-  background-color: #2a2e36;
-  color: #f4f5f6;
+  background-color: #f3f5f8;
+  color: #111111;
 }
 html[data-theme="night"] :where(.ring-white) {
   --tw-ring-color: rgb(255 255 255 / 0.12);
@@ -235,14 +319,15 @@ html[data-theme="night"] :where(.ring-white) {
   --color-steel-soft: var(--steel-soft);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
+  --color-accent-blue: var(--accent-blue);
+  --color-accent-green: var(--accent-green);
   --color-stage-lead: var(--stage-lead);
   --color-stage-prospect: var(--stage-prospect);
   --color-stage-approved: var(--stage-approved);
   --color-stage-completed: var(--stage-completed);
   --color-stage-invoiced: var(--stage-invoiced);
   --color-stage-closed: var(--stage-closed);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-plus-jakarta);
 }
 
 html {
@@ -254,15 +339,161 @@ html {
 }
 
 body {
-  background: var(--background);
+  background-color: var(--background);
+  background-image: var(--page-wash);
+  background-attachment: fixed;
   color: var(--foreground);
-  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  font-family: var(--font-sans), "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  font-weight: 400;
+  letter-spacing: 0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overscroll-behavior-y: none;
   transition:
     background-color 0.2s ease,
     color 0.15s ease;
+}
+
+/* Type roles — Plus Jakarta Sans. Weight + tracking carry hierarchy; no second family. */
+h1.text-3xl {
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.text-4xl.font-bold,
+.text-5xl.font-bold {
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.text-2xl.tabular-nums,
+.text-3xl.tabular-nums,
+.text-4xl.tabular-nums,
+.text-5xl.tabular-nums {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.text-xs.uppercase,
+.text-\[10px\].uppercase,
+.text-\[11px\].uppercase {
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+
+html[data-theme="night"] body {
+  letter-spacing: 0.01em;
+  font-weight: 500;
+}
+
+/*
+  Glass — default card material. Fill stays low so the page wash refracts through.
+  Optional --glass-tint is a second gradient (storm seasoning), never a solid fill.
+*/
+.glass {
+  isolation: isolate;
+  background-color: var(--glass-bg);
+  background-image:
+    linear-gradient(155deg, var(--glass-sheen) 0%, transparent 46%),
+    var(--glass-tint);
+  border: 1px solid var(--glass-border);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-highlight);
+  transition:
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease,
+    background-color 0.2s ease;
+}
+.glass-hover:hover {
+  border-color: var(--glass-highlight);
+  transform: translateY(-2px);
+}
+.glass-tint-blue {
+  --glass-tint: linear-gradient(
+    165deg,
+    color-mix(in srgb, var(--accent-blue) 10%, transparent),
+    transparent 64%
+  );
+}
+.glass-tint-coral {
+  --glass-tint: linear-gradient(
+    165deg,
+    color-mix(in srgb, var(--danger) 10%, transparent),
+    transparent 64%
+  );
+}
+
+/* Stronger/less-blurred glass for chrome that sits above scrolling content
+   (sidebar, header) — needs to stay legible while still showing the wash. */
+.glass-strong {
+  background-color: var(--glass-bg-strong);
+  background-image:
+    linear-gradient(155deg, var(--glass-sheen) 0%, transparent 46%),
+    var(--glass-tint);
+  border-color: var(--glass-border);
+  -webkit-backdrop-filter: blur(calc(var(--glass-blur) + 6px)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(calc(var(--glass-blur) + 6px)) saturate(var(--glass-saturate));
+}
+
+.emphasis-panel {
+  background: var(--emphasis-gradient);
+  color: var(--solid-graphite-ink);
+  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  box-shadow: var(--emphasis-shadow);
+}
+
+.tint-blue {
+  background: var(--accent-blue-soft);
+  color: var(--accent-blue-ink);
+}
+
+/* Opaque solid cards — no backdrop-filter. Ink inherits; .solid-muted fades it. */
+.solid-graphite,
+.solid-blue,
+.solid-green,
+.solid-coral,
+.solid-danger-soft {
+  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  box-shadow: 0 14px 32px -16px rgba(17, 17, 17, 0.22);
+}
+.solid-graphite {
+  background-color: var(--solid-graphite);
+  color: var(--solid-graphite-ink);
+}
+.solid-blue {
+  background-color: var(--solid-blue);
+  color: var(--solid-blue-ink);
+}
+.solid-green {
+  background-color: var(--solid-green);
+  color: var(--solid-green-ink);
+}
+.solid-coral,
+.solid-danger-soft {
+  background-color: var(--solid-coral);
+  color: var(--solid-coral-ink);
+}
+.solid-muted {
+  color: color-mix(in srgb, currentColor 62%, transparent);
+}
+.solid-hover {
+  transition:
+    transform 0.2s ease,
+    filter 0.2s ease,
+    box-shadow 0.2s ease;
+}
+.solid-hover:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.04);
+}
+html[data-theme="night"] .solid-graphite,
+html[data-theme="night"] .solid-blue,
+html[data-theme="night"] .solid-green,
+html[data-theme="night"] .solid-coral,
+html[data-theme="night"] .solid-danger-soft {
+  box-shadow: 0 16px 36px -14px rgba(0, 0, 0, 0.5);
 }
 
 button,
@@ -300,8 +531,7 @@ button,
   scrollbar-color: var(--scrollbar) transparent;
 }
 
-/* Primary CTA — brushed metal, no accent hue (forced so utilities don't win).
-   Dark chrome in both day and night (v5) — same gradient shape, tokens flip by theme. */
+/* Primary CTA — flat ink (forced so utilities don't win). */
 .btn-primary {
   border-radius: 9999px !important;
   padding: 8px 16px !important;
@@ -492,12 +722,12 @@ html[data-theme="night"] .steel-wash {
 .leaflet-container {
   width: 100% !important;
   height: 100% !important;
-  background: #e6e8eb;
+  background: #f3f5f8;
   font: inherit;
   z-index: 0;
 }
 html[data-theme="night"] .leaflet-container {
-  background: #1a1d24;
+  background: #111111;
 }
 
 .leaflet-tile-pane {
@@ -618,23 +848,23 @@ html[data-theme="night"] .lead-card:hover {
 /* Calendar day selected / focus highlight */
 .day-highlight {
   background: white !important;
-  border: 2px solid #0ea5e9 !important;
-  color: #0ea5e9 !important;
-  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.1) !important;
+  border: 2px solid var(--accent-blue) !important;
+  color: var(--accent-blue-ink) !important;
+  box-shadow: 0 0 0 3px var(--accent-blue-soft) !important;
 }
 
 html[data-theme="night"] .day-highlight {
   background: var(--surface-raised) !important;
-  border-color: #38bdf8 !important;
-  color: #38bdf8 !important;
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15) !important;
+  border-color: var(--accent-blue) !important;
+  color: var(--accent-blue-ink) !important;
+  box-shadow: 0 0 0 3px var(--accent-blue-soft) !important;
 }
 
 /* === Summit PDF / print type scale (cohesive with app) === */
 .estimate-preview,
 .printable-estimate,
 .summit-estimate-pdf {
-  font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-family: var(--font-sans), "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   color: #0f172a; /* slate-900 */
   line-height: 1.35;
 }
@@ -710,7 +940,7 @@ html[data-theme="night"] .day-highlight {
   .estimate-preview,
   .printable-estimate,
   .summit-estimate-pdf {
-    font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-family: var(--font-sans), "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     color: #0f172a;
   }
 }

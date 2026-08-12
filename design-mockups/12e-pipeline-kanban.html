@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Summit — Pipeline (BizLink reproduction)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --mist: #eef1ea;
+    --mist-2: #e5e9df;
+    --white: #ffffff;
+    --ink: #14161a;
+    --ink-soft: #4d5158;
+    --muted: #8a8f97;
+    --line: #e4e7e0;
+    --lime: #d7f24e;
+    --lime-ink: #1c2312;
+    --radius-lg: 26px;
+    --radius-md: 18px;
+    --radius-sm: 12px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: var(--mist); color: var(--ink); font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /*
+    Type scale for this whole board: 10 / 13 / 20px only (ratios 1.3, 1.54).
+    Meta (badges, addresses, chrome labels) sits at 10, every identity string
+    (names, nav, section titles) sits at 13, every number the eye should land
+    on first ($ values, gauges, stat totals, the wordmark) sits at 20.
+  */
+  .lab-strip { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 14px; background: var(--ink); color: #fff; padding: 10px 24px; font-size: 13px; font-weight: 600; }
+  .lab-strip a { color: #fff; text-decoration: none; opacity: 0.75; }
+  .lab-strip a:hover { opacity: 1; }
+  .lab-strip .sep { opacity: 0.35; }
+  .lab-strip .thesis { opacity: 0.75; }
+  .lab-strip .thesis b { color: var(--lime); font-weight: 700; opacity: 1; }
+
+  .shell { display: flex; min-height: calc(100vh - 41px); }
+  .sidebar { width: 232px; background: var(--white); border-right: 1px solid var(--line); padding: 26px 16px; flex-shrink: 0; display: flex; flex-direction: column; }
+  .logo { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; padding: 0 8px 22px; }
+  .logo span { color: var(--lime-ink); background: var(--lime); border-radius: 7px; padding: 1px 7px; margin-right: 2px; font-size: 13px; }
+  .nav { display: flex; flex-direction: column; gap: 2px; }
+  .nav-item { display: flex; align-items: center; justify-content: space-between; padding: 9px 10px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; color: var(--ink-soft); text-decoration: none; }
+  .nav-item-left { display: flex; align-items: center; gap: 10px; }
+  .nav-item .ic { width: 17px; height: 17px; border-radius: 5px; background: var(--mist); flex-shrink: 0; }
+  .nav-item.active { background: var(--ink); color: #fff; }
+  .nav-item.active .ic { background: var(--lime); }
+  .nav-badge { font-size: 10px; font-weight: 700; background: var(--mist); color: var(--ink-soft); border-radius: 999px; padding: 1px 7px; }
+  .nav-item.active .nav-badge { background: rgba(255,255,255,0.18); color: #fff; }
+  .nav-section { margin-top: 22px; padding: 0 10px; font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  .crew-item { display: flex; align-items: center; gap: 9px; padding: 6px 10px; font-size: 13px; font-weight: 600; }
+  .crew-item .avatar { width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0; }
+  .crew-item .crole { display: block; font-size: 10px; color: var(--muted); font-weight: 400; }
+  .sidebar-bottom { margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 14px 10px 4px; border-top: 1px solid var(--line); }
+  .sidebar-bottom .name { font-size: 13px; font-weight: 700; }
+  .sidebar-bottom .role { font-size: 10px; color: var(--muted); }
+
+  .main { flex: 1; padding: 26px 34px 60px; min-width: 0; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 20px; flex-wrap: wrap; }
+  .search { flex: 1; max-width: 320px; background: var(--mist-2); border-radius: 999px; padding: 10px 16px; font-size: 10px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+  .topbar-actions { display: flex; align-items: center; gap: 10px; }
+  .filter-btn { background: var(--white); border: 1px solid var(--line); border-radius: 999px; padding: 9px 16px; font-size: 10px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; color: var(--ink-soft); }
+  .btn-new-lead { background: var(--ink); color: #fff; border: none; border-radius: 999px; padding: 10px 20px; font-size: 13px; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; }
+  .btn-new-lead .plus { color: var(--lime); font-weight: 800; }
+
+  /* dashboard summary block — the composition BizLink actually pairs above its kanban board */
+  .summary-panel { background: var(--mist-2); border-radius: var(--radius-lg); padding: 24px; display: grid; grid-template-columns: 1.1fr 0.8fr 1fr; gap: 20px; margin-bottom: 22px; }
+  .summary-card { background: var(--white); border-radius: var(--radius-md); padding: 18px 20px; }
+  .summary-label { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+  .bars { display: flex; align-items: flex-end; gap: 7px; height: 58px; }
+  .bar { flex: 1; background: repeating-linear-gradient(135deg, var(--ink) 0 3px, transparent 3px 6px); border-radius: 5px 5px 0 0; }
+  .bar.hi { background: var(--lime); }
+  .bar-days { display: flex; justify-content: space-between; margin-top: 6px; font-size: 10px; color: var(--muted); }
+  .gauge-wrap { text-align: center; }
+  .gauge-svg-num { font-size: 20px; font-weight: 800; margin-top: -30px; }
+  .gauge-lbl { font-size: 10px; color: var(--ink-soft); font-weight: 600; }
+  .stat-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--mist); }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-val { font-size: 20px; font-weight: 800; }
+  .stat-lbl { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .stat-arrow { color: var(--muted); font-size: 13px; }
+
+  .board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+  .col-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 0 4px; }
+  .col-title { font-size: 13px; font-weight: 700; }
+  .col-count { font-size: 10px; font-weight: 700; color: var(--muted); background: var(--white); border-radius: 999px; padding: 2px 9px; }
+
+  .lead-card { background: var(--white); border: 1px solid var(--line); border-radius: var(--radius-md); padding: 18px; margin-bottom: 12px; }
+  .lead-card .name { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+  .lead-card .addr { font-size: 10px; color: var(--muted); margin-bottom: 12px; line-height: 1.4; }
+  .lead-card .foot { display: flex; align-items: center; justify-content: space-between; }
+  .lead-card .val { font-size: 20px; font-weight: 800; }
+  .date-badge { font-size: 10px; font-weight: 700; color: var(--ink-soft); background: var(--mist); border-radius: 7px; padding: 3px 8px; }
+  .icon-row { display: flex; gap: 12px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 10px; color: var(--muted); }
+  .icon-row span { display: flex; align-items: center; gap: 4px; }
+
+  .lead-card.highlight { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .lead-card.highlight .addr { color: rgba(255,255,255,0.6); }
+  .lead-card.highlight .date-badge { background: var(--lime); color: var(--lime-ink); }
+  .lead-card.highlight .icon-row { border-top-color: rgba(255,255,255,0.12); color: rgba(255,255,255,0.55); }
+  .lead-card.highlight .detail-row { display: flex; justify-content: space-between; font-size: 10px; padding: 6px 0; border-top: 1px solid rgba(255,255,255,0.1); }
+  .lead-card.highlight .detail-row .lbl { color: rgba(255,255,255,0.55); }
+  .lead-card.highlight .manager { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+  .lead-card.highlight .manager .avatar { width: 26px; height: 26px; border-radius: 50%; }
+  .lead-card.highlight .manager .mname { font-size: 10px; font-weight: 700; }
+
+  @media (max-width: 1100px) {
+    .sidebar { display: none; }
+    .summary-panel { grid-template-columns: 1fr; }
+    .board { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+  <div class="lab-strip">
+    <a href="12-index.html">← Back to index</a>
+    <span class="sep">·</span>
+    <span class="thesis">Sample E — 1:1 reproduction of the full <b>BizLink</b> screen: sidebar with nav badges + crew list, dashboard summary block, kanban board together in one composition</span>
+  </div>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="logo"><span>S</span>Summit</div>
+      <nav class="nav">
+        <a class="nav-item"><span class="nav-item-left"><span class="ic"></span>Home</span></a>
+        <a class="nav-item active"><span class="nav-item-left"><span class="ic"></span>Pipeline</span></a>
+        <a class="nav-item"><span class="nav-item-left"><span class="ic"></span>Estimates</span><span class="nav-badge tnum">3</span></a>
+        <a class="nav-item"><span class="nav-item-left"><span class="ic"></span>Orders</span></a>
+        <a class="nav-item"><span class="nav-item-left"><span class="ic"></span>Documents</span></a>
+        <a class="nav-item"><span class="nav-item-left"><span class="ic"></span>Calendar</span></a>
+        <a class="nav-item"><span class="nav-item-left"><span class="ic"></span>Tasks</span><span class="nav-badge tnum">2</span></a>
+      </nav>
+      <div class="nav-section">Active Crews</div>
+      <div class="crew-item"><span class="avatar" style="background:linear-gradient(135deg,#cfe0c8,#9fb894)"></span><span>Danny Reyes<span class="crole">Estimator</span></span></div>
+      <div class="crew-item"><span class="avatar" style="background:linear-gradient(135deg,#d9c9a8,#b9975f)"></span><span>Mia Torres<span class="crole">Ops Lead</span></span></div>
+      <div class="sidebar-bottom">
+        <span class="avatar" style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#c9d0da,#8b95a3)"></span>
+        <div>
+          <div class="name">Joe</div>
+          <div class="role">Owner</div>
+        </div>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div class="search">🔍 Search leads</div>
+        <div class="topbar-actions">
+          <span class="filter-btn">Sort by ▾</span>
+          <span class="filter-btn">Filters</span>
+          <button class="btn-new-lead"><span class="plus">+</span> New Lead</button>
+        </div>
+      </header>
+
+      <section class="summary-panel">
+        <div class="summary-card">
+          <div class="summary-label">New Leads · This Week</div>
+          <div class="bars">
+            <div class="bar" style="height:38%"></div>
+            <div class="bar" style="height:55%"></div>
+            <div class="bar hi" style="height:82%"></div>
+            <div class="bar" style="height:44%"></div>
+            <div class="bar" style="height:66%"></div>
+            <div class="bar" style="height:30%"></div>
+            <div class="bar" style="height:20%"></div>
+          </div>
+          <div class="bar-days"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
+        </div>
+        <div class="summary-card gauge-wrap">
+          <div class="summary-label">Win Rate</div>
+          <svg viewBox="0 0 120 66" width="110" height="60">
+            <path d="M10 60 A50 50 0 0 1 110 60" fill="none" stroke="#eef1ea" stroke-width="12" stroke-linecap="round"/>
+            <path d="M10 60 A50 50 0 0 1 92 22" fill="none" stroke="#d7f24e" stroke-width="12" stroke-linecap="round"/>
+          </svg>
+          <div class="gauge-svg-num tnum">68%</div>
+          <div class="gauge-lbl">Deals closed vs. quoted</div>
+        </div>
+        <div class="summary-card">
+          <div class="stat-row"><div><div class="stat-val tnum">14</div><div class="stat-lbl">Active jobs</div></div><span class="stat-arrow">→</span></div>
+          <div class="stat-row"><div><div class="stat-val tnum">$482,600</div><div class="stat-lbl">Pipeline value</div></div><span class="stat-arrow">→</span></div>
+        </div>
+      </section>
+
+      <section class="board">
+        <div>
+          <div class="col-head"><span class="col-title">Lead</span><span class="col-count">2</span></div>
+          <div class="lead-card">
+            <div class="name">Angela Cortez</div>
+            <div class="addr">118 W Palm Ln, Chandler, AZ<br/>Storm lead, first contact</div>
+            <div class="foot"><span class="val tnum">$18,400</span><span class="date-badge">Aug 5</span></div>
+            <div class="icon-row"><span>💬 2</span><span>📎 1</span></div>
+          </div>
+          <div class="lead-card">
+            <div class="name">Ray Thomas</div>
+            <div class="addr">3390 E Fry Rd, Gilbert, AZ<br/>Hail inspection requested</div>
+            <div class="foot"><span class="val tnum">$22,100</span><span class="date-badge">Aug 6</span></div>
+            <div class="icon-row"><span>💬 0</span><span>📎 0</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="col-head"><span class="col-title">Prospect</span><span class="col-count">2</span></div>
+          <div class="lead-card">
+            <div class="name">Dana Whitfield</div>
+            <div class="addr">552 N Alma School Rd, Mesa, AZ<br/>Estimate walkthrough scheduled</div>
+            <div class="foot"><span class="val tnum">$34,900</span><span class="date-badge">Aug 7</span></div>
+            <div class="icon-row"><span>💬 4</span><span>📎 2</span></div>
+          </div>
+          <div class="lead-card">
+            <div class="name">Sanchez Family</div>
+            <div class="addr">771 E Broadway Rd, Tempe, AZ<br/>Adjuster meeting Thursday</div>
+            <div class="foot"><span class="val tnum">$41,200</span><span class="date-badge">Aug 8</span></div>
+            <div class="icon-row"><span>💬 1</span><span>📎 3</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="col-head"><span class="col-title">Approved</span><span class="col-count">2</span></div>
+          <div class="lead-card highlight">
+            <div class="name">Marcus Whitmore</div>
+            <div class="addr">4821 E Cactus Rd, Scottsdale, AZ</div>
+            <div class="foot"><span class="val tnum">$52,000</span><span class="date-badge">Job #10482</span></div>
+            <div class="detail-row"><span class="lbl">Phone</span><span>(480) 555-0148</span></div>
+            <div class="detail-row"><span class="lbl">Carrier</span><span>State Farm</span></div>
+            <div class="manager"><span class="avatar" style="background:linear-gradient(135deg,#c9d0da,#8b95a3)"></span><span class="mname">Danny — Estimator</span></div>
+          </div>
+          <div class="lead-card">
+            <div class="name">Ironwood Estates HOA</div>
+            <div class="addr">90 units, phase 1<br/>Contract signed, crew scheduling</div>
+            <div class="foot"><span class="val tnum">$168,400</span><span class="date-badge">Aug 4</span></div>
+            <div class="icon-row"><span>💬 6</span><span>📎 5</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="col-head"><span class="col-title">Closed Won</span><span class="col-count">2</span></div>
+          <div class="lead-card">
+            <div class="name">Kevin Park</div>
+            <div class="addr">214 S Extension Rd, Mesa, AZ<br/>Invoiced, payment pending</div>
+            <div class="foot"><span class="val tnum">$33,100</span><span class="date-badge">Jul 29</span></div>
+            <div class="icon-row"><span>💬 2</span><span>📎 1</span></div>
+          </div>
+          <div class="lead-card">
+            <div class="name">Reyes Residence</div>
+            <div class="addr">55 W Vernon Ave, Phoenix, AZ<br/>Paid in full</div>
+            <div class="foot"><span class="val tnum">$28,750</span><span class="date-badge">Jul 22</span></div>
+            <div class="icon-row"><span>💬 0</span><span>📎 2</span></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

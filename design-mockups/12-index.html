@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Summit — Visuals Series (12)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #121214;
+    --surface: #1a1b1e;
+    --border: rgba(255,255,255,0.08);
+    --text-primary: #f2f1ef;
+    --text-secondary: #a3a4a8;
+    --text-muted: #6c6d72;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 76px 32px 100px; }
+  .kicker { font-size: 12px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 14px; }
+  h1 { font-size: 38px; font-weight: 800; letter-spacing: -0.02em; margin: 0 0 14px; }
+  .intro { font-size: 15.5px; color: var(--text-secondary); max-width: 700px; line-height: 1.65; margin-bottom: 20px; }
+  .intro b { color: var(--text-primary); }
+
+  .revision-note { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 18px 22px; margin: 28px 0 44px; font-size: 13.5px; color: var(--text-secondary); line-height: 1.6; }
+  .revision-note b { color: var(--text-primary); }
+
+  .section-label { font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); margin: 44px 0 18px; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  a.card {
+    display: block; text-decoration: none; color: inherit;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 18px;
+    overflow: hidden; transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+  }
+  a.card:hover { transform: translateY(-4px); box-shadow: 0 20px 40px -14px rgba(0,0,0,0.55); }
+  .swatch { height: 120px; position: relative; }
+  .swatch .dots { position: absolute; bottom: 14px; left: 18px; display: flex; gap: 8px; }
+  .swatch .dot { width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 2px 6px rgba(0,0,0,0.35); }
+  .card-body { padding: 18px 20px 22px; }
+  .card-letter { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px; }
+  .card-title { font-size: 17.5px; font-weight: 700; margin-bottom: 8px; letter-spacing: -0.01em; }
+  .card-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.55; }
+  .card-ref { font-size: 11.5px; color: var(--text-muted); margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
+
+  .swatch.a { background: linear-gradient(150deg, #f5f3e9, #eeebdd); }
+  .swatch.a::after { content:""; position:absolute; inset:0; background: radial-gradient(circle at 82% 18%, rgba(212,240,0,0.55), transparent 55%); }
+  .swatch.b { background: linear-gradient(135deg, #dfe6ee, #eef1f5); }
+  .swatch.b::after { content:""; position:absolute; inset:0; background: radial-gradient(circle at 15% 15%, rgba(109,158,235,0.45), transparent 55%), radial-gradient(circle at 85% 75%, rgba(230,124,115,0.35), transparent 55%); }
+  .swatch.c { background: linear-gradient(135deg, #0b0e14, #14181f); }
+  .swatch.c::after { content:""; position:absolute; inset:0; background: radial-gradient(circle at 80% 25%, rgba(162,255,50,0.4), transparent 55%); }
+  .swatch.d { background: linear-gradient(180deg, #2b65ec 0 25%, #f2ea4e 25% 50%, #1c1e22 50% 75%, #4a828f 75% 100%); }
+  .swatch.e { background: linear-gradient(135deg, #f0f2ed, #e6e9e1); }
+  .swatch.e::after { content:""; position:absolute; inset:0; background: radial-gradient(circle at 78% 22%, rgba(215,242,78,0.5), transparent 55%); }
+
+  .footer-note { margin-top: 56px; font-size: 13px; color: var(--text-muted); line-height: 1.6; }
+  .footer-note a { color: var(--text-secondary); }
+  @media (max-width: 900px) { .cards { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="kicker">Design Exploration · Visuals Board → Summit</div>
+    <h1>Summit, wearing five different worlds</h1>
+    <p class="intro">
+      Each sample below is a <b>direct structural reproduction of one specific reference screenshot</b> —
+      same composition, same signature chart types, same card shapes — with Summit's real content standing
+      in for the demo data. Not a recolored dashboard template five times over.
+    </p>
+
+    <div class="revision-note">
+      <b>Revised after v1 feedback.</b> The first pass reused one generic topbar/stat-grid/card-grid scaffold
+      across all five files and only swapped accent colors — that's the exact "same-size cards as page structure"
+      pattern the craft floor bans, and none of it actually looked like the screenshots. This pass rebuilds each
+      sample from its reference's real signature elements: RealtyHub's striped/solid progress bar and capsule
+      bar chart, SugarCRM's SVG flowchart connectors and donut charts, Salesforce's cost-breakdown grid and
+      payout chips, the mobile app's full-width color stack at its own phone width, BizLink's dashboard-summary-
+      plus-kanban composition in one screen.
+    </div>
+
+    <div class="section-label">Five reproductions</div>
+    <div class="cards">
+      <a class="card" href="12a-mist-lime.html">
+        <div class="swatch a"><div class="dots"><span class="dot" style="background:#f1efe6"></span><span class="dot" style="background:#d4f000"></span><span class="dot" style="background:#14161a"></span></div></div>
+        <div class="card-body">
+          <div class="card-letter">A · Home</div>
+          <div class="card-title">Lime Bento</div>
+          <div class="card-desc">Warm-cream bento grid: striped/solid combined progress bar, half-circle SVG gauges, a sunburst feature card, and a capsule bar chart — the actual signature shapes, not a recolored stat row.</div>
+          <div class="card-ref">Reference: RealtyHub bento dashboard</div>
+        </div>
+      </a>
+      <a class="card" href="12b-glass-workflow.html">
+        <div class="swatch b"><div class="dots"><span class="dot" style="background:#eef1f5"></span><span class="dot" style="background:#6d9eeb"></span><span class="dot" style="background:#e67c73"></span></div></div>
+        <div class="card-body">
+          <div class="card-letter">B · Home</div>
+          <div class="card-title">Glass Flowchart</div>
+          <div class="card-desc">Avatar strip with status dots, a real SVG-routed flowchart connecting four stage columns, and two donut charts — frosted panels on a soft mesh ground, no neon.</div>
+          <div class="card-ref">Reference: SugarCRM Customer Journeys</div>
+        </div>
+      </a>
+      <a class="card" href="12c-night-signal.html">
+        <div class="swatch c"><div class="dots"><span class="dot" style="background:#0b0e14"></span><span class="dot" style="background:#a2ff32"></span><span class="dot" style="background:#f5f6f8"></span></div></div>
+        <div class="card-body">
+          <div class="card-letter">C · Home</div>
+          <div class="card-title">Night Signal</div>
+          <div class="card-desc">Multi-tab pill nav, a payout card with payment-method chips, a white contrast panel for hot leads, and a cost-breakdown grid with trend arrows in the detail panel.</div>
+          <div class="card-ref">Reference: Salesforce dark invoices dashboard</div>
+        </div>
+      </a>
+      <a class="card" href="12d-color-bento.html">
+        <div class="swatch d"></div>
+        <div class="card-body">
+          <div class="card-letter">D · Pipeline (mobile)</div>
+          <div class="card-title">Color Stack</div>
+          <div class="card-desc">Rendered at the reference's own 390px phone width — a vertical stack of full-width solid-color deal cards (blue / yellow / graphite / teal), not stretched into a desktop grid.</div>
+          <div class="card-ref">Reference: mobile "Interaction History" screen</div>
+        </div>
+      </a>
+      <a class="card" href="12e-pipeline-kanban.html">
+        <div class="swatch e"><div class="dots"><span class="dot" style="background:#f0f2ed"></span><span class="dot" style="background:#d7f24e"></span><span class="dot" style="background:#14161a"></span></div></div>
+        <div class="card-body">
+          <div class="card-letter">E · Pipeline</div>
+          <div class="card-title">Dashboard + Kanban</div>
+          <div class="card-desc">The full original composition: sidebar with nav badges and crew list, a bar/gauge/stat summary panel, and a 4-column kanban board with one inverted highlight card — together in one screen.</div>
+          <div class="card-ref">Reference: BizLink full dashboard screen</div>
+        </div>
+      </a>
+    </div>
+
+    <div class="footer-note">
+      Exploration only — no changes to <code>app/globals.css</code> or <code>app/page.tsx</code>. Tell me which
+      reproduction to push further, or which two to fuse into one direction.
+    </div>
+  </div>
+</body>
+</html>

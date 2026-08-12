@@ -18,8 +18,9 @@ export const PIPELINE_STAGES: PipelineStage[] = [
 ];
 
 /**
- * Home + Leads: matte chrome cards; small colored stage dots for character.
- * Lead amber · Prospect orange · Approved emerald · Completed blue · Invoiced amber · Closed emerald
+ * Home + Pipeline: stage color lives in CSS tokens (--stage-*).
+ * Lead #F5D36B → Prospect #FFB07A → Approved #7BC9A6 →
+ * Completed #6BA6FF → Invoiced #FF7A7A → Closed ink #111111 (solid badge).
  */
 export const PIPELINE_STAGE_STYLES: Record<
   PipelineStage,
@@ -44,7 +45,7 @@ export const PIPELINE_STAGE_STYLES: Record<
     column: 'bg-zinc-100 border-zinc-200',
     header: 'text-zinc-900',
     pill: 'bg-white border-zinc-200 text-zinc-600',
-    badge: 'bg-[var(--stage-lead-soft)] text-stage-lead border-transparent',
+    badge: 'bg-[var(--stage-lead-soft)] text-[var(--foreground)] border-transparent',
     dash: 'bg-stage-lead',
     ring: 'ring-stage-lead/50',
     cardAccent: '',
@@ -56,7 +57,7 @@ export const PIPELINE_STAGE_STYLES: Record<
     column: 'bg-zinc-100 border-zinc-200',
     header: 'text-zinc-900',
     pill: 'bg-white border-zinc-200 text-zinc-600',
-    badge: 'bg-[var(--stage-prospect-soft)] text-stage-prospect border-transparent',
+    badge: 'bg-[var(--stage-prospect-soft)] text-[var(--foreground)] border-transparent',
     dash: 'bg-stage-prospect',
     ring: 'ring-stage-prospect/50',
     cardAccent: '',
@@ -68,7 +69,7 @@ export const PIPELINE_STAGE_STYLES: Record<
     column: 'bg-zinc-100/80 border-zinc-200',
     header: 'text-zinc-900',
     pill: 'bg-white border-zinc-200 text-zinc-600',
-    badge: 'bg-[var(--stage-approved-soft)] text-stage-approved border-transparent',
+    badge: 'bg-[var(--stage-approved-soft)] text-[var(--foreground)] border-transparent',
     dash: 'bg-stage-approved',
     ring: 'ring-stage-approved/50',
     cardAccent: '',
@@ -80,7 +81,7 @@ export const PIPELINE_STAGE_STYLES: Record<
     column: 'bg-zinc-100/70 border-zinc-200',
     header: 'text-zinc-900',
     pill: 'bg-white border-zinc-200 text-zinc-600',
-    badge: 'bg-[var(--stage-completed-soft)] text-stage-completed border-transparent',
+    badge: 'bg-[var(--stage-completed-soft)] text-[var(--foreground)] border-transparent',
     dash: 'bg-stage-completed',
     ring: 'ring-stage-completed/50',
     cardAccent: '',
@@ -92,7 +93,7 @@ export const PIPELINE_STAGE_STYLES: Record<
     column: 'bg-zinc-100 border-zinc-200',
     header: 'text-zinc-900',
     pill: 'bg-white border-zinc-200 text-zinc-600',
-    badge: 'bg-[var(--stage-invoiced-soft)] text-stage-invoiced border-transparent',
+    badge: 'bg-[var(--stage-invoiced-soft)] text-[var(--foreground)] border-transparent',
     dash: 'bg-stage-invoiced',
     ring: 'ring-stage-invoiced/50',
     cardAccent: '',
@@ -104,7 +105,7 @@ export const PIPELINE_STAGE_STYLES: Record<
     column: 'bg-zinc-100/80 border-zinc-300',
     header: 'text-zinc-900',
     pill: 'bg-white border-zinc-200 text-zinc-600',
-    badge: 'bg-stage-closed text-white border-transparent',
+    badge: 'bg-stage-closed text-[var(--stage-closed-ink)] border-transparent',
     dash: 'bg-stage-closed',
     ring: 'ring-stage-closed/40',
     cardAccent: '',

@@ -16811,14 +16811,14 @@ export default function SummitApp() {
               openNavTab(item.tab);
               onNavigate?.();
             }}
-            className={`flex items-center w-full rounded-xl text-sm font-medium transition-all ${
+            className={`flex items-center w-full rounded-full text-sm font-medium transition-all ${
               collapsed
                 ? 'justify-center px-0 py-2.5'
-                : 'gap-3 px-3 py-2.5'
+                : 'gap-3 px-3.5 py-2.5'
             } ${
               active
-                ? 'bg-zinc-900 text-white shadow-sm'
-                : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
+                ? 'tint-blue'
+                : 'text-zinc-600 hover:bg-black/[0.04] hover:text-zinc-900'
             }`}
           >
             <SidebarIcon
@@ -16849,14 +16849,14 @@ export default function SummitApp() {
 
     return (
       <div
-        className={`safe-bottom relative shrink-0 border-t border-zinc-200/70 py-2.5 ${
+        className={`safe-bottom relative shrink-0 border-t border-[var(--glass-border)] py-2.5 ${
           collapsed ? 'px-1.5' : 'px-2.5'
         }`}
         data-sidebar-profile
       >
         {sidebarProfileOpen && (
           <div
-            className={`absolute bottom-full mb-1.5 rounded-2xl bg-white border border-zinc-200 shadow-md overflow-hidden z-50 ${
+            className={`glass glass-strong absolute bottom-full mb-1.5 rounded-2xl overflow-hidden z-50 ${
               collapsed
                 ? 'left-1.5 w-52'
                 : 'left-2.5 right-2.5'
@@ -16869,7 +16869,7 @@ export default function SummitApp() {
                 openNavTab('settings');
                 onNavigate?.();
               }}
-              className="w-full text-left px-3.5 py-2.5 text-sm font-medium text-zinc-800 hover:bg-zinc-100"
+              className="w-full text-left px-3.5 py-2.5 text-sm font-medium text-zinc-800 hover:bg-black/[0.04]"
             >
               Profile settings
             </button>
@@ -16880,7 +16880,7 @@ export default function SummitApp() {
                   setSidebarProfileOpen(false);
                   handleInstallApp();
                 }}
-                className="w-full text-left px-3.5 py-2.5 text-sm font-medium text-zinc-800 hover:bg-zinc-100 border-t border-zinc-100"
+                className="w-full text-left px-3.5 py-2.5 text-sm font-medium text-zinc-800 hover:bg-black/[0.04] border-t border-[var(--glass-border)]"
               >
                 Install app
               </button>
@@ -16891,7 +16891,7 @@ export default function SummitApp() {
                 setSidebarProfileOpen(false);
                 handleSignOut();
               }}
-              className="w-full text-left px-3.5 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 border-t border-zinc-100"
+              className="w-full text-left px-3.5 py-2.5 text-sm font-medium text-zinc-600 hover:bg-black/[0.04] border-t border-[var(--glass-border)]"
             >
               Sign out
             </button>
@@ -16904,12 +16904,12 @@ export default function SummitApp() {
             setShowUserMenu(false);
             setSidebarProfileOpen((v) => !v);
           }}
-          className={`w-full flex items-center rounded-2xl text-left transition-colors ${
+          className={`w-full flex items-center rounded-full text-left transition-colors ${
             collapsed ? 'justify-center px-0 py-2' : 'gap-2.5 px-2 py-2'
           } ${
             profileActive || sidebarProfileOpen
-              ? 'bg-zinc-200/70 ring-1 ring-zinc-200/90'
-              : 'hover:bg-zinc-200/50'
+              ? 'tint-blue'
+              : 'hover:bg-black/[0.04]'
           }`}
           aria-expanded={sidebarProfileOpen}
           aria-haspopup="menu"
@@ -16961,13 +16961,13 @@ export default function SummitApp() {
     <>
       {/* Desktop sidebar */}
       <aside
-        className="safe-left hidden lg:flex fixed inset-y-0 left-0 z-40 flex-col border-r border-zinc-200/80 bg-zinc-50/95 backdrop-blur-md transition-[width] duration-200 ease-out"
+        className="glass glass-strong safe-left hidden lg:flex fixed inset-y-0 left-0 z-40 flex-col transition-[width] duration-200 ease-out"
         style={{ width: desktopSidebarWidth }}
         aria-label="Main navigation"
         data-collapsed={sidebarCollapsed ? 'true' : 'false'}
       >
         <div
-          className={`h-14 sm:h-16 flex items-center border-b border-zinc-200/70 shrink-0 ${
+          className={`h-14 sm:h-16 flex items-center border-b border-[var(--glass-border)] shrink-0 ${
             sidebarCollapsed ? 'justify-center px-1.5' : 'gap-2.5 px-3'
           }`}
         >
@@ -17040,8 +17040,8 @@ export default function SummitApp() {
               setSidebarProfileOpen(false);
             }}
           />
-          <aside className="safe-left absolute inset-y-0 left-0 w-[17rem] max-w-[85vw] bg-zinc-50 shadow-md border-r border-zinc-200 flex flex-col animate-[page-fade-in_0.18s_ease-out]">
-            <div className="h-14 flex items-center justify-between gap-2 px-4 border-b border-zinc-200/70">
+          <aside className="glass glass-strong safe-left absolute inset-y-0 left-0 w-[17rem] max-w-[85vw] flex flex-col animate-[page-fade-in_0.18s_ease-out]">
+            <div className="h-14 flex items-center justify-between gap-2 px-4 border-b border-[var(--glass-border)]">
               <div className="flex items-center gap-2.5 min-w-0">
                 {renderAppMark({ size: 'md' })}
                 <span className="font-semibold text-zinc-900 truncate">
@@ -17054,7 +17054,7 @@ export default function SummitApp() {
                   setSidebarOpen(false);
                   setSidebarProfileOpen(false);
                 }}
-                className="px-2.5 py-1.5 rounded-lg text-sm text-zinc-600 hover:bg-zinc-200/70"
+                className="px-3 py-1.5 rounded-full text-sm text-zinc-600 hover:bg-black/[0.05]"
               >
                 Close
               </button>
@@ -17072,13 +17072,13 @@ export default function SummitApp() {
   /** Top bar: menu (mobile), search, user — same on every page */
   const renderAppHeader = () => (
     <header
-      className="app-header-safe-top sticky top-0 z-50 bg-zinc-100/90 backdrop-blur-md border-b border-zinc-200/80 text-zinc-900"
+      className="glass glass-strong app-header-safe-top sticky top-0 z-50 text-zinc-900"
       suppressHydrationWarning
     >
       <div className="h-14 sm:h-16 flex items-center gap-2 sm:gap-3 px-3 sm:px-5 lg:px-6">
         <button
           type="button"
-          className="lg:hidden shrink-0 w-10 h-10 rounded-xl flex items-center justify-center text-zinc-700 hover:bg-zinc-200/70 border border-transparent hover:border-zinc-200"
+          className="lg:hidden shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-zinc-700 hover:bg-black/[0.05]"
           onClick={() => {
             setSidebarOpen(true);
             setShowUserMenu(false);
@@ -17094,7 +17094,7 @@ export default function SummitApp() {
         {sidebarCollapsed && (
           <button
             type="button"
-            className="hidden lg:flex shrink-0 w-10 h-10 rounded-xl items-center justify-center text-zinc-700 hover:bg-zinc-200/70 border border-zinc-200 bg-white"
+            className="glass hidden lg:flex shrink-0 w-10 h-10 rounded-full items-center justify-center text-zinc-700 hover:text-[var(--accent-blue)]"
             onClick={toggleSidebarCollapsed}
             aria-label="Expand sidebar"
             title="Expand sidebar"
@@ -17116,7 +17116,7 @@ export default function SummitApp() {
           {renderAppMark({
             size: 'sm',
             imgClassName:
-              'w-8 h-8 rounded-xl object-contain border border-zinc-200 bg-white',
+              'w-8 h-8 rounded-xl object-contain border border-[var(--glass-border)] bg-white/60',
           })}
           <span className="font-semibold text-sm text-zinc-900 truncate hidden xs:inline sm:inline">
             {appDisplayName()}
@@ -17133,10 +17133,10 @@ export default function SummitApp() {
             value={headerSearch}
             onChange={(e) => setHeaderSearch(e.target.value)}
             placeholder="Search jobs, leads, estimates..."
-            className="w-full h-10 px-3.5 rounded-xl bg-white border border-zinc-200 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-300/50"
+            className="glass w-full h-10 px-4 rounded-full text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue-ring)]"
           />
           {headerSearchQuery && (
-            <div className="absolute left-0 right-0 mt-2 rounded-2xl bg-white text-zinc-900 border border-zinc-200 shadow-md overflow-hidden z-[60]">
+            <div className="glass glass-strong absolute left-0 right-0 mt-2 rounded-2xl text-zinc-900 overflow-hidden z-[60]">
               {headerSearchResults.length === 0 ? (
                 <div className="px-4 py-6 text-sm text-zinc-400 text-center">
                   No matches for “{headerSearch.trim()}”
@@ -17154,7 +17154,7 @@ export default function SummitApp() {
                           setHeaderSearch('');
                           setSidebarOpen(false);
                         }}
-                        className="w-full text-left px-4 py-3 hover:bg-zinc-100 transition-colors border-b border-zinc-50 last:border-0"
+                        className="w-full text-left px-4 py-3 hover:bg-black/[0.04] transition-colors border-b border-[var(--glass-border)] last:border-0"
                       >
                         <div className="flex items-center justify-between gap-2">
                           <div className="font-medium text-sm truncate">
@@ -17186,10 +17186,8 @@ export default function SummitApp() {
             onClick={() => {
               setShowUserMenu((v) => !v);
             }}
-            className={`flex items-center gap-2 h-10 pl-1.5 pr-2 sm:pr-3 rounded-xl transition-colors ${
-              showUserMenu
-                ? 'bg-white shadow-sm ring-1 ring-zinc-200/90'
-                : 'hover:bg-zinc-200/60'
+            className={`flex items-center gap-2 h-10 pl-1.5 pr-2 sm:pr-3 rounded-full transition-colors ${
+              showUserMenu ? 'tint-blue' : 'hover:bg-black/[0.05]'
             }`}
             aria-label="User menu"
           >
@@ -17201,8 +17199,8 @@ export default function SummitApp() {
             </span>
           </button>
           {showUserMenu && (
-            <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-white text-zinc-900 border border-zinc-200 shadow-md overflow-hidden z-[60]">
-              <div className="px-4 py-3 border-b border-zinc-100">
+            <div className="glass glass-strong absolute right-0 mt-2 w-56 rounded-2xl text-zinc-900 overflow-hidden z-[60]">
+              <div className="px-4 py-3 border-b border-[var(--glass-border)]">
                 <div className="text-sm font-semibold truncate">
                   {userName || email || 'Signed in'}
                 </div>
@@ -17216,7 +17214,7 @@ export default function SummitApp() {
                   setShowUserMenu(false);
                   handleTabChange('home');
                 }}
-                className="w-full text-left px-4 py-2.5 text-sm hover:bg-zinc-100 text-zinc-700"
+                className="w-full text-left px-4 py-2.5 text-sm hover:bg-black/[0.04] text-zinc-700"
               >
                 Home
               </button>
@@ -17226,7 +17224,7 @@ export default function SummitApp() {
                   setShowUserMenu(false);
                   handleTabChange('settings');
                 }}
-                className="w-full text-left px-4 py-2.5 text-sm hover:bg-zinc-100 text-zinc-700"
+                className="w-full text-left px-4 py-2.5 text-sm hover:bg-black/[0.04] text-zinc-700"
               >
                 Profile settings
               </button>
@@ -17236,7 +17234,7 @@ export default function SummitApp() {
                   setShowUserMenu(false);
                   handleSignOut();
                 }}
-                className="w-full text-left px-4 py-2.5 text-sm hover:bg-zinc-50 text-zinc-800 border-t border-zinc-100"
+                className="w-full text-left px-4 py-2.5 text-sm hover:bg-black/[0.04] text-zinc-800 border-t border-[var(--glass-border)]"
               >
                 Sign out
               </button>
@@ -17250,7 +17248,7 @@ export default function SummitApp() {
   // Wait for client storage restore so header/nav match (no hydration mismatch)
   if (!sessionReady) {
     return (
-      <div className="min-h-screen bg-zinc-100" aria-busy="true" aria-label="Loading" />
+      <div className="min-h-screen" aria-busy="true" aria-label="Loading" />
     );
   }
 
@@ -18550,7 +18548,7 @@ export default function SummitApp() {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-100 text-zinc-900">
+    <div className="min-h-screen text-zinc-900">
       {(systemDocWorkspace === 'mitigation' ||
         systemDocWorkspace === 'mitigation_personal' ||
         systemDocWorkspace === 'mitigation_company') && (
