@@ -16,7 +16,7 @@ alwaysApply: false
 - `tsconfig.json`
 - `eslint.config.mjs`
 - `next.config.ts`
-- `middleware.ts`
+- `proxy.ts`
 - `.env.example`
 - `app/page.tsx` — monolith; home, pricing, canvassing, weather, estimates
 - `components/HomeDashboard.tsx`

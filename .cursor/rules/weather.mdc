@@ -1,6 +1,6 @@
 ---
 description: Weather — file map (@ tag this chat)
-globs: components/WeatherTool.tsx,components/StormMap.tsx,lib/weather.ts,lib/storm-clusters.ts
+globs: components/WeatherTool.tsx,components/StormMap.tsx,lib/weather.ts,lib/radar.ts,lib/storm-clusters.ts
 alwaysApply: false
 ---
 
@@ -10,12 +10,16 @@ alwaysApply: false
 **Sidebar label:** none — Tools → Weather (`activeTab: weather`)  
 **Agent starter:** `.cursor/agents/weather.md`
 
+Storm Tracker with an optional live weather overlay on the same map. Do not add a separate Radar tool.
+
 ## Files
 
 - `components/WeatherTool.tsx`
 - `components/StormMap.tsx`
 - `lib/weather.ts`
+- `lib/radar.ts`
 - `lib/storm-clusters.ts`
-- `app/api/storm-reports/route.ts`
-- `app/page.tsx` — Tools hub (~L24196); `activeTab === 'weather'` (~L24232)
+- `app/api/storm-reports/route.ts` — LSR pins + NWS warning polygons for damage zones
+- `app/api/radar/frames/route.ts`
+- `app/page.tsx` — Tools hub; `activeTab === 'weather'`
 - `components/HomeDashboard.tsx` — shared; storm watch card on Home

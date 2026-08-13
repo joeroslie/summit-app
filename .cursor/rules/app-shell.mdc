@@ -1,6 +1,6 @@
 ---
 description: App shell — shared files every page touches (monolith, nav, shared libs)
-globs: app/page.tsx,app/layout.tsx,app/globals.css,middleware.ts,next.config.ts,components/AddressAutocomplete.tsx,components/PhoneInput.tsx,lib/supabase.ts,lib/supabase/**,lib/phone.ts,lib/geocode.ts,lib/app-settings-sync.ts
+globs: app/page.tsx,app/layout.tsx,app/globals.css,proxy.ts,next.config.ts,components/AddressAutocomplete.tsx,components/PhoneInput.tsx,lib/supabase.ts,lib/supabase/**,lib/phone.ts,lib/geocode.ts,lib/app-settings-sync.ts
 alwaysApply: false
 ---
 
@@ -31,7 +31,7 @@ alwaysApply: false
 
 ## Config
 
-- `middleware.ts`
+- `proxy.ts`
 - `next.config.ts`
 - `tsconfig.json`
 - `package.json`

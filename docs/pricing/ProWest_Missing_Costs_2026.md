@@ -373,7 +373,7 @@ Steep sets labor base for that pitch (does not stack on $100/$110): $125 / $175 
 | Decking replace (adder)                | /sheet |               | $20/sheet (Crown Royal matches) |                       |
 | Cut in vent (O'Hagan / turtle-type)    | /each  |               | $25/each                        |                       |
 | HD Skylight cut-in / no curb           | /each  |               | $75/each                        | $500–550              |
-| D&R HVAC unit                          | /each  |               | $900/each                       | $1300 PHX · $1600 TUC · $1600 NORTH |
+| D&R HVAC unit                          | /each  |               | $900/each                       | $1350 PHX · $1600 TUC · $1600 NORTH |
 | Remove additional layer (double layer) | /sq    |               | $20/sq                          |                       |
 | R&R shingle mold                       | /LF    |               | $2/LF (Crown Royal)             |                       |
 | R&R Fascia 2x6 / 2x8                   | /LF    |               | ~$3/LF                          | $15–18/LF             |

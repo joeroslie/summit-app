@@ -15,6 +15,9 @@ const eslintConfig = defineConfig([
     // Local timestamped backups — must not pollute Problems / lint.
     ".checkpoints/**",
     "**/*.backup",
+    // Agent skill / design-tool trees — not app code.
+    ".cursor/**",
+    ".impeccable/**",
   ]),
   // Underscore-prefixed unused args/vars are intentional across the app.
   {
@@ -50,6 +53,15 @@ const eslintConfig = defineConfig([
     rules: {
       // Leaflet's dynamic import + imperative map API needs a flexible handle.
       "@typescript-eslint/no-explicit-any": "off",
+    },
+  },
+  {
+    files: ["components/StormMap.tsx", "components/WeatherTool.tsx"],
+    rules: {
+      // Leaflet radar layers + overlay fetch: sync setState / ref cleanup
+      // are the same class of false positives as the page.tsx monolith.
+      "react-hooks/set-state-in-effect": "off",
+      "react-hooks/exhaustive-deps": "off",
     },
   },
 ]);

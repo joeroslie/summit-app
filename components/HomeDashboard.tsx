@@ -16,6 +16,7 @@ import {
   type TallyType,
 } from '@/lib/canvassing';
 import {
+  readStoredNearRadiusMiles,
   eventStyle,
   formatMagnitude,
   relativeTimeFrom,
@@ -251,15 +252,26 @@ export default function HomeDashboard({
     return { openTasksCount: open.length, listedTasks: listed };
   }, [tasks, gcalConnected]);
 
-  // --- Live storm alert (self-fetched, mirrors WeatherTool's fetch pattern) ---
+  // --- Live storm alert (self-fetched, near the device when location is allowed) ---
   const [stormReports, setStormReports] = useState<StormReport[]>([]);
   const [stormStatus, setStormStatus] = useState<'loading' | 'ready' | 'error'>('loading');
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+
+    const load = async (origin: { lat: number; lng: number } | null) => {
       try {
-        const res = await fetch('/api/storm-reports?window=24h&state=AZ', {
+        const params = new URLSearchParams({
+          window: '24h',
+        });
+        if (origin) {
+          params.set('lat', String(origin.lat));
+          params.set('lng', String(origin.lng));
+          params.set('radius', String(readStoredNearRadiusMiles()));
+        } else {
+          params.set('state', 'AZ');
+        }
+        const res = await fetch(`/api/storm-reports?${params.toString()}`, {
           cache: 'no-store',
         });
         const data = (await res.json()) as StormReportsResponse & { error?: string };
@@ -273,20 +285,46 @@ export default function HomeDashboard({
       } catch {
         if (!cancelled) setStormStatus('error');
       }
-    })();
+    };
+
+    const fallbackAnywhere = () => {
+      void load(null);
+    };
+
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
+      fallbackAnywhere();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (cancelled) return;
+        void load({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      },
+      () => {
+        if (!cancelled) fallbackAnywhere();
+      },
+      { enableHighAccuracy: false, timeout: 8000, maximumAge: 5 * 60 * 1000 }
+    );
+
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const severeReports = useMemo(
-    () =>
-      stormReports
-        .filter((r) => severityForReport(r) !== 'marginal')
-        .sort((a, b) => new Date(b.validTime).getTime() - new Date(a.validTime).getTime()),
+  const latestReport = useMemo(() => {
+    if (stormReports.length === 0) return null;
+    return stormReports.reduce((newest, r) =>
+      r.validTime > newest.validTime ? r : newest
+    );
+  }, [stormReports]);
+
+  const activeSevere = useMemo(
+    () => stormReports.some((r) => severityForReport(r) !== 'marginal'),
     [stormReports]
   );
-  const topSevere = severeReports[0] ?? null;
 
   const stormCounts = useMemo(() => {
     let hail = 0;
@@ -297,7 +335,7 @@ export default function HomeDashboard({
       else if (r.category === 'wind') wind += 1;
       else if (r.category === 'tornado') tornado += 1;
     }
-    return { hail, wind, tornado, total: stormReports.length };
+    return { hail, wind, tornado, last24h: stormReports.length };
   }, [stormReports]);
 
   // --- Canvassing tally (self-fetched, mirrors CanvassingTool's load + today stats) ---
@@ -411,22 +449,22 @@ export default function HomeDashboard({
           onOpenWeather();
         }}
         className={`group glass glass-hover rounded-[32px] p-5 sm:p-6 mb-4 cursor-pointer min-h-[9.5rem] ${
-          topSevere ? 'glass-tint-coral' : 'glass-tint-blue'
+          activeSevere ? 'glass-tint-coral' : 'glass-tint-blue'
         }`}
       >
         <div className="flex items-start justify-between gap-4 mb-3">
           <div className="flex items-center gap-2.5 min-w-0">
             <span
               className={`w-2 h-2 rounded-full shrink-0 ${
-                topSevere ? 'bg-danger animate-pulse' : 'bg-[var(--accent-blue)]'
+                activeSevere ? 'bg-danger animate-pulse' : 'bg-[var(--accent-blue)]'
               }`}
             />
             <span
               className={`text-[11px] font-semibold uppercase tracking-widest ${
-                topSevere ? 'text-danger' : 'text-[var(--accent-blue)]'
+                activeSevere ? 'text-danger' : 'text-[var(--accent-blue)]'
               }`}
             >
-              {topSevere ? 'Storm alert' : 'Storm watch'}
+              {activeSevere ? 'Storm alert' : 'Storm watch'}
             </span>
           </div>
           <span className="text-zinc-400 group-hover:text-[var(--accent-blue)] transition-colors text-lg leading-none shrink-0">
@@ -438,23 +476,21 @@ export default function HomeDashboard({
             <span className="inline-block h-5 w-48 bg-black/[0.05] rounded-full animate-pulse align-middle" />
           ) : stormStatus === 'error' ? (
             'Storm data unavailable right now'
-          ) : topSevere ? (
+          ) : latestReport ? (
             <>
-              {eventStyle(topSevere.category).label}
-              {formatMagnitude(topSevere) ? ` · ${formatMagnitude(topSevere)}` : ''} near{' '}
-              {topSevere.locDesc || topSevere.state || 'your area'}
+              {eventStyle(latestReport.category).label}
+              {formatMagnitude(latestReport) ? ` · ${formatMagnitude(latestReport)}` : ''} near{' '}
+              {latestReport.locDesc || latestReport.state || 'your area'}
               <span className="text-zinc-400 font-normal">
                 {' '}
-                · {relativeTimeFrom(topSevere.validTime)}
+                · {relativeTimeFrom(latestReport.validTime)}
               </span>
             </>
-          ) : stormCounts.total > 0 ? (
-            `${stormCounts.total} report${stormCounts.total === 1 ? '' : 's'} in the last 24h`
           ) : (
-            'No active storm activity'
+            'No hail, wind, or tornado reports on file'
           )}
         </div>
-        {stormStatus === 'ready' && stormCounts.total > 0 && (
+        {stormStatus === 'ready' && stormCounts.last24h > 0 && (
           <div className="grid grid-cols-3 gap-3 mt-5">
             <div>
               <div className="text-xl font-semibold tabular-nums text-zinc-900">{stormCounts.hail}</div>

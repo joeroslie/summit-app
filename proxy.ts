@@ -1,12 +1,12 @@
 /**
  * Refresh Supabase auth cookies on each request (@supabase/ssr).
  * Login UI stays on `/` (app/page.tsx) — this file does not redirect.
- * Must never throw: a middleware crash whitescreens the whole app (field).
+ * Must never throw: a proxy crash whitescreens the whole app (field).
  */
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const pass = NextResponse.next({ request });
 
   try {

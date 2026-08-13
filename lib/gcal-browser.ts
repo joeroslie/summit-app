@@ -76,6 +76,22 @@ declare global {
           };
           revoke: (token: string, done?: () => void) => void;
         };
+        id?: {
+          initialize: (config: {
+            client_id: string;
+            nonce?: string;
+            callback: (resp: { credential?: string }) => void;
+            auto_select?: boolean;
+          }) => void;
+          prompt: (
+            cb?: (n: {
+              isNotDisplayed: () => boolean;
+              isSkippedMoment: () => boolean;
+              isDismissedMoment: () => boolean;
+            }) => void
+          ) => void;
+          cancel: () => void;
+        };
       };
     };
   }
@@ -328,7 +344,11 @@ export function formatGoogleConnectError(err: unknown): string {
     m.includes('idpiframe_initialization_failed') ||
     m.includes('invalid_client')
   ) {
-    return 'OAuth client misconfigured — in Google Cloud Console → Credentials → your Web client, add http://localhost:3000 under Authorized JavaScript origins, then reconnect.';
+    const origin =
+      typeof window !== 'undefined' && window.location?.origin
+        ? window.location.origin
+        : 'http://localhost:3001';
+    return `OAuth client misconfigured — in Google Cloud Console → Credentials → your Web client, add ${origin} under Authorized JavaScript origins, then reconnect.`;
   }
   if (m.includes('access_denied') || m.includes('popup_closed')) {
     return 'Google sign-in was cancelled — connect again and allow Calendar + Tasks.';
@@ -455,7 +475,9 @@ export function loadGoogleIdentityScript(): Promise<void> {
   if (typeof window === 'undefined') {
     return Promise.reject(new Error('Not in browser'));
   }
-  if (window.google?.accounts?.oauth2) return Promise.resolve();
+  if (window.google?.accounts?.oauth2 || window.google?.accounts?.id) {
+    return Promise.resolve();
+  }
   if (gsiLoadPromise) return gsiLoadPromise;
 
   gsiLoadPromise = new Promise((resolve, reject) => {
@@ -468,7 +490,9 @@ export function loadGoogleIdentityScript(): Promise<void> {
         reject(new Error('Failed to load Google Identity Services'))
       );
       // already loaded
-      if (window.google?.accounts?.oauth2) resolve();
+      if (window.google?.accounts?.oauth2 || window.google?.accounts?.id) {
+        resolve();
+      }
       return;
     }
     const script = document.createElement('script');

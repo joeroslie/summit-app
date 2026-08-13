@@ -139,10 +139,10 @@ export default function CompanyPricing({
                         row.key === 'steep_11_12') &&
                       live != null &&
                       [100, 175, 250, 30, 90, 180].includes(live);
-                    // HVAC: ignore stale pre-2026 $1,250 override —
-                    // current sell is $1,300 PHX (see getHvacSellPrice).
+                    // HVAC: ignore stale $1,250 / $1,300 overrides —
+                    // current sell is $1,350 PHX (see getHvacSellPrice).
                     const isLegacyHvacValue =
-                      row.key === 'hvac' && live === 1250;
+                      row.key === 'hvac' && (live === 1250 || live === 1300);
                     const sellPhx =
                       live != null &&
                       live > 0 &&

@@ -28,7 +28,7 @@ export const PRICING_GUIDE: PricingGuideSection[] = [
     rows: [
       { key: 'cambridge', label: 'IKO Cambridge', unit: '/sq', cost: 89, sellPhx: 450, sellTuc: 475, sellNorth: 500 },
       { key: 'dynasty', label: 'IKO Dynasty', unit: '/sq', cost: 94, sellPhx: 475, sellTuc: 500, sellNorth: 525 },
-      { key: 'armourshake', label: 'IKO Armourshake', unit: '/sq', cost: 230, sellPhx: 610, sellTuc: 635, sellNorth: 660 },
+      { key: 'armourshake', label: 'IKO Armourshake', unit: '/sq', cost: 230, sellPhx: 900, sellTuc: 925, sellNorth: 950 },
       { key: 'gaf_hdz', label: 'GAF Timberline HDZ', unit: '/sq', cost: 130, sellPhx: 475, sellTuc: 500, sellNorth: 525 },
       { key: 'gaf_natural_shadow', label: 'GAF Natural Shadow', unit: '/sq', cost: 129, sellPhx: 450, sellTuc: 475, sellNorth: 500 },
       { key: 'owens_oakridge', label: 'Owens Corning Oakridge', unit: '/sq', cost: 110, sellPhx: 475, sellTuc: 500, sellNorth: 525 },
@@ -103,7 +103,7 @@ export const PRICING_GUIDE: PricingGuideSection[] = [
     title: 'HVAC — sell',
     pane: 'labor',
     rows: [
-      { key: 'hvac', label: 'D&R HVAC unit', unit: '/ea', sellPhx: 1300, sellTuc: 1600, sellNorth: 1600 },
+      { key: 'hvac', label: 'D&R HVAC unit', unit: '/ea', sellPhx: 1350, sellTuc: 1600, sellNorth: 1600 },
     ],
   },
   {

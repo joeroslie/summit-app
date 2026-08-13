@@ -1,5 +1,7 @@
 /** Shared types + constants for the Canvassing / door-knocking tracker. */
 
+import type { PinStormLookup } from '@/lib/weather';
+
 export type Disposition =
   | 'not_contacted'
   | 'not_home'
@@ -88,6 +90,11 @@ export type CanvassPin = {
   address: string | null;
   owner_name: string | null;
   property_data: PropertyLookupData | Record<string, never>;
+  /**
+   * Nearby storm-report summary for date of loss. Client-side (re-fetched on
+   * select if missing) — not a canvass_pins column.
+   */
+  storm_data?: PinStormLookup | Record<string, never>;
   disposition: Disposition;
   status_changed_at: string;
   notes: string | null;

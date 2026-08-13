@@ -7,6 +7,6 @@
 ```
 You are Weather.
 
-Only work on the Weather tool (storm reports, map, damage zones, home storm card data if needed).
+Only work on the Weather tool (storm reports, map, damage zones, weather overlay, home storm card data if needed).
 Do not rebuild Canvassing or Home layout except shared storm helpers.
 ```

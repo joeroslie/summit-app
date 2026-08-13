@@ -25,6 +25,24 @@ import {
   type TallyEntry,
   type TallyType,
 } from '@/lib/canvassing';
+import {
+  CANVASS_STORM_LIVE_WINDOW,
+  CANVASS_STORM_RADIUS_MILES,
+  CANVASS_STORM_WINDOW,
+  CANVASS_WIND_MIN_MPH,
+  emptyPinStormLookup,
+  eventStyle,
+  formatMilesCompact,
+  formatStormDayLabel,
+  isPinStormLookup,
+  mergeStormReports,
+  pinDateOfLoss,
+  summarizeStormsForPin,
+  type PinStormHit,
+  type PinStormLookup,
+  type StormReportsResponse,
+  type StormWindow,
+} from '@/lib/weather';
 
 const PINS_STORAGE_KEY = 'summitCanvassPins';
 const TALLIES_STORAGE_KEY = 'summitCanvassTallies';
@@ -104,6 +122,7 @@ type CanvassingToolProps = {
     ownerName: string | null;
     lat: number;
     lng: number;
+    dateOfLoss?: string | null;
   }) => Promise<CreatedLeadInfo | null>;
   /** Jump back into the Leads pipeline for a pin that already has a lead. */
   onOpenLead?: (leadRef: string) => void;
@@ -147,6 +166,9 @@ export default function CanvassingTool({
   // in flight — drives the pending state in the detail panel with no manual
   // trigger involved.
   const [autoLookupPendingIds, setAutoLookupPendingIds] = useState<Set<number>>(
+    () => new Set()
+  );
+  const [autoStormPendingIds, setAutoStormPendingIds] = useState<Set<number>>(
     () => new Set()
   );
 
@@ -232,9 +254,11 @@ export default function CanvassingTool({
         prev.map((p) => (p.id === id ? { ...p, ...stampedPatch } : p))
       );
       if (pinsRemote && supabase) {
+        const { storm_data: _stormData, ...remotePatch } = patch;
+        if (Object.keys(remotePatch).length === 0) return;
         const { error } = await supabase
           .from('canvass_pins')
-          .update(patch)
+          .update(remotePatch)
           .eq('id', id);
         if (error) {
           console.warn('canvass_pins update error:', error.message);
@@ -297,6 +321,95 @@ export default function CanvassingTool({
     [fetchPropertyData]
   );
 
+  const fetchStormData = useCallback(
+    async (
+      pin: CanvassPin,
+      opts: { silent?: boolean } = {}
+    ): Promise<PinStormLookup> => {
+      const fetchWindow = async (window: StormWindow) => {
+        const params = new URLSearchParams({
+          lat: String(pin.lat),
+          lng: String(pin.lng),
+          radius: String(CANVASS_STORM_RADIUS_MILES),
+          window,
+        });
+        const res = await fetch(`/api/storm-reports?${params.toString()}`, {
+          cache: 'no-store',
+        });
+        const data = (await res.json()) as StormReportsResponse & { error?: string };
+        return { ok: res.ok, data };
+      };
+      try {
+        const [historical, live] = await Promise.all([
+          fetchWindow(CANVASS_STORM_WINDOW),
+          fetchWindow(CANVASS_STORM_LIVE_WINDOW),
+        ]);
+        if (!historical.ok && !live.ok) {
+          const failed = emptyPinStormLookup(
+            historical.data?.error ||
+              live.data?.error ||
+              'Could not load storm reports'
+          );
+          await patchPin(pin.id, { storm_data: failed });
+          if (!opts.silent) showToast(failed.error || 'Could not load storm reports');
+          return failed;
+        }
+        const existing = isPinStormLookup(pin.storm_data) ? pin.storm_data : undefined;
+        const stamped = summarizeStormsForPin(
+          mergeStormReports([
+            historical.ok ? historical.data.reports || [] : [],
+            live.ok ? live.data.reports || [] : [],
+          ]),
+          { lat: pin.lat, lng: pin.lng },
+          { chosenDate: existing?.chosenDate }
+        );
+        await patchPin(pin.id, { storm_data: stamped });
+        return stamped;
+      } catch (err) {
+        console.warn('storm lookup failed:', err);
+        const failed = emptyPinStormLookup(
+          'Could not reach the storm report service'
+        );
+        await patchPin(pin.id, { storm_data: failed });
+        if (!opts.silent) showToast(failed.error || 'Storm lookup failed');
+        return failed;
+      }
+    },
+    [patchPin, showToast]
+  );
+
+  const runAutoStormLookup = useCallback(
+    async (pin: CanvassPin) => {
+      setAutoStormPendingIds((prev) => new Set(prev).add(pin.id));
+      try {
+        await fetchStormData(pin, { silent: true });
+      } catch (err) {
+        console.warn('automatic storm lookup failed:', err);
+      } finally {
+        setAutoStormPendingIds((prev) => {
+          if (!prev.has(pin.id)) return prev;
+          const next = new Set(prev);
+          next.delete(pin.id);
+          return next;
+        });
+      }
+    },
+    [fetchStormData]
+  );
+
+  const selectPin = useCallback(
+    (id: number | null) => {
+      setSelectedId(id);
+      if (id == null) return;
+      const pin = pins.find((p) => p.id === id);
+      if (!pin) return;
+      if (isPinStormLookup(pin.storm_data)) return;
+      if (autoStormPendingIds.has(pin.id)) return;
+      void runAutoStormLookup(pin);
+    },
+    [pins, autoStormPendingIds, runAutoStormLookup]
+  );
+
   const createPin = useCallback(
     async (
       point: { lat: number; lng: number },
@@ -324,7 +437,7 @@ export default function CanvassingTool({
           .select('*')
           .single();
         if (!error && data) {
-          pin = data as CanvassPin;
+          pin = { ...(data as CanvassPin), storm_data: {} };
         } else {
           // Cloud write failed (setup SQL not run yet, offline, etc). Drop the
           // pin locally right now rather than losing it — this is the one flow
@@ -341,7 +454,13 @@ export default function CanvassingTool({
       }
 
       if (!pin) {
-        pin = { id: newLocalId(), created_at: now, updated_at: now, ...base };
+        pin = {
+          id: newLocalId(),
+          created_at: now,
+          updated_at: now,
+          storm_data: {},
+          ...base,
+        };
       }
 
       setPins((prev) => [pin as CanvassPin, ...prev]);
@@ -349,9 +468,10 @@ export default function CanvassingTool({
       setFlyTo(point);
       // Automatic — no button, no waiting for the panel to open.
       void runAutoPropertyLookup(pin);
+      void runAutoStormLookup(pin);
       return pin;
     },
-    [supabase, pinsRemote, showToast, runAutoPropertyLookup]
+    [supabase, pinsRemote, showToast, runAutoPropertyLookup, runAutoStormLookup]
   );
 
   const dropPinAt = useCallback(
@@ -461,6 +581,7 @@ export default function CanvassingTool({
         ownerName: ownerName.trim() || null,
         lat: pin.lat,
         lng: pin.lng,
+        dateOfLoss: pinDateOfLoss(pin.storm_data),
       });
       if (!result) {
         showToast('Could not create lead');
@@ -471,6 +592,17 @@ export default function CanvassingTool({
       return true;
     },
     [onCreateLead, patchPin, showToast]
+  );
+
+  const chooseStormDate = useCallback(
+    (pin: CanvassPin, date: string) => {
+      if (!isPinStormLookup(pin.storm_data)) return;
+      if (pin.storm_data.chosenDate === date) return;
+      void patchPin(pin.id, {
+        storm_data: { ...pin.storm_data, chosenDate: date },
+      });
+    },
+    [patchPin]
   );
 
   const logTally = useCallback(
@@ -640,7 +772,7 @@ export default function CanvassingTool({
       <CanvassMap
         pins={pins}
         selectedPinId={selectedId}
-        onSelectPin={setSelectedId}
+        onSelectPin={selectPin}
         onMapDrop={(point) => void dropPinAt(point)}
         center={flyTo}
         height={480}
@@ -669,9 +801,12 @@ export default function CanvassingTool({
               onSaveField={saveField}
               onDelete={deletePin}
               onFetchPropertyData={fetchPropertyData}
+              onFetchStormData={fetchStormData}
+              onChooseStormDate={chooseStormDate}
               onConfirmCreateLead={confirmCreateLead}
               onOpenLead={onOpenLead}
               autoLookupPending={autoLookupPendingIds.has(selectedPin.id)}
+              autoStormPending={autoStormPendingIds.has(selectedPin.id)}
             />
           )}
         </div>
@@ -716,7 +851,7 @@ export default function CanvassingTool({
                     key={pin.id}
                     type="button"
                     onClick={() => {
-                      setSelectedId(pin.id);
+                      selectPin(pin.id);
                       setFlyTo({ lat: pin.lat, lng: pin.lng });
                     }}
                     className={`w-full text-left rounded-2xl border px-3 py-2.5 transition-colors ${
@@ -867,10 +1002,13 @@ type PinDetailPanelProps = {
   ) => void;
   onDelete: (pin: CanvassPin) => void;
   onFetchPropertyData: (pin: CanvassPin) => Promise<PropertyLookupData>;
+  onFetchStormData: (pin: CanvassPin) => Promise<PinStormLookup>;
+  onChooseStormDate: (pin: CanvassPin, date: string) => void;
   onConfirmCreateLead: (pin: CanvassPin, ownerName: string) => Promise<boolean>;
   onOpenLead?: (leadRef: string) => void;
   /** True while the automatic (fire-and-forget) lookup kicked off on drop is in flight. */
   autoLookupPending: boolean;
+  autoStormPending: boolean;
 };
 
 /**
@@ -884,14 +1022,18 @@ function PinDetailPanel({
   onSaveField,
   onDelete,
   onFetchPropertyData,
+  onFetchStormData,
+  onChooseStormDate,
   onConfirmCreateLead,
   onOpenLead,
   autoLookupPending,
+  autoStormPending,
 }: PinDetailPanelProps) {
   const [ownerDraft, setOwnerDraft] = useState(pin.owner_name || '');
   const [addressDraft, setAddressDraft] = useState(pin.address || '');
   const [notesDraft, setNotesDraft] = useState(pin.notes || '');
   const [manualLookupLoading, setManualLookupLoading] = useState(false);
+  const [manualStormLoading, setManualStormLoading] = useState(false);
   const [showCreateLead, setShowCreateLead] = useState(false);
   const [createLeadName, setCreateLeadName] = useState(pin.owner_name || '');
   const [creatingLead, setCreatingLead] = useState(false);
@@ -906,6 +1048,19 @@ function PinDetailPanel({
       ? (pin.property_data as PropertyLookupData)
       : null;
   const propertyLoading = autoLookupPending || manualLookupLoading;
+  const stormData: PinStormLookup | null = isPinStormLookup(pin.storm_data)
+    ? pin.storm_data
+    : null;
+  const stormLoading = autoStormPending || manualStormLoading;
+  const stormHits: PinStormHit[] = stormData
+    ? [stormData.best, ...stormData.alternates].filter(
+        (h): h is PinStormHit => h != null
+      )
+    : [];
+  const displayHit =
+    stormHits.find((h) => h.date === stormData?.chosenDate) ||
+    stormData?.best ||
+    null;
 
   const runFetchPropertyData = async () => {
     setManualLookupLoading(true);
@@ -916,6 +1071,17 @@ function PinDetailPanel({
       console.warn('property lookup failed:', err);
     } finally {
       setManualLookupLoading(false);
+    }
+  };
+
+  const runFetchStormData = async () => {
+    setManualStormLoading(true);
+    try {
+      await onFetchStormData(pin);
+    } catch (err) {
+      console.warn('storm lookup failed:', err);
+    } finally {
+      setManualStormLoading(false);
     }
   };
 
@@ -1015,6 +1181,88 @@ function PinDetailPanel({
           placeholder="Not known yet"
           className="w-full rounded-2xl border border-zinc-200 px-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-300/50"
         />
+      </div>
+
+      <div className="rounded-2xl border border-zinc-200 bg-zinc-50/70 p-4">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <div className="text-xs font-semibold text-zinc-700">Date of loss</div>
+          {stormData ? (
+            <button
+              type="button"
+              onClick={() => void runFetchStormData()}
+              disabled={stormLoading}
+              className="text-xs font-medium text-graphite hover:text-graphite-hover disabled:opacity-50"
+            >
+              {stormLoading ? 'Refreshing…' : 'Refresh storms'}
+            </button>
+          ) : (
+            <span className="text-xs font-medium text-zinc-400">Looking up…</span>
+          )}
+        </div>
+        {!stormData ? (
+          <div className="flex items-center gap-2 text-xs text-zinc-500 py-1" aria-live="polite">
+            <svg
+              className="w-3.5 h-3.5 animate-spin text-zinc-400 shrink-0"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden
+            >
+              <circle className="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" />
+              <path
+                className="opacity-90"
+                d="M21 12a9 9 0 0 0-9-9"
+                stroke="currentColor"
+                strokeWidth="3"
+                strokeLinecap="round"
+              />
+            </svg>
+            Checking nearby hail and wind reports…
+          </div>
+        ) : stormData.error ? (
+          <p className="text-xs text-zinc-500">{stormData.error}</p>
+        ) : !displayHit ? (
+          <p className="text-xs text-zinc-500">
+            No hail or {CANVASS_WIND_MIN_MPH}+ mph wind within {CANVASS_STORM_RADIUS_MILES} miles (2 years).
+          </p>
+        ) : (
+          <div className="space-y-3">
+            <div>
+              <div className="text-lg font-semibold text-zinc-900 tabular-nums">
+                {formatStormDayLabel(displayHit.date)}
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-zinc-700">
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${eventStyle(displayHit.category).badge}`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${eventStyle(displayHit.category).dot}`} />
+                  {displayHit.magnitudeLabel || eventStyle(displayHit.category).label}
+                </span>
+                <span>{formatMilesCompact(displayHit.miles)}</span>
+              </div>
+            </div>
+            {stormData.alternates.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {stormHits.map((hit) => {
+                  const selected = hit.date === stormData.chosenDate;
+                  return (
+                    <button
+                      key={hit.date}
+                      type="button"
+                      onClick={() => onChooseStormDate(pin, hit.date)}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
+                        selected
+                          ? 'bg-zinc-900 text-white border-zinc-900'
+                          : 'bg-white border-zinc-200 text-zinc-500 hover:bg-zinc-50'
+                      }`}
+                    >
+                      {formatStormDayLabel(hit.date)}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+        )}
       </div>
 
       <div>

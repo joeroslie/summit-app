@@ -10,7 +10,7 @@ Material · Labor · Sell.
 | CertainTeed Patriot XL | bdl / sq | $34.33/bdl · $103.00/sq | $100/sq PHX · $110/sq TUC | $485 PHX · $510 TUC · $535 NORTH |
 | GAF Natural Shadow | bdl / sq | $43.00/bdl · $129.00/sq | $100/sq PHX · $110/sq TUC | $450 PHX · $475 TUC · $500 NORTH |
 | GAF Timberline HDZ | bdl / sq | $43.33/bdl · $130.00/sq | $100/sq PHX · $110/sq TUC | $475 PHX · $500 TUC · $525 NORTH |
-| IKO Armourshake | bdl / sq | $46.00/bdl · $230.00/sq | $100/sq PHX · $110/sq TUC | $610 PHX · $635 TUC · $660 NORTH |
+| IKO Armourshake | bdl / sq | $46.00/bdl · $230.00/sq | $100/sq PHX · $110/sq TUC | $900 PHX · $925 TUC · $950 NORTH |
 | IKO Cambridge | bdl / sq | $29.67/bdl · $89.00/sq | $100/sq PHX · $110/sq TUC | $450 PHX · $475 TUC · $500 NORTH |
 | IKO Dynasty | bdl / sq | $31.33/bdl · $94.00/sq | $100/sq PHX · $110/sq TUC | $475 PHX · $500 TUC · $525 NORTH |
 | Malarkey Highlander | bdl / sq | $51.33/bdl · $154.00/sq | $100/sq PHX · $110/sq TUC | $535 PHX · $560 TUC · $585 NORTH |
@@ -303,7 +303,7 @@ Labor base replaces $100/$110. Steep sell = labor cost increase only (cover, no 
 | Decking replace (adder) | /sheet |  | $20/sheet (Crown Royal matches) |  |
 | Cut in vent (O'Hagan / turtle-type) | /each |  | $20/each |  |
 | HD Skylight cut-in / no curb | /each |  | $75/each | $500–550 |
-| D&R HVAC unit | /each |  | $900/each | $1300 PHX · $1600 TUC · $1600 NORTH |
+| D&R HVAC unit | /each |  | $900/each | $1350 PHX · $1600 TUC · $1600 NORTH |
 | Remove additional layer (double layer) | /sq |  | $20/sq | $20 PHX · $25 TUC · $25 NORTH |
 | R&R shingle mold | /LF |  | $4/LF | $5 PHX · $6 TUC · $6 NORTH |
 | R&R Fascia 2x6 / 2x8 | /LF |  | $4/LF | $15–18/LF |

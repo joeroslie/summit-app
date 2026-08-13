@@ -117,8 +117,14 @@ const PITCH_OPTIONS = [
   '12/12',
 ] as const;
 import { geocodeAddress as geocodeAddressApi } from '@/lib/geocode';
-import { displayPhoneUS } from '@/lib/phone';
+import {
+  displayPhoneUS,
+  formatLoginIdentifier,
+  looksLikePhoneIdentifier,
+  toE164US,
+} from '@/lib/phone';
 import PhoneInput from '@/components/PhoneInput';
+import PasswordField from '@/components/PasswordField';
 import AddressAutocomplete from '@/components/AddressAutocomplete';
 import CompanyPricing from '@/components/CompanyPricing';
 import HomeDashboard from '@/components/HomeDashboard';
@@ -179,7 +185,7 @@ type AppTab =
   | 'orders'
   | 'tools'
   | 'canvassing' // Tools → Canvassing (door-knocking pin tracker), not in sidebar
-  | 'weather' // Tools → Weather (live hail/wind/tornado storm tracker), not in sidebar
+  | 'weather' // Tools → Weather (storm tracker + optional radar overlay), not in sidebar
   | 'documents'
   | 'settings';
 /** Material Order → Labor crew/job packet (inside Orders workspace). */
@@ -3622,15 +3628,166 @@ function isEstimatePdfDocument(doc: LeadDocument): boolean {
   return false;
 }
 
-function storagePathFromLeadDocUrl(url: string): string | null {
-  const marker = '/lead-docs/';
+type LeadStorageBucket = 'lead-photos' | 'lead-docs';
+type SummitStorageClient = NonNullable<ReturnType<typeof getSupabase>>;
+
+function storagePathFromPublicUrl(
+  url: string | undefined | null,
+  bucket: LeadStorageBucket
+): string | null {
+  if (!url) return null;
+  const marker = `/${bucket}/`;
   const idx = url.indexOf(marker);
   if (idx < 0) return null;
   try {
-    return decodeURIComponent(url.slice(idx + marker.length).split('?')[0]);
+    const path = decodeURIComponent(
+      url.slice(idx + marker.length).split('?')[0]
+    ).replace(/^\/+/, '');
+    return path || null;
   } catch {
     return null;
   }
+}
+
+function storagePathFromLeadDocUrl(url: string): string | null {
+  return storagePathFromPublicUrl(url, 'lead-docs');
+}
+
+function leadPhotoStoragePaths(lead: Lead): string[] {
+  const paths = new Set<string>();
+  const add = (url?: string) => {
+    const path = storagePathFromPublicUrl(url, 'lead-photos');
+    if (path) paths.add(path);
+  };
+  for (const photo of lead.photos || []) add(photo.url);
+  for (const item of lead.trash || []) {
+    if (item.kind === 'photo') add(item.photo?.url);
+  }
+  return [...paths];
+}
+
+function leadDocStoragePaths(lead: Lead): string[] {
+  const paths = new Set<string>();
+  const add = (url?: string) => {
+    const path = storagePathFromPublicUrl(url, 'lead-docs');
+    if (path) paths.add(path);
+  };
+  for (const doc of lead.documents || []) add(doc.url);
+  for (const doc of lead.measurementReports || []) add(doc.url);
+  for (const est of lead.estimates || []) add(est.pdfUrl);
+  for (const item of lead.trash || []) {
+    if (item.kind === 'document' || item.kind === 'measurement') {
+      add(item.document?.url);
+    }
+  }
+  return [...paths];
+}
+
+function leadStorageFolderKeys(lead: Lead): string[] {
+  const keys = new Set<string>();
+  const cloudId = lead.supabaseId?.trim();
+  if (cloudId) keys.add(cloudId);
+  keys.add(String(lead.id));
+  return [...keys];
+}
+
+async function removeStoragePaths(
+  client: SummitStorageClient,
+  bucket: LeadStorageBucket,
+  paths: string[]
+): Promise<number> {
+  const unique = [...new Set(paths.filter(Boolean))];
+  if (unique.length === 0) return 0;
+  let removed = 0;
+  for (let i = 0; i < unique.length; i += 1000) {
+    const chunk = unique.slice(i, i + 1000);
+    const { error } = await client.storage.from(bucket).remove(chunk);
+    if (error) {
+      console.error(`Storage remove ${bucket} error:`, error);
+      continue;
+    }
+    removed += chunk.length;
+  }
+  return removed;
+}
+
+async function removeStoragePrefix(
+  client: SummitStorageClient,
+  bucket: LeadStorageBucket,
+  prefix: string
+): Promise<number> {
+  const root = prefix.replace(/^\/+|\/+$/g, '');
+  if (!root) return 0;
+  const paths: string[] = [];
+  const walk = async (dir: string) => {
+    const { data, error } = await client.storage.from(bucket).list(dir, {
+      limit: 1000,
+    });
+    if (error) {
+      console.error(`Storage list ${bucket}/${dir} error:`, error);
+      return;
+    }
+    for (const item of data || []) {
+      const child = `${dir}/${item.name}`;
+      if (item.id == null) await walk(child);
+      else paths.push(child);
+    }
+  };
+  await walk(root);
+  return removeStoragePaths(client, bucket, paths);
+}
+
+async function purgeLeadCloudFiles(
+  client: SummitStorageClient,
+  lead: Lead
+): Promise<void> {
+  await removeStoragePaths(client, 'lead-photos', leadPhotoStoragePaths(lead));
+  await removeStoragePaths(client, 'lead-docs', leadDocStoragePaths(lead));
+  for (const folder of leadStorageFolderKeys(lead)) {
+    await removeStoragePrefix(client, 'lead-photos', folder);
+    await removeStoragePrefix(client, 'lead-docs', folder);
+  }
+}
+
+function keepLeadPhotoFolderKeys(
+  leads: Lead[],
+  trashItems: AppTrashItem[]
+): Set<string> {
+  const keys = new Set<string>();
+  for (const lead of leads) {
+    for (const key of leadStorageFolderKeys(lead)) keys.add(key);
+  }
+  for (const item of trashItems) {
+    if (item.kind !== 'lead') continue;
+    for (const key of leadStorageFolderKeys(item.lead)) keys.add(key);
+  }
+  return keys;
+}
+
+/** Remove lead-photos files whose folder is not an active or trashed lead. */
+async function purgeOrphanLeadPhotoFolders(
+  client: SummitStorageClient,
+  leads: Lead[],
+  trashItems: AppTrashItem[]
+): Promise<number> {
+  const keep = keepLeadPhotoFolderKeys(leads, trashItems);
+  const { data: roots, error } = await client.storage.from('lead-photos').list('', {
+    limit: 1000,
+  });
+  if (error) {
+    console.error('Storage list lead-photos error:', error);
+    return 0;
+  }
+  let removed = 0;
+  for (const item of roots || []) {
+    if (keep.has(item.name)) continue;
+    if (item.id == null) {
+      removed += await removeStoragePrefix(client, 'lead-photos', item.name);
+    } else {
+      removed += await removeStoragePaths(client, 'lead-photos', [item.name]);
+    }
+  }
+  return removed;
 }
 
 /**
@@ -4581,6 +4738,8 @@ export default function SummitApp() {
   const [authBusy, setAuthBusy] = useState(false);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [authMode, setAuthMode] = useState<'login' | 'recovery'>('login');
+  const [phoneOtp, setPhoneOtp] = useState('');
+  const [phoneOtpSent, setPhoneOtpSent] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [authBlockReason, setAuthBlockReason] = useState<null | 'no-company'>(
@@ -7023,14 +7182,13 @@ export default function SummitApp() {
   };
 
   /**
-   * HVAC D&R sell price. Ignores a known-stale price_sheet override of
-   * $1,250 (pre-2026 rate) so estimates always reflect the current
-   * $1,300 PHX / $1,600 TUC+NORTH pricing unless intentionally re-priced
-   * to a different value.
+   * HVAC D&R sell price. Ignores known-stale price_sheet overrides
+   * ($1,250 pre-2026, $1,300 prior lock) so estimates use the current
+   * $1,350 PHX / $1,600 TUC+NORTH unless intentionally re-priced.
    */
   const getHvacSellPrice = (fallback: number): number => {
     const live = getSellPrice('hvac', fallback);
-    return live === 1250 ? fallback : live;
+    return live === 1250 || live === 1300 ? fallback : live;
   };
 
   const getCost = (
@@ -7140,10 +7298,10 @@ export default function SummitApp() {
     const shingleSellFallback =
       selectedShingle === 'armourshake'
         ? activePricingRegion === 'southern'
-          ? 635
+          ? 925
           : activePricingRegion === 'northern'
-            ? 660
-            : 610
+            ? 950
+            : 900
         : isShingleFieldProduct
           ? getSellPrice('dynasty', 0)
           : selectedShingle === 'elastomeric' || selectedShingle === 'coating'
@@ -7283,7 +7441,7 @@ export default function SummitApp() {
     }
 
     const solarAdder = panels * 250;
-    const hvacAdder = hvac * getHvacSellPrice(activePricingRegion === 'central' ? 1300 : 1600);
+    const hvacAdder = hvac * getHvacSellPrice(activePricingRegion === 'central' ? 1350 : 1600);
     const skylightAdder = sky * getSellPrice('skylight', activePricingRegion === 'central' ? 525 : 550);
     const ridgeAdder = ridge * getSellPrice('ridge_vent', 13);
     const gLF = parseFloat(gutterLF) || 0;
@@ -7434,8 +7592,21 @@ export default function SummitApp() {
         const err = new URLSearchParams(window.location.search).get(
           'auth_error'
         );
-        if (err === 'callback') {
-          setAuthMessage('Sign-in did not finish. Try again.');
+        if (err === 'denied') {
+          setAuthMessage('Sign-in was cancelled.');
+        } else if (err === 'callback') {
+          setAuthMessage(
+            'Sign-in did not finish. Use email or phone number, or try Google / Microsoft again.'
+          );
+        }
+        if (err) {
+          const clean = new URL(window.location.href);
+          clean.searchParams.delete('auth_error');
+          window.history.replaceState(
+            {},
+            '',
+            `${clean.pathname}${clean.search}${clean.hash}`
+          );
         }
       }
       if (supabaseEnabled && supabase) {
@@ -8291,6 +8462,32 @@ export default function SummitApp() {
               safeFromDb.length,
               'leads and estimates from Supabase'
             );
+            try {
+              let trashForSweep: AppTrashItem[] = [];
+              try {
+                const rawTrash = localStorage.getItem('summitTrash');
+                if (rawTrash) {
+                  const parsed = JSON.parse(rawTrash);
+                  if (Array.isArray(parsed)) {
+                    trashForSweep = parsed as AppTrashItem[];
+                  }
+                }
+              } catch {
+                /* ignore */
+              }
+              const n = await purgeOrphanLeadPhotoFolders(
+                supabase,
+                [...safeFromDb, ...(localLeadsCache || [])],
+                trashForSweep
+              );
+              if (n > 0) {
+                showToast(
+                  `${n} leftover photo${n === 1 ? '' : 's'} removed from cloud`
+                );
+              }
+            } catch (sweepErr) {
+              console.error('Lead-photo orphan sweep error:', sweepErr);
+            }
           } catch (err) {
             console.error('Supabase bootstrap error:', err);
             // Thrown network/parse failures: never leave Pipeline empty if cache exists
@@ -8953,6 +9150,14 @@ export default function SummitApp() {
       return;
     }
     const trimmed = email.trim();
+    if (looksLikePhoneIdentifier(trimmed)) {
+      if (!toE164US(trimmed)) {
+        setAuthMessage('Enter a 10-digit US phone number.');
+        return;
+      }
+      await handlePhoneSendCode();
+      return;
+    }
     if (!trimmed || !password) {
       setAuthMessage('Email and password are required.');
       return;
@@ -8982,6 +9187,14 @@ export default function SummitApp() {
       return;
     }
     const trimmed = email.trim();
+    if (looksLikePhoneIdentifier(trimmed)) {
+      if (!toE164US(trimmed)) {
+        setAuthMessage('Enter a 10-digit US phone number.');
+        return;
+      }
+      await handlePhoneSendCode();
+      return;
+    }
     if (!trimmed || !password) {
       setAuthMessage('Email and password are required.');
       return;
@@ -9026,6 +9239,10 @@ export default function SummitApp() {
       setAuthMessage('Enter your email first.');
       return;
     }
+    if (looksLikePhoneIdentifier(trimmed)) {
+      setAuthMessage('Enter an email to reset a password, or send a phone code.');
+      return;
+    }
     setAuthBusy(true);
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(trimmed, {
@@ -9053,10 +9270,87 @@ export default function SummitApp() {
         provider,
         options: {
           redirectTo: authCallbackUrl(),
-          scopes: provider === 'azure' ? 'email' : undefined,
+          scopes: provider === 'azure' ? 'openid email profile' : undefined,
         },
       });
-      if (error) setAuthMessage(error.message);
+      if (error) {
+        const msg = error.message || '';
+        if (/provider is not enabled|unsupported provider/i.test(msg)) {
+          setAuthMessage(
+            provider === 'google'
+              ? 'Google sign-in is not enabled yet. Use email or phone number.'
+              : 'Microsoft sign-in is not enabled yet. Use email or phone number.'
+          );
+        } else {
+          setAuthMessage(msg);
+        }
+      }
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handlePhoneSendCode = async () => {
+    setAuthMessage(null);
+    if (!supabaseEnabled || !supabase) {
+      setAuthMessage('Supabase is not configured.');
+      return;
+    }
+    const e164 = toE164US(email);
+    if (!e164) {
+      setAuthMessage('Enter a 10-digit US phone number.');
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const { error } = await supabase.auth.signInWithOtp({ phone: e164 });
+      if (error) {
+        const msg = error.message || '';
+        if (/phone|sms|twilio|provider/i.test(msg) && /not enabled|disabled|unsupported/i.test(msg)) {
+          setAuthMessage(
+            'Phone sign-in is not enabled yet. Use email and password.'
+          );
+        } else {
+          setAuthMessage(msg);
+        }
+        return;
+      }
+      setPhoneOtp('');
+      setPhoneOtpSent(true);
+      setAuthMessage('Code sent. Check your texts.');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handlePhoneVerify = async () => {
+    setAuthMessage(null);
+    if (!supabaseEnabled || !supabase) {
+      setAuthMessage('Supabase is not configured.');
+      return;
+    }
+    const e164 = toE164US(email);
+    const token = phoneOtp.replace(/\D/g, '');
+    if (!e164) {
+      setAuthMessage('Enter a 10-digit US phone number.');
+      return;
+    }
+    if (token.length < 6) {
+      setAuthMessage('Enter the 6-digit code.');
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const { error } = await supabase.auth.verifyOtp({
+        phone: e164,
+        token,
+        type: 'sms',
+      });
+      if (error) {
+        setAuthMessage(error.message);
+        return;
+      }
+      window.location.replace('/');
     } finally {
       setAuthBusy(false);
     }
@@ -9126,7 +9420,7 @@ export default function SummitApp() {
     }
   };
 
-  const handleSignOut = () => {
+  const handleSignOut = async () => {
     if (hasUnsavedChanges && (isEditingLead && profileTab === 'estimator')) {
       const shouldSave = confirm('Unsaved changes — Save before signing out?');
       if (shouldSave) {
@@ -9137,11 +9431,20 @@ export default function SummitApp() {
     }
     setSidebarOpen(false);
     setShowUserMenu(false);
+    if (supabase) {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        showToast('Sign out failed. Check signal and retry.');
+        return;
+      }
+    }
     setIsLoggedIn(false);
     setAuthBlockReason(null);
     setAuthUserEmail(null);
     setAuthMode('login');
     setPassword('');
+    setPhoneOtp('');
+    setPhoneOtpSent(false);
     signedInRef.current = false;
     localStorage.removeItem('summitLoggedIn');
     localStorage.removeItem('summitActiveTab');
@@ -9152,7 +9455,6 @@ export default function SummitApp() {
     setEstimatorSourceLeadId(null);
     setShowProfessionalEstimate(false);
     setHasUnsavedChanges(false);
-    if (supabase) void supabase.auth.signOut();
   };
 
   /** Explicit save for Profile settings (profile + company + appearance). */
@@ -12753,11 +13055,10 @@ export default function SummitApp() {
         browserSessionHasTasksScope,
         probeGoogleTasksAccess,
       } = await import('@/lib/gcal-browser');
-      // Always force consent when adding Tasks (or first connect) so Google
-      // cannot silently reuse a Calendar-only grant. Calendar stays usable if
-      // the popup is cancelled (prior session is restored in gcal-browser).
+      // First connect keeps the click as a user gesture (no revoke delay).
+      // Reconnect for Tasks still passes forceConsent so Google re-prompts.
       const session = await connectGoogleCalendarBrowser({
-        forceConsent: opts?.forceConsent ?? true,
+        forceConsent: opts?.forceConsent ?? false,
       });
       const { getBrowserGcalAuthEpoch } = await import('@/lib/gcal-browser');
       gcalAuthEpochRef.current = getBrowserGcalAuthEpoch();
@@ -12836,24 +13137,24 @@ export default function SummitApp() {
         showToast(msg);
         return;
       }
-      // Fall back to server OAuth redirect if browser GIS fails and secret is set
-      if (msg.includes('Missing NEXT_PUBLIC')) {
-        showToast(msg);
-      } else {
+      // Server OAuth redirect only when client secret + redirect URI are set.
+      // A Client ID alone is not enough — that path hits Google's
+      // redirect_uri_mismatch error page.
+      if (!msg.includes('Missing NEXT_PUBLIC')) {
         try {
           const res = await fetch('/api/google/calendar/status', {
             cache: 'no-store',
           });
-          const data = (await res.json()) as { configured?: boolean };
-          if (data.configured) {
+          const data = (await res.json()) as { serverOAuth?: boolean };
+          if (data.serverOAuth) {
             window.location.href = '/api/google/calendar/auth';
             return;
           }
         } catch {
           /* ignore */
         }
-        showToast(msg);
       }
+      showToast(msg);
     } finally {
       setGcalBusy(false);
     }
@@ -13812,6 +14113,7 @@ export default function SummitApp() {
     ownerName: string | null;
     lat: number;
     lng: number;
+    dateOfLoss?: string | null;
   }): Promise<CreatedLeadInfo | null> => {
     try {
       const jobNumber = await generateJobNumber();
@@ -13837,6 +14139,7 @@ export default function SummitApp() {
         clientZip: stateZipMatch?.[2] || '',
         leadSource: 'Self Generated',
         jobNumber,
+        dateOfLoss: input.dateOfLoss || '',
         notes: [
           {
             id: newClientId('note'),
@@ -14119,28 +14422,21 @@ export default function SummitApp() {
         persistAppInvoices(
           appInvoices.filter((i) => i.leadId !== leadId)
         );
-        if (supabaseEnabled && supabase) {
-          for (const inv of doomedInvoices) {
-            try {
-              const marker = '/lead-docs/';
-              const idx = inv.url?.indexOf(marker) ?? -1;
-              if (idx >= 0) {
-                const objectPath = decodeURIComponent(
-                  inv.url.slice(idx + marker.length).split('?')[0]
-                );
-                void supabase.storage.from('lead-docs').remove([objectPath]);
-              }
-            } catch {
-              /* ignore */
-            }
-          }
-        }
       }
-      if (supabaseEnabled && supabase && cloudId) {
+      if (supabaseEnabled && supabase) {
         void (async () => {
           try {
-            await supabase.from('estimates').delete().eq('lead_id', cloudId);
-            await supabase.from('leads').delete().eq('id', cloudId);
+            await purgeLeadCloudFiles(supabase, doomed.lead);
+            for (const inv of doomedInvoices) {
+              const path = storagePathFromPublicUrl(inv.url, 'lead-docs');
+              if (path) {
+                await removeStoragePaths(supabase, 'lead-docs', [path]);
+              }
+            }
+            if (cloudId) {
+              await supabase.from('estimates').delete().eq('lead_id', cloudId);
+              await supabase.from('leads').delete().eq('id', cloudId);
+            }
           } catch (err) {
             console.error('Supabase permanent delete error:', err);
           }
@@ -14151,45 +14447,45 @@ export default function SummitApp() {
     }
 
     if (supabaseEnabled && supabase && doomed) {
-      try {
-        if (doomed.kind === 'photo' && doomed.photo.url) {
-          const marker = '/lead-photos/';
-          const idx = doomed.photo.url.indexOf(marker);
-          if (idx >= 0) {
-            const objectPath = decodeURIComponent(
-              doomed.photo.url.slice(idx + marker.length).split('?')[0]
+      void (async () => {
+        try {
+          if (doomed.kind === 'photo') {
+            const path = storagePathFromPublicUrl(
+              doomed.photo.url,
+              'lead-photos'
             );
-            void supabase.storage.from('lead-photos').remove([objectPath]);
-          }
-        } else if (
-          (doomed.kind === 'document' || doomed.kind === 'measurement') &&
-          doomed.document.url
-        ) {
-          const marker = '/lead-docs/';
-          const idx = doomed.document.url.indexOf(marker);
-          if (idx >= 0) {
-            const objectPath = decodeURIComponent(
-              doomed.document.url.slice(idx + marker.length).split('?')[0]
+            if (path) {
+              await removeStoragePaths(supabase, 'lead-photos', [path]);
+            }
+          } else if (
+            doomed.kind === 'document' ||
+            doomed.kind === 'measurement'
+          ) {
+            const path = storagePathFromPublicUrl(
+              doomed.document.url,
+              'lead-docs'
             );
-            void supabase.storage.from('lead-docs').remove([objectPath]);
+            if (path) {
+              await removeStoragePaths(supabase, 'lead-docs', [path]);
+            }
+          } else if (doomed.kind === 'estimate' && doomed.estimate) {
+            if (doomed.estimate.supabaseId) {
+              await supabase
+                .from('estimates')
+                .delete()
+                .eq('id', doomed.estimate.supabaseId);
+            }
+            const path = doomed.estimate.pdfUrl
+              ? storagePathFromLeadDocUrl(doomed.estimate.pdfUrl)
+              : null;
+            if (path) {
+              await removeStoragePaths(supabase, 'lead-docs', [path]);
+            }
           }
-        } else if (doomed.kind === 'estimate' && doomed.estimate) {
-          if (doomed.estimate.supabaseId) {
-            void supabase
-              .from('estimates')
-              .delete()
-              .eq('id', doomed.estimate.supabaseId);
-          }
-          const path = doomed.estimate.pdfUrl
-            ? storagePathFromLeadDocUrl(doomed.estimate.pdfUrl)
-            : null;
-          if (path) {
-            void supabase.storage.from('lead-docs').remove([path]);
-          }
+        } catch (err) {
+          console.error('Storage permanent delete error:', err);
         }
-      } catch {
-        /* ignore */
-      }
+      })();
     }
     showToast('Permanently deleted');
   };
@@ -14220,30 +14516,29 @@ export default function SummitApp() {
           try {
             if (item.kind === 'lead') {
               const cloudId = item.lead.supabaseId?.trim();
+              await purgeLeadCloudFiles(supabase, item.lead);
               if (cloudId) {
                 await supabase.from('estimates').delete().eq('lead_id', cloudId);
                 await supabase.from('leads').delete().eq('id', cloudId);
               }
-            } else if (item.kind === 'photo' && item.photo.url) {
-              const marker = '/lead-photos/';
-              const idx = item.photo.url.indexOf(marker);
-              if (idx >= 0) {
-                const objectPath = decodeURIComponent(
-                  item.photo.url.slice(idx + marker.length).split('?')[0]
-                );
-                await supabase.storage.from('lead-photos').remove([objectPath]);
+            } else if (item.kind === 'photo') {
+              const path = storagePathFromPublicUrl(
+                item.photo.url,
+                'lead-photos'
+              );
+              if (path) {
+                await removeStoragePaths(supabase, 'lead-photos', [path]);
               }
             } else if (
-              (item.kind === 'document' || item.kind === 'measurement') &&
-              item.document.url
+              item.kind === 'document' ||
+              item.kind === 'measurement'
             ) {
-              const marker = '/lead-docs/';
-              const idx = item.document.url.indexOf(marker);
-              if (idx >= 0) {
-                const objectPath = decodeURIComponent(
-                  item.document.url.slice(idx + marker.length).split('?')[0]
-                );
-                await supabase.storage.from('lead-docs').remove([objectPath]);
+              const path = storagePathFromPublicUrl(
+                item.document.url,
+                'lead-docs'
+              );
+              if (path) {
+                await removeStoragePaths(supabase, 'lead-docs', [path]);
               }
             } else if (item.kind === 'estimate' && item.estimate) {
               if (item.estimate.supabaseId) {
@@ -14265,13 +14560,9 @@ export default function SummitApp() {
         }
         for (const inv of invoicesToPurge) {
           try {
-            const marker = '/lead-docs/';
-            const idx = inv.url?.indexOf(marker) ?? -1;
-            if (idx >= 0) {
-              const objectPath = decodeURIComponent(
-                inv.url.slice(idx + marker.length).split('?')[0]
-              );
-              await supabase.storage.from('lead-docs').remove([objectPath]);
+            const path = storagePathFromPublicUrl(inv.url, 'lead-docs');
+            if (path) {
+              await removeStoragePaths(supabase, 'lead-docs', [path]);
             }
           } catch {
             /* ignore */
@@ -14834,7 +15125,7 @@ export default function SummitApp() {
     lead.jobNumber ||
     'Lead';
 
-  /** Soft-delete photo → app trash (Storage kept until permanent purge). */
+  /** Soft-delete photo → app trash, and remove the Storage object. */
   const removeLeadPhoto = (photoId: string) => {
     if (!currentLeadId) return;
     setPendingTrashPhotoId(photoId);
@@ -14864,6 +15155,10 @@ export default function SummitApp() {
       },
       ...trash,
     ]);
+    const path = storagePathFromPublicUrl(photo.url, 'lead-photos');
+    if (supabaseEnabled && supabase && path) {
+      void removeStoragePaths(supabase, 'lead-photos', [path]);
+    }
     if (lightboxPhoto?.id === photoId) setLightboxPhoto(null);
     showToast('Moved to trash');
   };
@@ -16409,7 +16704,7 @@ export default function SummitApp() {
     }
     if (hvac > 0) {
       const hvacRate = getHvacSellPrice(
-        activePricingRegion === 'central' ? 1300 : 1600
+        activePricingRegion === 'central' ? 1350 : 1600
       );
       push(
         `Detach and reset HVAC — ${hvac} unit${hvac === 1 ? '' : 's'}`,
@@ -17344,7 +17639,7 @@ export default function SummitApp() {
               type="button"
               onClick={() => {
                 setSidebarProfileOpen(false);
-                handleSignOut();
+                void handleSignOut();
               }}
               className="w-full text-left px-3.5 py-2.5 text-sm font-medium text-zinc-600 hover:bg-black/[0.04] border-t border-[var(--glass-border)]"
             >
@@ -17683,7 +17978,7 @@ export default function SummitApp() {
                 type="button"
                 onClick={() => {
                   setShowUserMenu(false);
-                  handleSignOut();
+                  void handleSignOut();
                 }}
                 className="w-full text-left px-4 py-2.5 text-sm hover:bg-black/[0.04] text-zinc-800 border-t border-[var(--glass-border)]"
               >
@@ -17744,24 +18039,22 @@ export default function SummitApp() {
 
           {authMode === 'recovery' ? (
             <div className="space-y-6">
-              <input
-                type="password"
+              <PasswordField
                 value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
+                onChange={setNewPassword}
                 placeholder="New password"
                 autoComplete="new-password"
+                className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
               />
-              <input
-                type="password"
+              <PasswordField
                 value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
+                onChange={setConfirmPassword}
+                placeholder="Confirm password"
+                autoComplete="new-password"
+                className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') void handleUpdateRecoveryPassword();
                 }}
-                className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
-                placeholder="Confirm password"
-                autoComplete="new-password"
               />
               {authMessage ? (
                 <p className="text-sm text-zinc-700">{authMessage}</p>
@@ -17779,31 +18072,59 @@ export default function SummitApp() {
             <div className="space-y-6">
               <div>
                 <input
-                  type="email"
+                  type="text"
+                  inputMode={
+                    looksLikePhoneIdentifier(email) ? 'tel' : 'email'
+                  }
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(e) => {
+                    setPhoneOtpSent(false);
+                    setPhoneOtp('');
+                    setEmail(formatLoginIdentifier(e.target.value));
+                  }}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') void handleLogin();
+                    if (e.key !== 'Enter') return;
+                    if (phoneOtpSent) void handlePhoneVerify();
+                    else void handleLogin();
                   }}
                   className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
-                  placeholder="you@summitroofing.com"
-                  autoComplete="email"
+                  placeholder="Email or phone number"
+                  autoComplete={
+                    looksLikePhoneIdentifier(email) ? 'tel' : 'email'
+                  }
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
                 />
               </div>
 
-              <div>
+              {phoneOtpSent ? (
                 <input
-                  type="password"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  value={phoneOtp}
+                  onChange={(e) =>
+                    setPhoneOtp(e.target.value.replace(/\D/g, '').slice(0, 8))
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void handlePhoneVerify();
+                  }}
+                  className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white tracking-[0.3em] text-center"
+                  placeholder="6-digit code"
+                />
+              ) : looksLikePhoneIdentifier(email) ? null : (
+                <PasswordField
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={setPassword}
+                  placeholder="Password"
+                  autoComplete="current-password"
+                  className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') void handleLogin();
                   }}
-                  className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
-                  placeholder="Password"
-                  autoComplete="current-password"
                 />
-              </div>
+              )}
 
               {authMessage ? (
                 <p className="text-sm text-zinc-700">{authMessage}</p>
@@ -17812,20 +18133,37 @@ export default function SummitApp() {
               <button
                 type="button"
                 disabled={authBusy}
-                onClick={() => void handleLogin()}
+                onClick={() =>
+                  void (phoneOtpSent ? handlePhoneVerify() : handleLogin())
+                }
                 className="btn-primary w-full py-4 rounded-3xl font-semibold text-lg disabled:opacity-50"
               >
-                Sign In
+                {phoneOtpSent
+                  ? 'Verify code'
+                  : toE164US(email)
+                    ? 'Send code'
+                    : 'Sign In'}
               </button>
 
-              <button
-                type="button"
-                disabled={authBusy}
-                onClick={() => void handleCreateAccount()}
-                className="w-full py-4 rounded-3xl font-semibold text-lg border border-zinc-200 bg-white text-zinc-800 disabled:opacity-50"
-              >
-                Create account
-              </button>
+              {phoneOtpSent ? (
+                <button
+                  type="button"
+                  disabled={authBusy}
+                  onClick={() => void handlePhoneSendCode()}
+                  className="text-sm text-zinc-500 hover:text-zinc-700 disabled:opacity-50"
+                >
+                  Resend code
+                </button>
+              ) : looksLikePhoneIdentifier(email) ? null : (
+                <button
+                  type="button"
+                  disabled={authBusy}
+                  onClick={() => void handleCreateAccount()}
+                  className="w-full py-4 rounded-3xl font-semibold text-lg border border-zinc-200 bg-white text-zinc-800 disabled:opacity-50"
+                >
+                  Create account
+                </button>
+              )}
 
               <button
                 type="button"
@@ -17845,16 +18183,18 @@ export default function SummitApp() {
                 Continue with Microsoft
               </button>
 
-              <div className="text-center">
-                <button
-                  type="button"
-                  disabled={authBusy}
-                  onClick={() => void handleForgotPassword()}
-                  className="text-sm text-zinc-500 hover:text-zinc-700 disabled:opacity-50"
-                >
-                  Forgot password?
-                </button>
-              </div>
+              {looksLikePhoneIdentifier(email) ? null : (
+                <div className="text-center">
+                  <button
+                    type="button"
+                    disabled={authBusy}
+                    onClick={() => void handleForgotPassword()}
+                    className="text-sm text-zinc-500 hover:text-zinc-700 disabled:opacity-50"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -20936,10 +21276,6 @@ export default function SummitApp() {
               <h2 className="text-lg font-semibold text-zinc-900">
                 Move photo to trash?
               </h2>
-              <p className="text-sm text-zinc-500 mt-2">
-                You can restore it from Trash later. Storage file stays until
-                permanent delete.
-              </p>
             </div>
             <div className="px-5 sm:px-6 pb-5 sm:pb-6 flex flex-col gap-2">
               <button
@@ -24066,126 +24402,139 @@ export default function SummitApp() {
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-zinc-200 bg-white p-5 sm:p-6 space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                  <div className="text-sm font-semibold text-zinc-900">
-                    Lists
+              <div className="rounded-3xl border border-zinc-200 bg-white p-5 sm:p-6">
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                    <h2 className="text-sm font-semibold text-zinc-900 leading-10">
+                      Lists
+                    </h2>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <input
+                        type="text"
+                        value={taskListDraftTitle}
+                        onChange={(e) => setTaskListDraftTitle(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void createTaskList();
+                        }}
+                        placeholder="New list name"
+                        className="h-10 rounded-2xl border border-zinc-200 px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-300/50 min-w-[10rem]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void createTaskList()}
+                        className="h-10 px-4 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50 shrink-0"
+                      >
+                        Create list
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <input
-                      type="text"
-                      value={taskListDraftTitle}
-                      onChange={(e) => setTaskListDraftTitle(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') void createTaskList();
-                      }}
-                      placeholder="New list name"
-                      className="rounded-2xl border border-zinc-200 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-300/50 min-w-[10rem]"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => void createTaskList()}
-                      className="px-4 py-2 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50"
-                    >
-                      Create list
-                    </button>
-                  </div>
-                </div>
-                <div className="flex flex-wrap justify-center gap-3">
-                  {safeTaskLists.map((list) => {
-                    const count = visibleTasks.filter(
-                      (t) =>
-                        t.listId === list.id &&
-                        !t.completed &&
-                        isActiveSummitTask(t)
-                    ).length;
-                    const active = list.id === listId;
-                    if (renamingTaskListId === list.id) {
-                      return (
-                        <form
-                          key={list.id}
-                          className="flex items-center gap-2"
-                          onSubmit={(e) => {
-                            e.preventDefault();
-                            void renameTaskList(list.id, renameTaskListTitle);
-                          }}
-                        >
-                          <input
-                            autoFocus
-                            type="text"
-                            value={renameTaskListTitle}
-                            onChange={(e) =>
-                              setRenameTaskListTitle(e.target.value)
-                            }
-                            className="rounded-2xl border border-zinc-300 px-4 py-3 text-base font-semibold w-48"
-                          />
-                          <button
-                            type="submit"
-                            className="text-sm font-semibold text-graphite hover:text-graphite-hover px-3 py-2"
-                          >
-                            Save
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setRenamingTaskListId(null);
-                              setRenameTaskListTitle('');
+                  <div
+                    className="flex flex-wrap items-center gap-2"
+                    role="tablist"
+                    aria-label="Task lists"
+                  >
+                    {safeTaskLists.map((list) => {
+                      const count = visibleTasks.filter(
+                        (t) =>
+                          t.listId === list.id &&
+                          !t.completed &&
+                          isActiveSummitTask(t)
+                      ).length;
+                      const active = list.id === listId;
+                      if (renamingTaskListId === list.id) {
+                        return (
+                          <form
+                            key={list.id}
+                            className="flex items-center gap-2"
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              void renameTaskList(list.id, renameTaskListTitle);
                             }}
-                            className="text-sm text-zinc-500 px-3 py-2"
                           >
-                            Cancel
-                          </button>
-                        </form>
-                      );
-                    }
-                    return (
-                      <div key={list.id} className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => persistActiveTaskListId(list.id)}
-                          className={`flex-1 px-6 py-3 rounded-2xl text-base font-semibold border transition-colors ${
+                            <input
+                              autoFocus
+                              type="text"
+                              value={renameTaskListTitle}
+                              onChange={(e) =>
+                                setRenameTaskListTitle(e.target.value)
+                              }
+                              className="h-10 rounded-2xl border border-zinc-300 px-3 text-sm font-semibold w-48"
+                            />
+                            <button
+                              type="submit"
+                              className="h-10 text-sm font-semibold text-graphite hover:text-graphite-hover px-3"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRenamingTaskListId(null);
+                                setRenameTaskListTitle('');
+                              }}
+                              className="h-10 text-sm text-zinc-500 px-3"
+                            >
+                              Cancel
+                            </button>
+                          </form>
+                        );
+                      }
+                      return (
+                        <div
+                          key={list.id}
+                          className={`inline-flex h-10 items-center rounded-2xl border transition-colors ${
                             active
                               ? 'border-graphite bg-chrome-soft text-zinc-900'
                               : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'
                           }`}
                         >
-                          {list.title}
-                          {count > 0 ? (
-                            <span className="ml-2 text-sm font-medium text-zinc-500">
-                              {count}
-                            </span>
-                          ) : null}
-                        </button>
-                        {active ? (
                           <button
                             type="button"
-                            title="Rename list"
-                            onClick={() => {
-                              setRenamingTaskListId(list.id);
-                              setRenameTaskListTitle(list.title);
-                            }}
-                            className="p-2.5 rounded-xl text-zinc-400 hover:text-zinc-700 hover:bg-zinc-50"
+                            role="tab"
+                            aria-selected={active}
+                            onClick={() => persistActiveTaskListId(list.id)}
+                            className={`h-10 px-3.5 text-sm font-semibold rounded-2xl whitespace-nowrap ${
+                              active ? 'pr-1.5' : ''
+                            }`}
                           >
-                            <svg
-                              className="w-4 h-4"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth={2}
-                              aria-hidden
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"
-                              />
-                            </svg>
-                            <span className="sr-only">Rename list</span>
+                            {list.title}
+                            {count > 0 ? (
+                              <span className="ml-1.5 font-medium text-zinc-500">
+                                {count}
+                              </span>
+                            ) : null}
                           </button>
-                        ) : null}
-                      </div>
-                    );
-                  })}
+                          {active ? (
+                            <button
+                              type="button"
+                              title="Rename list"
+                              onClick={() => {
+                                setRenamingTaskListId(list.id);
+                                setRenameTaskListTitle(list.title);
+                              }}
+                              className="h-10 w-9 flex items-center justify-center rounded-r-2xl text-zinc-400 hover:text-zinc-700"
+                            >
+                              <svg
+                                className="w-3.5 h-3.5"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth={2}
+                                aria-hidden
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"
+                                />
+                              </svg>
+                              <span className="sr-only">Rename list</span>
+                            </button>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 
@@ -24632,7 +24981,7 @@ export default function SummitApp() {
                   Weather
                 </div>
                 <p className="text-sm text-zinc-500">
-                  Live hail, wind &amp; tornado reports — find where to canvass
+                  Live hail, wind &amp; tornado reports
                 </p>
               </button>
               <button
@@ -24685,24 +25034,22 @@ export default function SummitApp() {
                   <div className="text-xs font-medium uppercase tracking-wide text-[var(--steel)] mb-1.5">
                     New password
                   </div>
-                  <input
-                    type="password"
+                  <PasswordField
                     value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    className="w-full border border-[var(--chrome-line)] rounded-2xl px-4 py-3 text-base text-[var(--graphite)] focus:outline-none focus:border-[var(--steel)] bg-white"
+                    onChange={setNewPassword}
                     autoComplete="new-password"
+                    className="w-full border border-[var(--chrome-line)] rounded-2xl px-4 py-3 text-base text-[var(--graphite)] focus:outline-none focus:border-[var(--steel)] bg-white"
                   />
                 </div>
                 <div>
                   <div className="text-xs font-medium uppercase tracking-wide text-[var(--steel)] mb-1.5">
                     Confirm password
                   </div>
-                  <input
-                    type="password"
+                  <PasswordField
                     value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    className="w-full border border-[var(--chrome-line)] rounded-2xl px-4 py-3 text-base text-[var(--graphite)] focus:outline-none focus:border-[var(--steel)] bg-white"
+                    onChange={setConfirmPassword}
                     autoComplete="new-password"
+                    className="w-full border border-[var(--chrome-line)] rounded-2xl px-4 py-3 text-base text-[var(--graphite)] focus:outline-none focus:border-[var(--steel)] bg-white"
                   />
                 </div>
                 <button
@@ -24797,9 +25144,7 @@ export default function SummitApp() {
                     <button
                       type="button"
                       disabled={gcalBusy}
-                      onClick={() =>
-                        void connectGoogleCalendar({ forceConsent: true })
-                      }
+                      onClick={() => void connectGoogleCalendar()}
                       className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold inline-flex items-center gap-2"
                     >
                       <svg
@@ -26812,7 +27157,7 @@ export default function SummitApp() {
                       {(
                         parseFloat(hvacUnits) *
                         getHvacSellPrice(
-                          activePricingRegion === 'central' ? 1300 : 1600
+                          activePricingRegion === 'central' ? 1350 : 1600
                         )
                       ).toLocaleString()}
                     </div>

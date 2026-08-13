@@ -16,6 +16,7 @@ alwaysApply: false
 - `components/CanvassMap.tsx`
 - `components/AddressAutocomplete.tsx` — shared
 - `lib/canvassing.ts`
+- `lib/weather.ts` — shared; pin-drop storm lookup / date of loss
 - `lib/supabase.ts` — shared; `canvass_pins` table
 - `app/api/property-lookup/route.ts`
 - `app/api/reverse-geocode/route.ts`

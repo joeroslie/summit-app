@@ -30,3 +30,28 @@ export function displayPhoneUS(input: string | undefined | null): string {
   if (!input) return '';
   return formatPhoneUS(input);
 }
+
+/** E.164 for US numbers (+14805550100). Null if not 10 digits. */
+export function toE164US(input: string | undefined | null): string | null {
+  const d = digitsOnlyPhone(input || '');
+  if (d.length !== 10) return null;
+  return `+1${d}`;
+}
+
+/**
+ * Login identifier looks like a phone (digits / punctuation only, no @ or letters).
+ * Used to switch the sign-in field between email+password and SMS code.
+ */
+export function looksLikePhoneIdentifier(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (trimmed.includes('@')) return false;
+  if (/[a-zA-Z]/.test(trimmed)) return false;
+  return /\d/.test(trimmed);
+}
+
+/** Format as a US phone while typing; leave email-like input unchanged. */
+export function formatLoginIdentifier(raw: string): string {
+  if (looksLikePhoneIdentifier(raw)) return formatPhoneUS(raw);
+  return raw;
+}

@@ -1,17 +1,14 @@
 /**
  * Shared types + helpers for the Weather / Storm Tracker tool.
  *
- * MVP data source: NOAA's public Local Storm Reports (LSR) service — free,
- * no API key, near-real-time point reports of hail/wind/tornado/etc, updated
- * every ~30 minutes. See app/api/storm-reports/route.ts for the proxy that
- * fetches + normalizes this into the `StormReport` shape below.
+ * Data source: NOAA's public Local Storm Reports (LSR) service — free,
+ * no API key, near-real-time point reports of hail/wind/tornado/etc.
+ * See app/api/storm-reports/route.ts for the proxy.
  *
- * Phase 2 (not built here — see note at bottom): full radar-derived MESH hail
- * "swath" polygons (the colored-band maps Hail Recon/HailTrace are known for)
- * require ingesting NOAA MRMS GRIB2 grids server-side, which is a much bigger
- * backend lift than a point-report proxy. This file's `StormReport` shape and
- * the map's marker layer are intentionally kept swap-in-ready for that later:
- * a swath layer would render on the same Leaflet map alongside these points.
+ * Optional live weather overlay (RainViewer reflectivity) lives in
+ * lib/radar.ts and renders under the pins on StormMap. Damage zones on
+ * live/day views are NWS storm-based warning polygons (the same outlines
+ * HailTrace Recon draws). Longer lookbacks still fall back to clustered LSRs.
  */
 
 export type StormEventCategory = 'hail' | 'wind' | 'tornado';
@@ -41,25 +38,200 @@ export type StormReport = {
   lng: number;
 };
 
-export type StormReportsResponse = {
-  reports: StormReport[];
-  fetchedAt: string;
-  window: StormWindow;
-  count: number;
-  source: 'noaa-lsr';
+export type StormWarningPolygon = {
+  type: 'Feature';
+  geometry: {
+    type: 'Polygon' | 'MultiPolygon';
+    coordinates: unknown;
+  };
+  properties: Record<string, never>;
 };
 
-export type StormWindow = '24h' | '48h' | '72h';
+/** NWS storm-based warning (SVR / TOR / extreme wind) for the damage-zone overlay. */
+export type StormWarning = {
+  id: string;
+  category: StormEventCategory;
+  wfo: string | null;
+  issuedAt: string;
+  expiresAt: string | null;
+  windTagMph: number | null;
+  hailTagInches: number | null;
+  centroid: { lat: number; lng: number };
+  polygon: StormWarningPolygon;
+};
 
-/** Mirrors NOAA's own layer structure on the LSR MapServer (verified via /query metadata). */
-export const STORM_WINDOWS: { id: StormWindow; label: string; layerId: number }[] = [
-  { id: '24h', label: 'Last 24h', layerId: 0 },
-  { id: '48h', label: 'Last 48h', layerId: 1 },
-  { id: '72h', label: 'Last 72h', layerId: 2 },
+export type StormReportsResponse = {
+  reports: StormReport[];
+  warnings: StormWarning[];
+  fetchedAt: string;
+  window: StormWindow;
+  /** Set when the request was for one calendar day (`YYYY-MM-DD`). */
+  day: string | null;
+  count: number;
+  source: 'noaa-lsr' | 'iem-lsr';
+};
+
+export type StormWindow = '24h' | '48h' | '72h' | '3m' | '6m' | '9m' | '1y' | '2y' | 'day';
+
+export type StormWindowMeta = {
+  id: StormWindow;
+  label: string;
+  /** Hours to look back from now. */
+  hours: number;
+  /**
+   * NOAA LSR MapServer layer id for the live 24/48/72h feeds.
+   * Null for historical windows, which come from IEM's LSR archive.
+   */
+  layerId: number | null;
+};
+
+/**
+ * Live NOAA layers (24/48/72h) plus IEM historical lookbacks. 3/6/9 months,
+ * 1 year, and 2 years are for canvassing past storm damage — NOAA's public
+ * LSR MapServer only keeps the last 72 hours.
+ */
+export const STORM_WINDOWS: StormWindowMeta[] = [
+  { id: '24h', label: '24h', hours: 24, layerId: 0 },
+  { id: '48h', label: '48h', hours: 48, layerId: 1 },
+  { id: '72h', label: '72h', hours: 72, layerId: 2 },
+  { id: '3m', label: '3 months', hours: 24 * 90, layerId: null },
+  { id: '6m', label: '6 months', hours: 24 * 180, layerId: null },
+  { id: '9m', label: '9 months', hours: 24 * 270, layerId: null },
+  { id: '1y', label: '1 year', hours: 24 * 365, layerId: null },
+  { id: '2y', label: '2 years', hours: 24 * 730, layerId: null },
 ];
 
+export const DEFAULT_NEAR_RADIUS_MILES = 75;
+export const MIN_NEAR_RADIUS_MILES = 10;
+export const MAX_NEAR_RADIUS_MILES = 250;
+export const NEAR_RADIUS_OPTIONS_MILES = [10, 25, 50, 75, 100, 150, 250] as const;
+export const WEATHER_NEAR_RADIUS_STORAGE_KEY = 'summitWeatherNearRadius';
+export const STORM_DAY_LOOKBACK_YEARS = 2;
+
+export function clampNearRadiusMiles(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_NEAR_RADIUS_MILES;
+  return Math.min(MAX_NEAR_RADIUS_MILES, Math.max(MIN_NEAR_RADIUS_MILES, Math.round(n)));
+}
+
+export function readStoredNearRadiusMiles(): number {
+  if (typeof window === 'undefined') return DEFAULT_NEAR_RADIUS_MILES;
+  try {
+    const raw = window.localStorage.getItem(WEATHER_NEAR_RADIUS_STORAGE_KEY);
+    if (raw == null || raw === '') return DEFAULT_NEAR_RADIUS_MILES;
+    return clampNearRadiusMiles(Number(raw));
+  } catch {
+    return DEFAULT_NEAR_RADIUS_MILES;
+  }
+}
+
+export function writeStoredNearRadiusMiles(miles: number): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      WEATHER_NEAR_RADIUS_STORAGE_KEY,
+      String(clampNearRadiusMiles(miles))
+    );
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+const STORM_DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+export function isStormWindow(v: string | null | undefined): v is StormWindow {
+  return v === 'day' || STORM_WINDOWS.some((w) => w.id === v);
+}
+
+export function stormWindowMeta(w: StormWindow): StormWindowMeta {
+  return STORM_WINDOWS.find((x) => x.id === w) ?? STORM_WINDOWS[0];
+}
+
+export function isLiveStormWindow(w: StormWindow): boolean {
+  if (w === 'day') return false;
+  return stormWindowMeta(w).layerId != null;
+}
+
 export function layerIdForWindow(w: StormWindow): number {
-  return STORM_WINDOWS.find((x) => x.id === w)?.layerId ?? 0;
+  return stormWindowMeta(w).layerId ?? 0;
+}
+
+export function localDateInputValue(d = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export function stormDayMinValue(): string {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - STORM_DAY_LOOKBACK_YEARS);
+  return localDateInputValue(d);
+}
+
+/** Validates `YYYY-MM-DD` within today and the 2-year lookback (browser local). */
+export function parseStormDay(raw: string | null | undefined): string | null {
+  const value = parseStormDayFormat(raw);
+  if (!value) return null;
+  if (value > localDateInputValue() || value < stormDayMinValue()) return null;
+  return value;
+}
+
+/** Calendar-date only — used by the API so server TZ does not reject a valid local day. */
+export function parseStormDayFormat(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const m = STORM_DAY_RE.exec(raw.trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  const dt = new Date(y, mo - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) {
+    return null;
+  }
+  return `${m[1]}-${m[2]}-${m[3]}`;
+}
+
+/**
+ * Local-calendar midnight → next midnight, as UTC ISO strings for IEM `sts`/`ets`.
+ * `tzOffsetMinutes` is `Date#getTimezoneOffset()` (minutes to add to local to get UTC).
+ */
+export function stormDayUtcBounds(
+  day: string,
+  tzOffsetMinutes = 0
+): { sts: string; ets: string } {
+  const [y, mo, d] = day.split('-').map(Number);
+  const startMs = Date.UTC(y, mo - 1, d) + tzOffsetMinutes * 60_000;
+  return {
+    sts: new Date(startMs).toISOString(),
+    ets: new Date(startMs + 24 * 60 * 60 * 1000).toISOString(),
+  };
+}
+
+export function formatStormDayLabel(day: string): string {
+  const parsed = parseStormDay(day);
+  if (!parsed) return day;
+  const [y, mo, d] = parsed.split('-').map(Number);
+  const dt = new Date(y, mo - 1, d);
+  return dt.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+export type GeoBBox = { west: number; east: number; south: number; north: number };
+
+/** Axis-aligned box around a point. Slightly larger than the circle of `radiusMiles`. */
+export function bboxAroundPoint(lat: number, lng: number, radiusMiles: number): GeoBBox {
+  const latDelta = radiusMiles / 69;
+  const cos = Math.cos((lat * Math.PI) / 180);
+  const lngDelta = radiusMiles / (69 * Math.max(0.2, Math.abs(cos)));
+  return {
+    south: lat - latDelta,
+    north: lat + latDelta,
+    west: lng - lngDelta,
+    east: lng + lngDelta,
+  };
 }
 
 export type EventStyle = {
@@ -109,7 +281,7 @@ export function eventStyle(category: StormEventCategory): EventStyle {
 }
 
 const HAIL_RE = /hail/i;
-const TORNADO_RE = /tornado|funnel\s*cloud|waterspout/i;
+const TORNADO_RE = /tornado|funnel\s*cloud|waterspout|landspout/i;
 const WIND_RE = /wind|wnd|gust|gst/i;
 
 /**
@@ -126,6 +298,43 @@ export function classifyStormEvent(
   if (TORNADO_RE.test(d)) return 'tornado';
   if (WIND_RE.test(d)) return 'wind';
   return null;
+}
+
+/**
+ * Map an NWS VTEC warning to hail / wind / tornado. Dual-threat SVRs
+ * (today's Valley cells: 60 mph + 0.75" hail) follow the wind tag when
+ * it meets severe criteria — that's the Recon wind outline Joe compared.
+ */
+export function classifyStormWarning(opts: {
+  phenomena: string | null | undefined;
+  windTagMph: number | null;
+  hailTagInches: number | null;
+}): StormEventCategory | null {
+  const ph = (opts.phenomena || '').toUpperCase();
+  if (ph === 'TO') return 'tornado';
+  if (ph === 'EW') return 'wind';
+  if (ph !== 'SV') return null;
+  const hail = opts.hailTagInches;
+  const wind = opts.windTagMph;
+  if (hail != null && hail >= 1 && (wind == null || wind < 58)) return 'hail';
+  if (wind != null) return 'wind';
+  if (hail != null && hail > 0) return 'hail';
+  return 'wind';
+}
+
+export function formatWarningMagnitude(warning: {
+  category: StormEventCategory;
+  windTagMph: number | null;
+  hailTagInches: number | null;
+}): string | null {
+  if (warning.category === 'tornado') return 'Tornado warning';
+  if (warning.category === 'wind' && warning.windTagMph != null) {
+    return `${Math.round(warning.windTagMph)} mph wind`;
+  }
+  if (warning.category === 'hail' && warning.hailTagInches != null) {
+    return `${warning.hailTagInches}" hail`;
+  }
+  return 'Severe thunderstorm warning';
 }
 
 export function parseMagnitudeNumber(magnitude: string | null | undefined): number | null {
@@ -179,6 +388,46 @@ export function haversineMiles(
   return R * 2 * Math.asin(Math.sqrt(h));
 }
 
+export const MILES_TO_METERS = 1609.344;
+
+export function bearingDegrees(
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number }
+): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const lat1 = toRad(from.lat);
+  const lat2 = toRad(to.lat);
+  const dLng = toRad(to.lng - from.lng);
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x =
+    Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+export function destinationPoint(
+  from: { lat: number; lng: number },
+  miles: number,
+  bearingDeg: number
+): { lat: number; lng: number } {
+  const R = 3958.8;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const toDeg = (r: number) => (r * 180) / Math.PI;
+  const brng = toRad(bearingDeg);
+  const lat1 = toRad(from.lat);
+  const lng1 = toRad(from.lng);
+  const d = miles / R;
+  const lat2 = Math.asin(
+    Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(brng)
+  );
+  const lng2 =
+    lng1 +
+    Math.atan2(
+      Math.sin(brng) * Math.sin(d) * Math.cos(lat1),
+      Math.cos(d) - Math.sin(lat1) * Math.sin(lat2)
+    );
+  return { lat: toDeg(lat2), lng: toDeg(lng2) };
+}
+
 export function relativeTimeFrom(iso: string): string {
   const t = new Date(iso).getTime();
   if (!Number.isFinite(t)) return '';
@@ -189,7 +438,265 @@ export function relativeTimeFrom(iso: string): string {
   const hrs = Math.round(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.round(hrs / 24);
-  return `${days}d ago`;
+  if (days < 30) return `${days}d ago`;
+  const months = Math.round(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  const years = Math.round(days / 365);
+  return `${years}y ago`;
+}
+
+/** House-level lookback used when a canvassing pin is dropped. */
+export const CANVASS_STORM_RADIUS_MILES = 15;
+export const CANVASS_STORM_WINDOW: StormWindow = '2y';
+export const CANVASS_STORM_LIVE_WINDOW: StormWindow = '72h';
+export const CANVASS_WIND_MIN_MPH = 45;
+export const PIN_STORM_LOOKUP_VERSION = 2;
+const CANVASS_STORM_MAX_DAYS = 12;
+const TWO_YEARS_MS = STORM_DAY_LOOKBACK_YEARS * 365.25 * 24 * 60 * 60 * 1000;
+const WIND_DAMAGE_RE = /dmg|damage/i;
+
+export type PinStormHit = {
+  date: string;
+  category: StormEventCategory;
+  magnitudeLabel: string | null;
+  miles: number;
+  locDesc: string | null;
+  validTime: string;
+};
+
+/** Nearby-storm summary stored on a canvassing pin for date-of-loss. */
+export type PinStormLookup = {
+  version: number;
+  fetchedAt: string;
+  window: StormWindow;
+  radiusMiles: number;
+  suggestedDate: string | null;
+  chosenDate: string | null;
+  best: PinStormHit | null;
+  alternates: PinStormHit[];
+  reportCount: number;
+  error?: string;
+};
+
+export function isPinStormLookup(v: unknown): v is PinStormLookup {
+  if (!v || typeof v !== 'object') return false;
+  const row = v as PinStormLookup;
+  return (
+    typeof row.fetchedAt === 'string' && row.version === PIN_STORM_LOOKUP_VERSION
+  );
+}
+
+export function formatMilesCompact(miles: number): string {
+  if (!Number.isFinite(miles)) return '';
+  const n = miles < 10 ? miles.toFixed(1) : String(Math.round(miles));
+  return `${n} mi`;
+}
+
+/** LSR valid time → local calendar day (device TZ). Arizona evening storms stay on that evening. */
+export function localDayFromIso(iso: string): string | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export function windSpeedMph(
+  report: Pick<StormReport, 'magnitude' | 'units'>
+): number | null {
+  const n = parseMagnitudeNumber(report.magnitude);
+  if (n == null) return null;
+  const u = (report.units || '').toLowerCase();
+  if (u.startsWith('kt') || u.includes('knot')) return n * 1.15078;
+  return n;
+}
+
+export function isWindDamageReport(report: Pick<StormReport, 'descript'>): boolean {
+  return WIND_DAMAGE_RE.test(report.descript || '');
+}
+
+function isWithinTwoYears(iso: string, now = Date.now()): boolean {
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return false;
+  if (t > now + 24 * 60 * 60 * 1000) return false;
+  return t >= now - TWO_YEARS_MS;
+}
+
+/**
+ * Date-of-loss qualifiers: measured hail, wind 45+ mph, thunderstorm wind
+ * damage (no mph on those LSRs), or tornado. Weaker gusts are dropped.
+ */
+export function qualifiesForCanvassDateOfLoss(report: StormReport): boolean {
+  if (!isWithinTwoYears(report.validTime)) return false;
+  if (report.category === 'tornado') return true;
+  if (report.category === 'hail') {
+    const n = parseMagnitudeNumber(report.magnitude);
+    return n != null && n > 0;
+  }
+  if (report.category === 'wind') {
+    const mph = windSpeedMph(report);
+    if (mph != null) return mph >= CANVASS_WIND_MIN_MPH;
+    return isWindDamageReport(report);
+  }
+  return false;
+}
+
+function canvassMagnitudeLabel(report: StormReport): string | null {
+  if (report.category === 'hail') return formatMagnitude(report);
+  if (report.category === 'tornado') {
+    return formatMagnitude(report) || 'Tornado';
+  }
+  const mph = windSpeedMph(report);
+  if (mph != null) return `${Math.round(mph)} mph wind`;
+  if (isWindDamageReport(report)) return 'Wind damage';
+  return formatMagnitude(report);
+}
+
+function closerThenStronger(
+  a: StormReport,
+  b: StormReport,
+  origin: { lat: number; lng: number }
+): number {
+  const d = haversineMiles(origin, a) - haversineMiles(origin, b);
+  if (Math.abs(d) > 0.05) return d;
+  const magA =
+    a.category === 'wind' ? windSpeedMph(a) ?? 0 : parseMagnitudeNumber(a.magnitude) ?? 0;
+  const magB =
+    b.category === 'wind' ? windSpeedMph(b) ?? 0 : parseMagnitudeNumber(b.magnitude) ?? 0;
+  return magB - magA;
+}
+
+function hitForDay(
+  reports: StormReport[],
+  origin: { lat: number; lng: number }
+): PinStormHit | null {
+  if (reports.length === 0) return null;
+  const hail = reports
+    .filter((r) => r.category === 'hail')
+    .sort((a, b) => closerThenStronger(a, b, origin))[0];
+  const wind = reports
+    .filter((r) => r.category === 'wind')
+    .sort((a, b) => closerThenStronger(a, b, origin))[0];
+  const tornado = reports
+    .filter((r) => r.category === 'tornado')
+    .sort((a, b) => closerThenStronger(a, b, origin))[0];
+
+  const candidates = [hail, wind, tornado].filter((r): r is StormReport => r != null);
+  const primary = [...candidates].sort((a, b) => closerThenStronger(a, b, origin))[0];
+  if (!primary) return null;
+  const date = localDayFromIso(primary.validTime);
+  if (!date) return null;
+
+  const labels = [hail, wind, tornado]
+    .filter((r): r is StormReport => r != null)
+    .map((r) => canvassMagnitudeLabel(r))
+    .filter((s): s is string => !!s);
+
+  return {
+    date,
+    category: primary.category,
+    magnitudeLabel: labels.join(' · ') || canvassMagnitudeLabel(primary),
+    miles: haversineMiles(origin, primary),
+    locDesc: primary.locDesc,
+    validTime: primary.validTime,
+  };
+}
+
+export function mergeStormReports(groups: StormReport[][]): StormReport[] {
+  const seen = new Set<string>();
+  const out: StormReport[] = [];
+  for (const group of groups) {
+    for (const report of group) {
+      const key = [
+        report.validTime,
+        report.lat.toFixed(4),
+        report.lng.toFixed(4),
+        report.category,
+        report.magnitude || '',
+      ].join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(report);
+    }
+  }
+  return out;
+}
+
+/**
+ * Date of loss for a pin: qualifying reports within 2 years, newest day first.
+ * Hail no longer outranks nearby 45+ mph wind or wind-damage LSRs.
+ */
+export function summarizeStormsForPin(
+  reports: StormReport[],
+  origin: { lat: number; lng: number },
+  opts?: {
+    window?: StormWindow;
+    radiusMiles?: number;
+    chosenDate?: string | null;
+    fetchedAt?: string;
+    error?: string;
+  }
+): PinStormLookup {
+  const radius = opts?.radiusMiles ?? CANVASS_STORM_RADIUS_MILES;
+  const qualifying = reports.filter((r) => {
+    if (!qualifiesForCanvassDateOfLoss(r)) return false;
+    return haversineMiles(origin, r) <= radius;
+  });
+
+  const byDay = new Map<string, StormReport[]>();
+  for (const report of qualifying) {
+    const date = localDayFromIso(report.validTime);
+    if (!date) continue;
+    const list = byDay.get(date);
+    if (list) list.push(report);
+    else byDay.set(date, [report]);
+  }
+
+  const hits = [...byDay.entries()]
+    .map(([, dayReports]) => hitForDay(dayReports, origin))
+    .filter((h): h is PinStormHit => h != null)
+    .sort((a, b) => new Date(b.validTime).getTime() - new Date(a.validTime).getTime())
+    .slice(0, CANVASS_STORM_MAX_DAYS);
+
+  const best = hits[0] ?? null;
+  const suggestedDate = best?.date ?? null;
+  const allDates = new Set(hits.map((h) => h.date));
+  const keptChosen =
+    opts?.chosenDate && allDates.has(opts.chosenDate) ? opts.chosenDate : null;
+
+  return {
+    version: PIN_STORM_LOOKUP_VERSION,
+    fetchedAt: opts?.fetchedAt || new Date().toISOString(),
+    window: opts?.window ?? CANVASS_STORM_WINDOW,
+    radiusMiles: radius,
+    suggestedDate,
+    chosenDate: keptChosen || suggestedDate,
+    best,
+    alternates: hits.slice(1),
+    reportCount: qualifying.length,
+    ...(opts?.error ? { error: opts.error } : {}),
+  };
+}
+
+export function emptyPinStormLookup(error?: string): PinStormLookup {
+  return {
+    version: PIN_STORM_LOOKUP_VERSION,
+    fetchedAt: new Date().toISOString(),
+    window: CANVASS_STORM_WINDOW,
+    radiusMiles: CANVASS_STORM_RADIUS_MILES,
+    suggestedDate: null,
+    chosenDate: null,
+    best: null,
+    alternates: [],
+    reportCount: 0,
+    ...(error ? { error } : {}),
+  };
+}
+
+export function pinDateOfLoss(storm: unknown): string | null {
+  if (!isPinStormLookup(storm)) return null;
+  return storm.chosenDate || storm.suggestedDate || null;
 }
 
 export const US_STATES: { code: string; name: string }[] = [

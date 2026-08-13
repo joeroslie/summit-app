@@ -1,15 +1,25 @@
 ---
-description: Backlog — auth / login (Apple + Google onboarding, password, RLS; not built yet). @ when building auth.
+description: Backlog — remaining auth (Apple, extra-company onboarding, Stripe). Joe-only login is already live.
 alwaysApply: false
 ---
 
-# Auth / login (planned — not built yet)
+# Auth / login — remaining
 
-When real login lands, include:
-- **Continue with Apple** + **Continue with Google** on first-run onboarding (conversion-critical — reduce download→delete)
-- Email / password as fallback; password settings / change password
-- Proper user auth (not anon-only)
-- Multi-tenant company isolation when selling SaaS
-- Tighten Supabase RLS (currently single-tenant anon policies on app_settings, etc.)
+**Already live (do not rebuild):** email + password (create, sign in, forgot/reset, change password), Continue with Google / Microsoft buttons, cookie middleware, `companies` + `company_members`, RLS so anon cannot read jobs. First account is owner. Later Create account does **not** join that company (they see “not on the company yet”).
 
-Tied to Alive UX **Phase C** — see `.cursor/rules/alive-product-ux-backlog.mdc`. Do not build until Joe asks (after UI color + deep scan gates unless he overrides).
+When Joe asks for the next slice, include only what he named:
+
+- **Continue with Apple** on first-run onboarding
+- New signup = **new empty company** (ProWest testers / sold accounts) — not members of Joe’s company
+- Profile + business form (name, company, phone, photo, logo) after that signup
+- Per-company price books (do not invent prices)
+- Stripe plan columns already exist on `companies` — unused until billing is built
+- Invite / add-member UI (today: SQL insert into `company_members`)
+
+Tied to Alive UX **Phase C** for the Apple + onboarding polish. Extra-company signup can ship earlier if Joe asks.
+
+**Still open (called out, not silent):**
+- Storage buckets are **public** (URL fetch works without a key). Flipping private needs signed URLs in the app first.
+- Storage default GRANTs are owned by `supabase_storage_admin` and cannot be revoked by `postgres`. RLS still blocks anon DML. PostgREST does not expose TRUNCATE.
+- Leaked-password protection is a dashboard toggle (Pro plan).
+- Google / Microsoft only work after those providers are enabled in Supabase Auth.

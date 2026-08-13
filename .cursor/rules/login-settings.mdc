@@ -1,6 +1,6 @@
 ---
 description: Login & Settings — file map (@ tag this chat)
-globs: middleware.ts,lib/supabase/client.ts,lib/supabase/server.ts,lib/app-settings-sync.ts
+globs: proxy.ts,lib/supabase/client.ts,lib/supabase/server.ts,lib/app-settings-sync.ts,lib/auth-session.ts,app/auth/**
 alwaysApply: false
 ---
 
@@ -9,18 +9,25 @@ alwaysApply: false
 **Chat name:** `Login & Settings`  
 **Sidebar label:** Profile settings (`activeTab: settings`; profile menu, not primary sidebar)  
 **Agent starter:** `.cursor/agents/login-settings.md`  
-**Status:** Auth not built — anon Supabase client; middleware disabled
+**Status:** Joe-only auth is live (email/password, Google/Microsoft buttons, cookie session, company RLS). Apple, extra-user onboarding, and Stripe are still backlog.
 
 ## Files
 
-- `app/page.tsx` — `activeTab === 'settings'` (~L24243); user profile, company settings, theme pref, Google connect
-- `middleware.ts`
+- `app/page.tsx` — login screen, `activeTab === 'settings'` Account password, sign out
+- `components/PasswordField.tsx`
+- `lib/google-login.ts`
+- `app/auth/callback/route.ts`
+- `proxy.ts` — `@supabase/ssr` cookie refresh (`getClaims`)
+- `lib/auth-session.ts`
 - `lib/supabase/client.ts`
 - `lib/supabase/server.ts`
 - `lib/supabase.ts`
 - `lib/app-settings-sync.ts`
 - `components/PhoneInput.tsx` — shared
 - `lib/phone.ts` — shared
+- `supabase/migrations/20260812222121_auth_companies_rls.sql`
+- `supabase/migrations/20260812231906_harden_authenticated_grants.sql`
+- `supabase/auth_companies_rls.sql`
 - `supabase/company_user_settings_sync.sql`
 - `supabase/harden_rls_step1.sql`
 - `supabase/enable_rls_pricing_open.sql`
