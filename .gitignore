@@ -48,3 +48,8 @@ next-env.d.ts
 # local timestamped backups (do not lint / commit new ones)
 .checkpoints/
 *.backup
+
+# Impeccable: keep shared detector config, ignore session/cache
+.impeccable/*
+!.impeccable/config.json
+.impeccable/config.local.json

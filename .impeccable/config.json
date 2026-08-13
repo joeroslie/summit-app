@@ -1,0 +1,35 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [
+      "docs/pricing/Full_Price_Book_Print.html",
+      "docs/pricing/print.html"
+    ],
+    "ignoreValues": [
+      {
+        "rule": "bounce-easing",
+        "value": "cubic-bezier(0.34, 1.56, 0.64, 1)",
+        "createdAt": "2026-08-12T18:58:24.901Z",
+        "reason": "Canvassing tally tap-count pop feedback — intentional playful overshoot for a satisfying tap acknowledgment, not a content transition"
+      },
+      {
+        "rule": "gray-on-color",
+        "value": "*",
+        "files": [
+          "app/page.tsx"
+        ],
+        "createdAt": "2026-08-12T19:01:38.145Z",
+        "reason": "False positive on pre-existing, unrelated code (text-zinc-900 near-black text on bg-sky-50 is high-contrast dark-on-light, not washed-out gray-on-color); file is a 29k-line monolith touched incidentally while editing the shared shell elsewhere in it"
+      },
+      {
+        "rule": "gray-on-color",
+        "value": "*",
+        "files": [
+          "components/PipelineBoard.tsx"
+        ],
+        "createdAt": "2026-08-12T19:29:33.687Z",
+        "reason": "Pre-existing Trash toggle button: text-zinc-500 default, hover:text-amber-800 + hover:bg-amber-50 change together (not gray on a colored bg at rest); incidental flag from unrelated edit in same file"
+      }
+    ]
+  }
+}
