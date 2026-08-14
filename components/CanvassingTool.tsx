@@ -707,9 +707,7 @@ export default function CanvassingTool({
       </button>
 
       <div className="mb-6 flex items-center justify-between gap-3">
-        <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
-          Canvassing
-        </h1>
+        <h1 className="page-title">Canvassing</h1>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
@@ -732,7 +730,7 @@ export default function CanvassingTool({
         })}
       </div>
 
-      <div className="rounded-3xl border border-zinc-200 bg-white p-5 sm:p-6 mb-6">
+      <div className="glass list-card mb-6">
         <div className="flex flex-col sm:flex-row gap-3">
           <button
             type="button"
@@ -780,7 +778,7 @@ export default function CanvassingTool({
       />
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-4">
-        <div className="rounded-3xl border border-zinc-200 bg-white p-5 sm:p-6">
+        <div className="glass list-card">
           {!selectedPin ? (
             <div className="flex flex-col items-center justify-center py-14 text-center">
               <div className="w-11 h-11 rounded-full bg-zinc-100 flex items-center justify-center mb-3">
@@ -812,7 +810,7 @@ export default function CanvassingTool({
         </div>
 
         {/* All pins */}
-        <div className="rounded-3xl border border-zinc-200 bg-white p-5 sm:p-6">
+        <div className="glass list-card">
           <div className="flex items-center justify-between gap-2 mb-3">
             <div className="text-sm font-semibold text-zinc-900">
               Pins
@@ -854,10 +852,10 @@ export default function CanvassingTool({
                       selectPin(pin.id);
                       setFlyTo({ lat: pin.lat, lng: pin.lng });
                     }}
-                    className={`w-full text-left rounded-2xl border px-3 py-2.5 transition-colors ${
+                    className={`w-full text-left rounded-2xl px-3 py-2.5 transition-colors ${
                       active
-                        ? 'border-zinc-900 bg-zinc-50'
-                        : 'border-zinc-200 hover:bg-zinc-50'
+                        ? 'bg-[var(--graphite)]/[0.06]'
+                        : 'hover:bg-[var(--graphite)]/[0.04]'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -927,7 +925,7 @@ function StatCard({
 
   return (
     <div
-      className={`relative rounded-3xl border border-zinc-200 bg-white p-5 ${
+      className={`relative glass list-card ${
         flash ? 'tally-card-flash' : ''
       }`}
       style={flash ? ({ '--tally-flash': flashColor } as CSSProperties) : undefined}
@@ -936,7 +934,7 @@ function StatCard({
         type="button"
         onClick={onIncrement}
         aria-label={`Log a ${label.toLowerCase()} entry`}
-        className={`absolute inset-0 z-0 rounded-3xl focus:outline-none focus-visible:ring-2 ${accent.ring} active:bg-zinc-50/80 transition-colors`}
+        className={`absolute inset-0 z-0 rounded-[32px] focus:outline-none focus-visible:ring-2 ${accent.ring} active:bg-[var(--graphite)]/[0.04] transition-colors`}
       />
       <div className="relative z-10 flex items-start justify-between gap-2">
         <div className="text-[11px] uppercase tracking-wide text-zinc-400 font-medium">
@@ -1374,7 +1372,7 @@ function PinDetailPanel({
       <div className="pt-1 border-t border-zinc-100">
         {pin.lead_id ? (
           <div className="flex items-center justify-between gap-3 pt-4">
-            <div className="text-sm font-medium text-emerald-700">
+            <div className="text-sm font-medium text-[var(--accent-green)]">
               ✓ Lead created from this pin
             </div>
             {onOpenLead ? (

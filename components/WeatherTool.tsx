@@ -365,7 +365,7 @@ export default function WeatherTool({ showToast }: WeatherToolProps) {
   return (
     <div className="page-shell page-fade">
       <div className="mb-8 flex items-center justify-between gap-3 flex-wrap">
-        <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">Weather</h1>
+        <h1 className="page-title">Weather</h1>
         <div className="flex items-center gap-3">
           {lastUpdatedLabel && (
             <span className="text-xs text-zinc-400 tabular-nums">
@@ -627,7 +627,7 @@ function StormTrackerView({
               onClick={() => setAutoRefresh((v) => !v)}
               className={`px-3.5 py-2 rounded-xl text-xs font-medium border transition-colors ${
                 autoRefresh
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  ? 'border-[var(--accent-green)] bg-[var(--accent-green-soft)] text-[var(--accent-green-ink)]'
                   : 'border-zinc-200 text-zinc-500'
               }`}
             >

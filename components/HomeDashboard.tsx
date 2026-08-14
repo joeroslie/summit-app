@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import {
   eventOccursOnDay,
@@ -98,9 +98,17 @@ type GlimpseCardProps = {
   onOpen: () => void;
   children: React.ReactNode;
   className?: string;
+  /** Featured = full glass (resume + tasks). Quiet = flatter metric tiles. */
+  quiet?: boolean;
 };
 
-function GlimpseCard({ title, onOpen, children, className }: GlimpseCardProps) {
+function GlimpseCard({
+  title,
+  onOpen,
+  children,
+  className,
+  quiet,
+}: GlimpseCardProps) {
   return (
     <div
       role="button"
@@ -111,13 +119,29 @@ function GlimpseCard({ title, onOpen, children, className }: GlimpseCardProps) {
         e.preventDefault();
         onOpen();
       }}
-      className={`group glass glass-hover rounded-[32px] p-5 sm:p-6 cursor-pointer min-h-[13.5rem] ${
-        className || ''
-      }`}
+      className={
+        quiet
+          ? `group glass-quiet rounded-[24px] p-4 cursor-pointer ${className || ''}`
+          : `group glass glass-hover rounded-[32px] p-5 sm:p-6 cursor-pointer ${className || ''}`
+      }
     >
-      <div className="flex items-center justify-between mb-4">
-        <div className="text-base font-semibold text-zinc-900">{title}</div>
-        <span className="text-zinc-400 group-hover:text-[var(--accent-blue)] transition-colors text-lg leading-none">
+      <div
+        className={`flex items-center justify-between ${quiet ? 'mb-3' : 'mb-4'}`}
+      >
+        <div
+          className={
+            quiet
+              ? 'text-sm font-medium text-zinc-500'
+              : 'text-base font-semibold text-zinc-900'
+          }
+        >
+          {title}
+        </div>
+        <span
+          className={`text-zinc-400 group-hover:text-[var(--accent-blue)] transition-colors leading-none ${
+            quiet ? 'text-base' : 'text-lg'
+          }`}
+        >
           →
         </span>
       </div>
@@ -135,24 +159,55 @@ function GlimpseCard({ title, onOpen, children, className }: GlimpseCardProps) {
 function StageFunnel({
   stageStats,
   onSelectStage,
+  embedded,
 }: {
   stageStats: HomeStageStat[];
   onSelectStage: (stage: string) => void;
+  embedded?: boolean;
 }) {
   const total = stageStats.reduce((sum, s) => sum + s.count, 0);
   return (
-    <div className="mt-6 pt-6 border-t border-[var(--glass-border)]">
-      <div className="flex h-2.5 w-full gap-1 rounded-full overflow-hidden bg-black/[0.05]">
-        {stageStats.map((s) => (
+    <div className={embedded ? '' : 'mt-6 pt-6 border-t border-[var(--glass-border)]'}>
+      <style>{`
+        @keyframes stage-funnel-fill {
+          from { transform: scaleX(0); }
+          to { transform: scaleX(1); }
+        }
+        @media (prefers-reduced-motion: no-preference) {
+          .stage-funnel-fill .funnel-seg {
+            transform: scaleX(0);
+            transform-origin: left center;
+            animation: stage-funnel-fill 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+            animation-delay: calc(var(--funnel-i, 0) * 0.08s);
+          }
+        }
+        .funnel-value { display: none; }
+        .stage-funnel-chips button:hover .funnel-value,
+        .stage-funnel-chips button:focus-visible .funnel-value {
+          display: inline;
+        }
+      `}</style>
+      <div
+        className={`stage-funnel-fill flex w-full gap-1 rounded-full overflow-hidden bg-black/[0.05] ${
+          embedded ? 'h-3' : 'h-2.5'
+        }`}
+      >
+        {stageStats.map((s, i) => (
           <div
             key={s.stage}
-            className={`${s.dashClass} rounded-full transition-[flex-grow] duration-300`}
-            style={{ flex: `${total === 0 ? 1 : Math.max(s.count, 0.4)} 0 0%` }}
+            className={`funnel-seg ${s.dashClass} rounded-full`}
+            data-stage={s.stage}
+            style={
+              {
+                flex: `${total === 0 ? 1 : Math.max(s.count, 0.4)} 0 0%`,
+                '--funnel-i': i,
+              } as CSSProperties
+            }
             aria-hidden
           />
         ))}
       </div>
-      <div className="flex flex-wrap gap-2 mt-4">
+      <div className="stage-funnel-chips flex flex-wrap gap-2 mt-4">
         {stageStats.map((s) => (
           <button
             key={s.stage}
@@ -161,6 +216,8 @@ function StageFunnel({
             className={`inline-flex items-center gap-2 rounded-full pl-2.5 pr-3.5 py-1.5 transition-colors ${
               s.active ? 'bg-[var(--accent-blue-soft)]' : 'hover:bg-black/[0.04]'
             }`}
+            data-stage={s.stage}
+            data-active={s.active ? 'true' : undefined}
             title={`View ${s.stage} leads`}
           >
             <span
@@ -173,9 +230,381 @@ function StageFunnel({
             <span className="text-xs font-semibold tabular-nums text-zinc-900">
               {s.count}
             </span>
+            <span className="funnel-value text-[11px] font-semibold tabular-nums text-zinc-500">
+              ${s.value.toLocaleString()}
+            </span>
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+type ListedHomeTask = {
+  id: string;
+  title: string;
+  overdue: boolean;
+  dueLabel: string | null;
+};
+
+function HomeStormBlock({
+  activeSevere,
+  stormStatus,
+  latestReport,
+  stormCounts,
+  onOpenWeather,
+  className,
+}: {
+  activeSevere: boolean;
+  stormStatus: 'loading' | 'ready' | 'error';
+  latestReport: StormReport | undefined;
+  stormCounts: { hail: number; wind: number; tornado: number; last24h: number };
+  onOpenWeather: () => void;
+  className?: string;
+}) {
+  const tint = activeSevere ? 'glass-tint-coral' : 'glass-tint-blue';
+  const extra = className ? ` ${className}` : '';
+  const pipOn = activeSevere ? 'bg-danger' : 'bg-[var(--accent-blue)]';
+  const kickerOn = activeSevere ? 'text-danger' : 'text-[var(--accent-blue)]';
+  const countItems = [
+    { n: stormCounts.hail, label: 'Hail' },
+    { n: stormCounts.wind, label: 'Wind' },
+    { n: stormCounts.tornado, label: 'Tornado' },
+  ];
+  const showCounts = stormStatus === 'ready' && stormCounts.last24h > 0;
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpenWeather}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        onOpenWeather();
+      }}
+      className={`group glass glass-hover rounded-[32px] p-5 sm:p-6 mb-4 cursor-pointer min-h-[9.5rem] ${tint}${extra}`}
+    >
+      <div className="flex items-start justify-between gap-4 mb-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className={`st-pip w-2 h-2 rounded-full shrink-0 ${pipOn}`} />
+          <span className={`st-kicker text-[11px] font-semibold uppercase tracking-widest ${kickerOn}`}>
+            {activeSevere ? 'Storm alert' : 'Storm watch'}
+          </span>
+        </div>
+        <span className="st-arrow text-zinc-400 group-hover:text-[var(--accent-blue)] transition-colors text-lg leading-none shrink-0">
+          →
+        </span>
+      </div>
+      <div className="st-line text-base sm:text-lg font-medium text-zinc-900">
+        <StormLine stormStatus={stormStatus} latestReport={latestReport} />
+      </div>
+      {showCounts && (
+        <div className="st-counts flex flex-wrap gap-2.5 mt-5">
+          {countItems.map((i) => (
+            <span
+              key={i.label}
+              className={`st-chip inline-flex items-baseline gap-1.5 rounded-full px-3.5 py-1.5 ${
+                i.n > 0 ? 'st-hot bg-[var(--danger-soft)]' : 'bg-black/[0.04]'
+              }`}
+            >
+              <span className="st-count text-sm font-semibold tabular-nums text-zinc-900">{i.n}</span>
+              <span className="st-label text-[0.75rem] font-medium uppercase tracking-[0.08em] text-[var(--steel)]">
+                {i.label}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StormLine({
+  stormStatus,
+  latestReport,
+}: {
+  stormStatus: 'loading' | 'ready' | 'error';
+  latestReport: StormReport | undefined;
+}) {
+  if (stormStatus === 'loading') {
+    return <span className="inline-block h-5 w-48 bg-black/[0.05] rounded-full animate-pulse align-middle" />;
+  }
+  if (stormStatus === 'error') return 'Storm data unavailable right now';
+  if (!latestReport) return 'No hail, wind, or tornado reports on file';
+  return (
+    <>
+      {eventStyle(latestReport.category).label}
+      {formatMagnitude(latestReport) ? ` · ${formatMagnitude(latestReport)}` : ''} near{' '}
+      {latestReport.locDesc || latestReport.state || 'your area'}
+      <span className="text-zinc-400 font-normal">
+        {' '}
+        · {relativeTimeFrom(latestReport.validTime)}
+      </span>
+    </>
+  );
+}
+
+function HomeStageTiles({
+  stageStats,
+  onSelectStage,
+  onInk,
+}: {
+  stageStats: HomeStageStat[];
+  onSelectStage: (stage: string) => void;
+  onInk?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+      {stageStats.map((s) => (
+        <button
+          key={s.stage}
+          type="button"
+          onClick={() => onSelectStage(s.stage)}
+          className={
+            onInk
+              ? 'rounded-[24px] px-2 py-4 text-center bg-white/10 hover:bg-white/15 transition-colors'
+              : 'rounded-[24px] px-2 py-4 text-center glass hover:bg-white/50 transition-colors'
+          }
+        >
+          <span className={`mx-auto mb-2 block h-1 w-8 rounded-full ${s.dashClass}`} />
+          <div
+            className={`text-xl font-extrabold tabular-nums tracking-tight ${
+              onInk ? 'text-[var(--metal-ink)]' : 'text-zinc-900'
+            }`}
+          >
+            {s.count}
+          </div>
+          <div
+            className={`text-[11px] font-medium uppercase tracking-wide mt-1 ${
+              onInk ? 'text-[var(--metal-ink)] opacity-60' : 'text-zinc-500'
+            }`}
+          >
+            {s.stage}
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function HomeLeadPeak({
+  recentLead,
+  onOpenLead,
+}: {
+  recentLead: HomeRecentLead | null;
+  onOpenLead: (id: number) => void;
+}) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => recentLead && onOpenLead(recentLead.id)}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        if (recentLead) onOpenLead(recentLead.id);
+      }}
+      className="group glass glass-hover rounded-[32px] p-6 mb-4 cursor-pointer h-full"
+    >
+      <div className="flex items-center justify-between mb-5">
+        <div className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">
+          Jump Back In
+        </div>
+        <span className="text-zinc-400 group-hover:text-[var(--accent-blue)] transition-colors text-lg leading-none">
+          →
+        </span>
+      </div>
+      {!recentLead ? (
+        <p className="text-sm text-zinc-400">No leads yet</p>
+      ) : (
+        <div>
+          <div className="text-[1.875rem] font-extrabold tracking-tight leading-none text-zinc-900">
+            {recentLead.name || recentLead.address || 'Unnamed lead'}
+          </div>
+          {recentLead.address && (
+            <div className="text-base text-zinc-500 mt-3 truncate">{recentLead.address}</div>
+          )}
+          <div className="flex items-center gap-2 mt-4">
+            <span
+              className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${recentLead.stageBadgeClass}`}
+            >
+              {recentLead.stageLabel}
+            </span>
+            {recentLead.jobNumber && (
+              <span className="text-xs text-zinc-400">{recentLead.jobNumber}</span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HomeGlimpseGrid({
+  recentLead,
+  canvassStats,
+  todaysEvents,
+  todaysEventsTotal,
+  openTasksCount,
+  listedTasks,
+  onOpenLead,
+  onOpenCanvassing,
+  onOpenCalendar,
+  onOpenTasks,
+  stacked,
+  omitJump,
+}: {
+  recentLead: HomeRecentLead | null;
+  canvassStats: { door: number; conversation: number; signed: number } | null;
+  todaysEvents: SummitCalendarEvent[];
+  todaysEventsTotal: number;
+  openTasksCount: number;
+  listedTasks: ListedHomeTask[];
+  onOpenLead: (id: number) => void;
+  onOpenCanvassing: () => void;
+  onOpenCalendar: () => void;
+  onOpenTasks: () => void;
+  stacked?: boolean;
+  omitJump?: boolean;
+}) {
+  return (
+    <div
+      className={
+        stacked
+          ? 'flex flex-col gap-3'
+          : 'grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 items-start'
+      }
+    >
+      {!omitJump && (
+      <GlimpseCard
+        title="Jump Back In"
+        onOpen={() => recentLead && onOpenLead(recentLead.id)}
+        className={stacked ? '' : 'sm:col-span-2'}
+      >
+        {!recentLead ? (
+          <p className="text-sm text-zinc-400">No leads yet</p>
+        ) : (
+          <div>
+            <div className="text-base font-medium text-zinc-900 truncate">
+              {recentLead.name || recentLead.address || 'Unnamed lead'}
+            </div>
+            {recentLead.address && (
+              <div className="text-sm text-zinc-500 truncate mt-0.5">{recentLead.address}</div>
+            )}
+            <div className="flex items-center gap-2 mt-3">
+              <span
+                className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${recentLead.stageBadgeClass}`}
+              >
+                {recentLead.stageLabel}
+              </span>
+              {recentLead.jobNumber && (
+                <span className="text-xs text-zinc-400">{recentLead.jobNumber}</span>
+              )}
+            </div>
+          </div>
+        )}
+      </GlimpseCard>
+      )}
+
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onOpenCanvassing}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return;
+          e.preventDefault();
+          onOpenCanvassing();
+        }}
+        className="group glass-quiet rounded-[24px] cursor-pointer self-stretch h-full flex flex-col p-5"
+      >
+        <div className="flex items-center justify-between mb-4">
+          <div className="text-base font-semibold text-[var(--graphite)]">Canvassing Today</div>
+          <span className="text-zinc-400 group-hover:text-[var(--accent-blue)] transition-colors leading-none text-base">
+            →
+          </span>
+        </div>
+        {!canvassStats ? (
+          <div className="grid grid-cols-3 gap-3 mt-auto">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="h-14 bg-black/[0.04] rounded-xl animate-pulse" />
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-3 gap-3 text-center mt-auto">
+            <div>
+              <div className="text-[2.34375rem] font-extrabold tabular-nums tracking-tight leading-none text-zinc-900">
+                {canvassStats.door}
+              </div>
+              <div className="text-[11px] text-zinc-400 mt-1.5">Doors</div>
+            </div>
+            <div>
+              <div className="text-[2.34375rem] font-extrabold tabular-nums tracking-tight leading-none text-zinc-900">
+                {canvassStats.conversation}
+              </div>
+              <div className="text-[11px] text-zinc-400 mt-1.5">Convos</div>
+            </div>
+            <div>
+              <div className="text-[2.34375rem] font-extrabold tabular-nums tracking-tight leading-none text-[var(--accent-green)]">
+                {canvassStats.signed}
+              </div>
+              <div className="text-[11px] text-zinc-400 mt-1.5">Signed</div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <GlimpseCard title="Today's Schedule" onOpen={onOpenCalendar} quiet>
+        {todaysEvents.length === 0 ? (
+          <p className="text-sm text-zinc-400">Nothing on the calendar today</p>
+        ) : (
+          <div className="space-y-2.5">
+            {todaysEvents.map((ev) => (
+              <div key={ev.id} className="flex items-center gap-3">
+                <div className="text-xs font-semibold tabular-nums text-zinc-600 bg-black/[0.04] border border-black/[0.06] rounded-full px-2.5 py-1 shrink-0 min-w-[4.25rem] text-center">
+                  {ev.allDay ? 'All day' : formatEventTimeLabel(ev)}
+                </div>
+                <div className="text-sm text-zinc-700 truncate">{ev.title}</div>
+              </div>
+            ))}
+            {todaysEventsTotal > todaysEvents.length && (
+              <div className="text-xs text-zinc-400 pt-0.5">
+                +{todaysEventsTotal - todaysEvents.length} more today
+              </div>
+            )}
+          </div>
+        )}
+      </GlimpseCard>
+
+      <GlimpseCard title="Open Tasks" onOpen={onOpenTasks} className={stacked || omitJump ? '' : 'sm:col-span-2'}>
+        {openTasksCount === 0 ? (
+          <p className="text-sm text-zinc-400">No open tasks</p>
+        ) : (
+          <div className="flex items-start gap-5">
+            <div className="text-3xl font-semibold tabular-nums text-zinc-900 shrink-0">
+              {openTasksCount}
+            </div>
+            <div className="space-y-1.5 min-w-0 flex-1 pt-1">
+              {listedTasks.map((t) => (
+                <div key={t.id} className="flex items-center gap-2 min-w-0">
+                  {t.dueLabel && (
+                    <span
+                      className={`text-xs font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 shrink-0 ${
+                        t.overdue
+                          ? 'bg-[var(--danger-soft)] text-danger'
+                          : 'bg-black/[0.04] text-zinc-500'
+                      }`}
+                    >
+                      {t.dueLabel}
+                    </span>
+                  )}
+                  <span className="text-sm text-zinc-700 truncate">{t.title}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </GlimpseCard>
     </div>
   );
 }
@@ -389,11 +818,13 @@ export default function HomeDashboard({
   }, []);
 
   return (
+
+
     <div className="pb-8 w-full">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-5 mb-6">
-        <div className="text-4xl sm:text-5xl font-bold tracking-tighter text-zinc-900">
+        <h1 className="page-title">
           {greeting}, {firstName}
-        </div>
+        </h1>
         <button
           type="button"
           onClick={onCreateLead}
@@ -403,115 +834,55 @@ export default function HomeDashboard({
         </button>
       </div>
 
-      {/* Hero — pipeline value and the whole stage distribution live in one
-          glass card, not two stacked boxes: one visual anchor, not a skeleton. */}
-      <div className="glass rounded-[32px] p-5 sm:p-6 mb-4">
-        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-5">
-          <div>
-            <div className="text-xs uppercase tracking-widest text-zinc-400 font-medium">
-              Pipeline value
+      {/* Hero — pipeline value commands; jobs and estimates split below it. */}
+      <div className="glass rounded-[32px] mb-4 overflow-hidden p-0">
+        <div className="px-6 pt-6 pb-5">
+          <div className="text-[2.34375rem] font-extrabold tabular-nums tracking-tight leading-none text-zinc-900">
+            ${totalPipelineValue.toLocaleString()}
+          </div>
+          <div className="text-xs text-zinc-400 mt-1.5">pipeline value</div>
+        </div>
+        <div className="grid grid-cols-2 border-t border-[var(--glass-border)]">
+          <div className="px-6 py-4">
+            <div className="text-xl font-semibold tabular-nums text-zinc-900">
+              {totalActiveLeads}
             </div>
-            <div className="text-3xl sm:text-4xl font-bold tabular-nums text-zinc-900 mt-1 tracking-tight">
-              ${totalPipelineValue.toLocaleString()}
+            <div className="text-xs text-zinc-400 mt-0.5">
+              active job{totalActiveLeads === 1 ? '' : 's'}
             </div>
           </div>
-          <div className="flex items-center gap-6">
-            <div>
-              <div className="text-2xl font-semibold tabular-nums text-zinc-900">
-                {totalActiveLeads}
-              </div>
-              <div className="text-xs text-zinc-400">
-                active job{totalActiveLeads === 1 ? '' : 's'}
-              </div>
+          <div className="px-6 py-4 border-l border-[var(--glass-border)]">
+            <div className="text-xl font-semibold tabular-nums text-zinc-900">
+              {estimatesCount}
             </div>
-            <div>
-              <div className="text-2xl font-semibold tabular-nums text-zinc-900">
-                {estimatesCount}
-              </div>
-              <div className="text-xs text-zinc-400">
-                estimate{estimatesCount === 1 ? '' : 's'} on file
-              </div>
+            <div className="text-xs text-zinc-400 mt-0.5">
+              estimate{estimatesCount === 1 ? '' : 's'} on file
             </div>
           </div>
         </div>
-
-        <StageFunnel stageStats={stageStats} onSelectStage={onSelectStage} />
+        <div className="px-6 pt-5 pb-6">
+          <StageFunnel
+            stageStats={stageStats}
+            onSelectStage={onSelectStage}
+            embedded
+          />
+        </div>
       </div>
 
       {/* Storm — glass; blue/coral is a whisper tint + dot, not a painted slab. */}
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={onOpenWeather}
-        onKeyDown={(e) => {
-          if (e.key !== 'Enter' && e.key !== ' ') return;
-          e.preventDefault();
-          onOpenWeather();
-        }}
-        className={`group glass glass-hover rounded-[32px] p-5 sm:p-6 mb-4 cursor-pointer min-h-[9.5rem] ${
-          activeSevere ? 'glass-tint-coral' : 'glass-tint-blue'
-        }`}
-      >
-        <div className="flex items-start justify-between gap-4 mb-3">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <span
-              className={`w-2 h-2 rounded-full shrink-0 ${
-                activeSevere ? 'bg-danger animate-pulse' : 'bg-[var(--accent-blue)]'
-              }`}
-            />
-            <span
-              className={`text-[11px] font-semibold uppercase tracking-widest ${
-                activeSevere ? 'text-danger' : 'text-[var(--accent-blue)]'
-              }`}
-            >
-              {activeSevere ? 'Storm alert' : 'Storm watch'}
-            </span>
-          </div>
-          <span className="text-zinc-400 group-hover:text-[var(--accent-blue)] transition-colors text-lg leading-none shrink-0">
-            →
-          </span>
-        </div>
-        <div className="text-base sm:text-lg font-medium text-zinc-900">
-          {stormStatus === 'loading' ? (
-            <span className="inline-block h-5 w-48 bg-black/[0.05] rounded-full animate-pulse align-middle" />
-          ) : stormStatus === 'error' ? (
-            'Storm data unavailable right now'
-          ) : latestReport ? (
-            <>
-              {eventStyle(latestReport.category).label}
-              {formatMagnitude(latestReport) ? ` · ${formatMagnitude(latestReport)}` : ''} near{' '}
-              {latestReport.locDesc || latestReport.state || 'your area'}
-              <span className="text-zinc-400 font-normal">
-                {' '}
-                · {relativeTimeFrom(latestReport.validTime)}
-              </span>
-            </>
-          ) : (
-            'No hail, wind, or tornado reports on file'
-          )}
-        </div>
-        {stormStatus === 'ready' && stormCounts.last24h > 0 && (
-          <div className="grid grid-cols-3 gap-3 mt-5">
-            <div>
-              <div className="text-xl font-semibold tabular-nums text-zinc-900">{stormCounts.hail}</div>
-              <div className="text-[11px] text-zinc-400 mt-0.5">Hail</div>
-            </div>
-            <div>
-              <div className="text-xl font-semibold tabular-nums text-zinc-900">{stormCounts.wind}</div>
-              <div className="text-[11px] text-zinc-400 mt-0.5">Wind</div>
-            </div>
-            <div>
-              <div className="text-xl font-semibold tabular-nums text-zinc-900">{stormCounts.tornado}</div>
-              <div className="text-[11px] text-zinc-400 mt-0.5">Tornado</div>
-            </div>
-          </div>
-        )}
-      </div>
 
-      {/* Everything else — quick real-data glimpses, tap through for the full
-          picture. Uneven bento, not four identical boxes: the two glimpses
-          with real lists (tasks, the lead itself) get the wide slot. */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+      <HomeStormBlock
+        activeSevere={activeSevere}
+        stormStatus={stormStatus}
+        latestReport={latestReport}
+        stormCounts={stormCounts}
+        onOpenWeather={onOpenWeather}
+      />
+
+
+      {/* Resume + tasks keep full glass. Canvass and schedule recede so
+          four tiles don't compete with the pipeline hero. */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 items-start">
         <GlimpseCard
           title="Jump Back In"
           onOpen={() => recentLead && onOpenLead(recentLead.id)}
@@ -543,38 +914,60 @@ export default function HomeDashboard({
           )}
         </GlimpseCard>
 
-        <GlimpseCard title="Canvassing Today" onOpen={onOpenCanvassing}>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={onOpenCanvassing}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            onOpenCanvassing();
+          }}
+          className="group glass-quiet rounded-[24px] cursor-pointer self-stretch h-full flex flex-col p-5"
+        >
+          <div className="flex items-center justify-between mb-5">
+            <div className="text-base font-semibold tracking-tight text-[var(--graphite)]">Canvassing Today</div>
+            <span className="text-zinc-400 group-hover:text-[var(--accent-blue)] transition-colors leading-none text-base">
+              →
+            </span>
+          </div>
           {!canvassStats ? (
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-3 gap-3 mt-auto">
               {[0, 1, 2].map((i) => (
-                <div key={i} className="h-11 bg-black/[0.04] rounded-xl animate-pulse" />
+                <div key={i} className="h-14 bg-black/[0.04] rounded-xl animate-pulse" />
               ))}
             </div>
           ) : (
-            <div className="grid grid-cols-3 gap-3 text-center">
+            <div className="grid grid-cols-3 gap-3 text-center mt-auto">
               <div>
-                <div className="text-2xl font-semibold tabular-nums text-zinc-900">
+                <div className="text-[2.34375rem] font-extrabold tabular-nums tracking-tight leading-none text-zinc-900">
                   {canvassStats.door}
                 </div>
-                <div className="text-[11px] text-zinc-400 mt-0.5">Doors</div>
+                <div className="text-[0.75rem] font-medium uppercase tracking-[0.08em] text-[var(--steel)] mt-1.5">
+                  Doors
+                </div>
               </div>
               <div>
-                <div className="text-2xl font-semibold tabular-nums text-zinc-900">
+                <div className="text-[2.34375rem] font-extrabold tabular-nums tracking-tight leading-none text-zinc-900">
                   {canvassStats.conversation}
                 </div>
-                <div className="text-[11px] text-zinc-400 mt-0.5">Convos</div>
+                <div className="text-[0.75rem] font-medium uppercase tracking-[0.08em] text-[var(--steel)] mt-1.5">
+                  Convos
+                </div>
               </div>
               <div>
-                <div className="text-2xl font-semibold tabular-nums text-[var(--accent-green)]">
+                <div className="text-[2.34375rem] font-extrabold tabular-nums tracking-tight leading-none text-[var(--accent-green)]">
                   {canvassStats.signed}
                 </div>
-                <div className="text-[11px] text-zinc-400 mt-0.5">Signed</div>
+                <div className="text-[0.75rem] font-medium uppercase tracking-[0.08em] text-[var(--steel)] mt-1.5">
+                  Signed
+                </div>
               </div>
             </div>
           )}
-        </GlimpseCard>
+        </div>
 
-        <GlimpseCard title="Today's Schedule" onOpen={onOpenCalendar}>
+        <GlimpseCard title="Today's Schedule" onOpen={onOpenCalendar} quiet>
           {todaysEvents.length === 0 ? (
             <p className="text-sm text-zinc-400">Nothing on the calendar today</p>
           ) : (
@@ -609,7 +1002,7 @@ export default function HomeDashboard({
                   <div key={t.id} className="flex items-center gap-2 min-w-0">
                     {t.dueLabel && (
                       <span
-                        className={`text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 shrink-0 ${
+                        className={`text-xs font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 shrink-0 ${
                           t.overdue
                             ? 'bg-[var(--danger-soft)] text-danger'
                             : 'bg-black/[0.04] text-zinc-500'
@@ -627,5 +1020,7 @@ export default function HomeDashboard({
         </GlimpseCard>
       </div>
     </div>
+
+
   );
 }

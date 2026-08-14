@@ -126,9 +126,9 @@ export default function RoofTracer({
       const isClose = s.kind === 'close' || s.kind === 'close-rect';
       L.circleMarker([s.point.lat, s.point.lng], {
         radius: isClose ? 9 : 7,
-        color: isClose ? '#d97706' : '#64748b',
+        color: isClose ? '#6ba6ff' : '#64748b',
         weight: 2,
-        fillColor: isClose ? '#fbbf24' : '#e2e8f0',
+        fillColor: isClose ? '#6ba6ff' : '#e2e8f0',
         fillOpacity: 0.85,
         dashArray: '2 2',
       })
@@ -152,7 +152,7 @@ export default function RoofTracer({
         radius: 7,
         color: '#141618',
         weight: 2,
-        fillColor: '#0f766e', // soft teal accent points
+        fillColor: '#7bc9a6',
         fillOpacity: 1,
       })
         .bindTooltip(String(i + 1), { permanent: false, direction: 'top' })
@@ -161,7 +161,7 @@ export default function RoofTracer({
     if (pts.length >= 2) {
       L.polyline(
         pts.map((p) => [p.lat, p.lng] as [number, number]),
-        { color: '#0f766e', weight: 3, opacity: 0.92 }
+        { color: '#7bc9a6', weight: 3, opacity: 0.92 }
       ).addTo(group);
     }
     if (pts.length >= 3) {
@@ -425,9 +425,9 @@ export default function RoofTracer({
       if (startCenter) {
         pinRef.current = L.circleMarker([startCenter.lat, startCenter.lng], {
           radius: 10,
-          color: '#f59e0b',
+          color: '#6ba6ff',
           weight: 3,
-          fillColor: '#fbbf24',
+          fillColor: '#6ba6ff',
           fillOpacity: 0.95,
         })
           .bindTooltip('Property', { permanent: false, direction: 'top' })
@@ -518,9 +518,9 @@ export default function RoofTracer({
         } else if (L) {
           pinRef.current = L.circleMarker([center.lat, center.lng], {
             radius: 10,
-            color: '#f59e0b',
+            color: '#6ba6ff',
             weight: 3,
-            fillColor: '#fbbf24',
+            fillColor: '#6ba6ff',
             fillOpacity: 0.95,
           })
             .bindTooltip('Property', { permanent: false, direction: 'top' })

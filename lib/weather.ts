@@ -260,9 +260,9 @@ export const EVENT_STYLES: Record<StormEventCategory, EventStyle> = {
     id: 'wind',
     label: 'Wind',
     shortLabel: 'W',
-    badge: 'bg-[var(--stage-prospect-soft)] text-[var(--foreground)] border-transparent',
-    dot: 'bg-stage-prospect',
-    marker: '#ffb07a',
+    badge: 'bg-zinc-100 text-zinc-700 border-zinc-200',
+    dot: 'bg-zinc-400',
+    marker: '#a1a1aa',
     markerStroke: '#111111',
   },
   tornado: {

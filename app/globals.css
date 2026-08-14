@@ -21,10 +21,6 @@ html[data-theme="day"] {
   --graphite-hover: #2a2a2a;
   --steel: #5c6066;
   --steel-soft: #e8ebf0;
-  --emerald: #7bc9a6;
-  --emerald-soft: rgba(123, 201, 166, 0.16);
-  --amber: #ffb07a;
-  --amber-soft: rgba(255, 176, 122, 0.16);
   --danger: #ff7a7a;
   --danger-soft: rgba(255, 122, 122, 0.16);
   --scrollbar: #c5cad3;
@@ -128,10 +124,6 @@ html[data-theme="night"] {
   --graphite-hover: #ffffff;
   --steel: #a8abb0;
   --steel-soft: #1c1c1c;
-  --emerald: #7bc9a6;
-  --emerald-soft: rgba(123, 201, 166, 0.16);
-  --amber: #ffb07a;
-  --amber-soft: rgba(255, 176, 122, 0.16);
   --danger: #ff7a7a;
   --danger-soft: rgba(255, 122, 122, 0.18);
   --scrollbar: #3a3a3a;
@@ -226,37 +218,12 @@ html[data-theme="night"] {
   --color-slate-950: oklch(98.5% 0 0);
 
   /* Soft washes → deep tinted panels */
-  --color-emerald-50: oklch(22% 0.025 150);
-  --color-emerald-100: oklch(26% 0.03 150);
-  --color-emerald-200: oklch(32% 0.035 150);
-  --color-emerald-700: oklch(72% 0.07 150);
-  --color-emerald-800: oklch(78% 0.06 150);
-  --color-emerald-900: oklch(86% 0.04 150);
-  --color-amber-50: oklch(24% 0.04 80);
-  --color-amber-100: oklch(28% 0.05 80);
-  --color-amber-200: oklch(34% 0.06 80);
-  --color-amber-700: oklch(78% 0.14 75);
-  --color-amber-800: oklch(82% 0.12 75);
-  --color-amber-900: oklch(88% 0.08 80);
-  --color-amber-950: oklch(92% 0.05 80);
-  --color-sky-50: oklch(22% 0.02 230);
-  --color-sky-100: oklch(26% 0.025 230);
-  --color-sky-700: oklch(72% 0.06 230);
-  --color-sky-800: oklch(78% 0.05 230);
-  --color-sky-900: oklch(86% 0.04 230);
-  --color-sky-950: oklch(92% 0.02 230);
   --color-red-50: oklch(24% 0.05 25);
   --color-red-100: oklch(28% 0.06 25);
   --color-red-200: oklch(34% 0.07 25);
   --color-red-500: oklch(65% 0.19 25);
   --color-red-600: oklch(72% 0.18 25);
   --color-red-700: oklch(78% 0.16 25);
-  --color-orange-50: oklch(24% 0.04 55);
-  --color-orange-100: oklch(28% 0.05 55);
-  --color-orange-200: oklch(34% 0.06 55);
-  --color-sky-200: oklch(32% 0.03 230);
-  --color-sky-300: oklch(42% 0.04 230);
-  --color-sky-500: oklch(68% 0.07 230);
 
   /* Night invert for leftover teal/indigo utilities — stages themselves use --stage-* tokens. */
   --color-teal-50: oklch(22% 0.04 180);
@@ -336,6 +303,7 @@ html {
   text-size-adjust: 100%;
   /* Kill the rubber-band/pull-to-refresh bounce so pages stop feeling like a browser tab. */
   overscroll-behavior-y: none;
+  overflow-x: clip;
 }
 
 body {
@@ -349,15 +317,21 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overscroll-behavior-y: none;
+  overflow-x: clip;
+  min-width: 0;
   transition:
     background-color 0.2s ease,
     color 0.15s ease;
 }
 
 /* Type roles — Plus Jakarta Sans. Weight + tracking carry hierarchy; no second family. */
+.page-title,
 h1.text-3xl {
+  font-size: 1.875rem;
+  line-height: 2.25rem;
   font-weight: 800;
   letter-spacing: -0.03em;
+  color: var(--graphite);
 }
 
 .text-4xl.font-bold,
@@ -424,6 +398,144 @@ html[data-theme="night"] body {
     transparent 64%
   );
 }
+.glass-tint-green {
+  --glass-tint: linear-gradient(
+    165deg,
+    color-mix(in srgb, var(--accent-green) 12%, transparent),
+    transparent 64%
+  );
+}
+
+/* Index rows & section panels — Home glass. Pair with .glass.
+   Flush: calendar grids (no inner padding; cells go to the edge). */
+.list-card {
+  border-radius: 32px;
+  padding: 1.25rem;
+}
+@media (min-width: 640px) {
+  .list-card {
+    padding: 1.5rem;
+  }
+}
+.list-card-flush {
+  border-radius: 32px;
+  overflow: hidden;
+}
+.list-card:focus-visible,
+.roof-pick:focus-visible,
+.roof-chip:focus-visible {
+  outline: 2px solid var(--graphite);
+  outline-offset: 2px;
+}
+
+/* Roof type — three materials, one decision. */
+.roof-pick {
+  position: relative;
+  overflow: hidden;
+  text-align: left;
+  padding: 1.5rem 1.5rem 1.35rem;
+  border-radius: 1.5rem;
+  cursor: pointer;
+  transition:
+    transform 150ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 180ms ease,
+    border-color 180ms ease,
+    background-color 180ms ease;
+}
+.roof-pick:hover {
+  transform: translateY(-2px);
+}
+.roof-pick:active {
+  transform: scale(0.97);
+}
+.roof-pick__label {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--graphite);
+  line-height: 1.2;
+}
+.roof-pick__hint {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  color: var(--steel);
+}
+.roof-pick__go {
+  margin-top: 1.25rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--graphite);
+}
+.roof-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.25rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--graphite);
+  animation: row-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.kanban-col {
+  background: var(--chrome-soft);
+  border-color: var(--chrome-line);
+  transition:
+    box-shadow 180ms ease,
+    border-color 180ms ease;
+}
+.kanban-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--chrome-line);
+  transition:
+    transform 150ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 150ms ease;
+}
+
+.list-row {
+  width: 100%;
+  text-align: left;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--chrome-line);
+}
+.list-row:last-child {
+  border-bottom: none;
+}
+
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.row-in {
+  animation: row-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-fade,
+  .tally-pop,
+  .tally-card-flash,
+  .row-in,
+  .roof-chip {
+    animation: none !important;
+  }
+  .glass-hover:hover,
+  .roof-pick:hover,
+  .roof-pick:active,
+  .solid-hover:hover,
+  .btn-primary:hover,
+  .btn-primary:active {
+    transform: none !important;
+  }
+}
 
 /* Stronger/less-blurred glass for chrome that sits above scrolling content
    (sidebar, header) — needs to stay legible while still showing the wash. */
@@ -435,6 +547,68 @@ html[data-theme="night"] body {
   border-color: var(--glass-border);
   -webkit-backdrop-filter: blur(calc(var(--glass-blur) + 6px)) saturate(var(--glass-saturate));
   backdrop-filter: blur(calc(var(--glass-blur) + 6px)) saturate(var(--glass-saturate));
+}
+
+/*
+  Below laptop (1024) — denser frost so ink holds up in sun; cheaper blur for GPU.
+  Covers portrait and landscape phones. Desktop glass stays airy.
+  Shell (header + drawer) is unchanged.
+*/
+@media (max-width: 1023px) {
+  html[data-theme="day"] {
+    --glass-bg: rgba(255, 255, 255, 0.64);
+    --glass-bg-strong: rgba(255, 255, 255, 0.82);
+    --glass-blur: 16px;
+    --glass-saturate: 1.28;
+  }
+  html[data-theme="night"] {
+    --glass-bg: rgba(255, 255, 255, 0.16);
+    --glass-bg-strong: rgba(255, 255, 255, 0.24);
+    --glass-border: rgba(255, 255, 255, 0.22);
+    --glass-highlight: rgba(255, 255, 255, 0.16);
+    --glass-sheen: rgba(255, 255, 255, 0.1);
+    --glass-blur: 16px;
+  }
+}
+
+/* OS “reduce transparency”: drop frost so type never sits on a wash. */
+@media (prefers-reduced-transparency: reduce) {
+  html[data-theme="day"] {
+    --glass-bg: #ffffff;
+    --glass-bg-strong: #ffffff;
+    --glass-sheen: transparent;
+    --glass-blur: 0px;
+    --glass-saturate: 1;
+  }
+  html[data-theme="night"] {
+    --glass-bg: #1c1c1c;
+    --glass-bg-strong: #1c1c1c;
+    --glass-sheen: transparent;
+    --glass-blur: 0px;
+    --glass-saturate: 1;
+  }
+  .glass,
+  .glass-strong,
+  .glass-quiet {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* Menus / drawers — opaque so type never sits on page wash. Not glass. */
+.menu-panel {
+  background-color: #ffffff;
+  color: var(--foreground);
+  border: 1px solid var(--chrome-line);
+  box-shadow:
+    0 18px 40px -16px rgba(17, 17, 17, 0.22),
+    0 4px 12px -4px rgba(17, 17, 17, 0.08);
+}
+html[data-theme="night"] .menu-panel {
+  background-color: var(--steel-soft);
+  box-shadow:
+    0 18px 40px -14px rgba(0, 0, 0, 0.55),
+    0 4px 12px -4px rgba(0, 0, 0, 0.35);
 }
 
 .emphasis-panel {
@@ -509,6 +683,12 @@ button,
   textarea {
     font-size: max(16px, 1em);
   }
+  .app-header-safe-top button,
+  .app-header-safe-top input[type="search"],
+  [data-app-sidebar] button {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 
 /* Safe-area helpers — env() resolves to 0 in a normal browser tab (chrome covers
@@ -568,22 +748,88 @@ button,
   font-weight: 600 !important;
 }
 
+/* Quiet sibling of .btn-primary — outline, no ink fill. */
+.btn-secondary {
+  border-radius: 9999px !important;
+  padding: 8px 16px !important;
+  font-size: 0.875rem !important;
+  font-weight: 500 !important;
+  background: transparent !important;
+  color: var(--foreground) !important;
+  border: 1px solid var(--glass-border) !important;
+  box-shadow: none !important;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+.btn-secondary:hover {
+  background: color-mix(in srgb, var(--foreground) 5%, transparent) !important;
+}
+.btn-secondary:active {
+  background: color-mix(in srgb, var(--foreground) 8%, transparent) !important;
+}
+.btn-secondary:disabled {
+  opacity: 0.35;
+}
+.btn-secondary:focus-visible {
+  outline: 2px solid var(--accent-blue-ring);
+  outline-offset: 2px;
+}
+
+/* Text-only action — Forgot, Today, Connect, Create account. */
+.btn-text {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0.5rem 0.15rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--steel);
+  transition: color 0.15s ease;
+}
+.btn-text:hover {
+  color: var(--foreground);
+}
+.btn-text:disabled {
+  opacity: 0.35;
+}
+.btn-text:focus-visible {
+  outline: 2px solid var(--accent-blue-ring);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Receded card — same family as .glass, no frost/shadow so featured glass wins. */
+.glass-quiet {
+  isolation: isolate;
+  background-color: color-mix(in srgb, var(--glass-bg) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--glass-border) 55%, transparent);
+  box-shadow: none;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+.glass-quiet:hover {
+  background-color: var(--glass-bg);
+  border-color: var(--glass-border);
+}
+
 .price-pos {
-  color: #047857;
+  color: var(--accent-green);
 }
 html[data-theme="night"] .price-pos {
-  color: #34d399;
+  color: var(--accent-green);
 }
 
 .order-note {
-  color: #b45309;
-  background: #fffbeb;
-  border-color: #fde68a;
+  color: var(--steel);
+  background: var(--chrome-soft);
+  border-color: var(--chrome-line);
 }
 html[data-theme="night"] .order-note {
-  color: #fbbf24;
-  background: #2a2110;
-  border-color: #5c4a1a;
+  color: var(--steel);
+  background: var(--chrome-soft);
+  border-color: var(--chrome-line);
 }
 
 .chrome-panel {
@@ -711,8 +957,8 @@ html[data-theme="night"] .steel-wash {
   max-width: 22rem;
 }
 .kanban-col {
-  min-height: min(62vh, 32rem);
-  max-height: calc(100vh - 12.5rem);
+  min-height: min(62dvh, 32rem);
+  max-height: calc(100dvh - 12.5rem);
   transition:
     box-shadow 0.2s ease,
     border-color 0.2s ease;
@@ -966,7 +1212,7 @@ html[data-theme="night"] .day-highlight {
 }
 
 .estimate-header {
-  border-bottom: 3px solid #059669; /* emerald-600 accent only */
+  border-bottom: 3px solid var(--accent-green);
   padding-bottom: 8pt;
   margin-bottom: 12pt;
 }

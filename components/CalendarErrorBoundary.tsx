@@ -36,9 +36,7 @@ export class CalendarErrorBoundary extends Component<Props, State> {
 
     return (
       <div className="page-shell page-fade space-y-4">
-        <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
-          Calendar
-        </h1>
+        <h1 className="page-title">Calendar</h1>
         <p className="text-sm text-zinc-600">
           Calendar hit a render error and recovered. Sync again or reconnect
           Google — the rest of Summit stays usable.

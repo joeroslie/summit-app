@@ -31,11 +31,13 @@ export const metadata: Metadata = {
   },
 };
 
+/* Pinch-zoom stays on — field use + WCAG 1.4.4. Do not lock maximumScale to 1. */
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
+  minimumScale: 1,
+  maximumScale: 5,
+  userScalable: true,
   viewportFit: "cover",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#e9eaec" },

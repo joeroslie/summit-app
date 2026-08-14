@@ -129,7 +129,8 @@ export default function PipelineBoard({
         <div className="w-full pb-4">
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
             <div>
-              <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">Pipeline</h1>
+              <h1 className="page-title">Pipeline</h1>
+              {(pipelineFilter || trash.length > 0) && (
               <p className="text-zinc-500 mt-0.5">
                 {pipelineFilter ? (
                   <>
@@ -140,16 +141,12 @@ export default function PipelineBoard({
                       {' '}· {leads.length} total
                     </span>
                   </>
-                ) : (
-                  <>
-                    <span className="font-medium text-zinc-700">{leads.length}</span> in
-                    pipeline
-                  </>
-                )}
+                ) : null}
                 {trash.length > 0 && (
-                  <span className="text-zinc-400"> · {trash.length} in trash</span>
+                  <span className="text-zinc-400">{pipelineFilter ? ' · ' : ''}{trash.length} in trash</span>
                 )}
               </p>
+              )}
             </div>
             <div className="flex items-center gap-3">
               <button
@@ -162,7 +159,7 @@ export default function PipelineBoard({
                     setLeadsView('trash');
                   }
                 }}
-                className="px-4 py-2 text-sm text-zinc-500 hover:text-amber-800 hover:bg-amber-50 rounded-xl transition-colors border border-transparent hover:border-amber-100"
+                className="px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-xl transition-colors border border-transparent hover:border-zinc-200"
               >
                 {leadsView === 'trash' ? 'Back to Board' : `Trash (${trash.length})`}
               </button>
@@ -497,7 +494,7 @@ export default function PipelineBoard({
                                   setDragLeadId(null);
                                   setDragOverStage(null);
                                 }}
-                                className={`bg-white border border-zinc-200 rounded-xl sm:rounded-2xl p-2.5 sm:p-3 shadow-sm hover:shadow-sm cursor-grab active:cursor-grabbing transition-all ${
+                                className={`kanban-card rounded-xl sm:rounded-2xl p-2.5 sm:p-3 cursor-grab active:cursor-grabbing ${
                                   dragLeadId === lead.id ? 'opacity-50 scale-[0.98]' : ''
                                 }`}
                                 onClick={() => {
@@ -531,7 +528,7 @@ export default function PipelineBoard({
                               </div>
                             ))}
                             {stageLeads.length === 0 && (
-                              <div className="text-center text-xs text-zinc-400 py-8 border border-dashed border-zinc-300/70 rounded-2xl bg-white/50">
+                              <div className="text-center text-xs text-zinc-500 py-8 border border-dashed border-[var(--glass-border)] rounded-2xl">
                                 Drop leads here
                               </div>
                             )}

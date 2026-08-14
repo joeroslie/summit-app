@@ -33,10 +33,10 @@ export const DISPOSITIONS: DispositionStyle[] = [
   {
     id: 'not_home',
     label: 'Not home',
-    badge: 'bg-amber-50 text-amber-800 border-amber-100',
-    dot: 'bg-amber-400',
-    marker: '#fbbf24',
-    markerStroke: '#92400e',
+    badge: 'bg-zinc-200 text-zinc-800 border-zinc-300',
+    dot: 'bg-zinc-500',
+    marker: '#71717a',
+    markerStroke: '#3f3f46',
   },
   {
     id: 'follow_up',
@@ -49,10 +49,10 @@ export const DISPOSITIONS: DispositionStyle[] = [
   {
     id: 'not_interested',
     label: 'Not interested',
-    badge: 'bg-red-50 text-red-700 border-red-100',
-    dot: 'bg-red-400',
-    marker: '#f87171',
-    markerStroke: '#991b1b',
+    badge: 'bg-[var(--danger-soft)] text-danger border-transparent',
+    dot: 'bg-danger',
+    marker: '#ff7a7a',
+    markerStroke: '#111111',
   },
   {
     id: 'signed',

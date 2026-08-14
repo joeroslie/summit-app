@@ -42,6 +42,12 @@ const SCOPES_KEY = 'summit_gcal_browser_scopes';
  */
 let browserGcalAuthEpoch = 0;
 
+/** Mount fires status + calendar + tasks together; share one silent GIS attempt. */
+let silentRefreshInFlight: Promise<BrowserGcalSession | null> | null = null;
+/** After a blocked popup, skip retries until this time. */
+let silentRefreshCooldownUntil = 0;
+const SILENT_REFRESH_COOLDOWN_MS = 15 * 60 * 1000;
+
 export function getBrowserGcalAuthEpoch(): number {
   return browserGcalAuthEpoch;
 }
@@ -677,6 +683,10 @@ export async function connectGoogleCalendarBrowser(opts?: {
  * Return a usable access token: reuse if fresh, else silent GIS refresh.
  * On silent refresh failure, keeps the stored token so UI still shows Connected
  * (Profile + Calendar share hasBrowserGcalToken). User can Reconnect.
+ *
+ * GIS `prompt: ''` still opens a popup when cookies can't refresh the token.
+ * Without a user gesture the browser blocks it and Next.js reports 7 host
+ * issues (status + calendar + tasks × Strict Mode). Skip until a click.
  */
 export async function ensureBrowserGcalSession(): Promise<BrowserGcalSession | null> {
   const fresh = readBrowserGcalSession();
@@ -688,18 +698,31 @@ export async function ensureBrowserGcalSession(): Promise<BrowserGcalSession | n
     return null;
   }
 
-  const epochAtStart = browserGcalAuthEpoch;
-  try {
-    const session = await connectGoogleCalendarBrowser({ silent: true });
-    if (epochAtStart !== browserGcalAuthEpoch) return null;
-    return session;
-  } catch {
-    // Do not clearBrowserGcalSession — that made Profile say "not connected"
-    // while Calendar still showed pulled Google events.
-    // Return null so callers don't hit APIs with a dead token; UI uses
-    // hasBrowserGcalToken() / isBrowserGcalLinked() for Connected state.
+  if (Date.now() < silentRefreshCooldownUntil) return null;
+  if (typeof navigator !== 'undefined' && !navigator.userActivation?.isActive) {
     return null;
   }
+  if (silentRefreshInFlight) return silentRefreshInFlight;
+
+  const epochAtStart = browserGcalAuthEpoch;
+  silentRefreshInFlight = (async () => {
+    try {
+      const session = await connectGoogleCalendarBrowser({ silent: true });
+      if (epochAtStart !== browserGcalAuthEpoch) return null;
+      return session;
+    } catch {
+      silentRefreshCooldownUntil = Date.now() + SILENT_REFRESH_COOLDOWN_MS;
+      // Do not clearBrowserGcalSession — that made Profile say "not connected"
+      // while Calendar still showed pulled Google events.
+      // Return null so callers don't hit APIs with a dead token; UI uses
+      // hasBrowserGcalToken() / isBrowserGcalLinked() for Connected state.
+      return null;
+    } finally {
+      silentRefreshInFlight = null;
+    }
+  })();
+
+  return silentRefreshInFlight;
 }
 
 /**
@@ -708,6 +731,7 @@ export async function ensureBrowserGcalSession(): Promise<BrowserGcalSession | n
  */
 export function disconnectGoogleCalendarBrowser() {
   browserGcalAuthEpoch += 1;
+  silentRefreshCooldownUntil = 0;
   const session =
     readBrowserGcalSession() || readRawBrowserGcalSession();
   const token = session?.accessToken;

@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import jsPDF from 'jspdf';
 import {
@@ -129,6 +129,9 @@ import AddressAutocomplete from '@/components/AddressAutocomplete';
 import CompanyPricing from '@/components/CompanyPricing';
 import HomeDashboard from '@/components/HomeDashboard';
 import PipelineBoard from '@/components/PipelineBoard';
+import RoofSystemPicker, {
+  roofSystemLabel,
+} from '@/components/RoofSystemPicker';
 import {
   PIPELINE_STAGES,
   PIPELINE_STAGE_STYLES,
@@ -192,6 +195,14 @@ type AppTab =
 type OrdersStep = 'material' | 'labor';
 /** Customer estimate form vs internal financials (inside lead profile). */
 type EstimateWorkspace = 'estimate' | 'internal';
+type EstimatorAdderId =
+  | 'fascia'
+  | 'decking'
+  | 'gutters'
+  | 'solar'
+  | 'hvac'
+  | 'skylights'
+  | 'ridge';
 /** Mitigation invoice form vs internal margin calc (no buffer). */
 type MitigationWorkspace = 'invoice' | 'internal';
 
@@ -904,6 +915,18 @@ function underlaymentLabel(key: string): string {
   return UNDERLAYMENT_OPTIONS.find((o) => o.key === key)?.label || '';
 }
 
+/** Estimate picker only — coverage stays on the order catalog for qty calc. */
+function stripSqFromProductLabel(label: string): string {
+  return label
+    .replace(/\s*\(~?\d+(?:\.\d+)?\s*sq(?:\s*\/\s*\d+\s*sf)?(?:\s*HT)?\)/gi, '')
+    .replace(/\s*~\d+(?:\.\d+)?\s*sq(?:\s*HT)?/gi, '')
+    .trim();
+}
+
+function underlaymentPickerLabel(key: string): string {
+  return stripSqFromProductLabel(underlaymentLabel(key)) || underlaymentLabel(key);
+}
+
 function underlaymentOptionsForSystem(
   system: UnderlaymentSystem
 ): UnderlaymentOption[] {
@@ -1013,19 +1036,26 @@ const COATING_TYPES: { key: string; label: string; description: string }[] = [
   },
 ];
 
+/** TopShield Pro SA Cap colors sold in Arizona. */
 const MOD_BITUMEN_CAP_COLORS = [
+  'Weathered Wood',
+  'Russet Ridge',
+  'Gunmetal Gray',
+  'Roasted Chestnut',
+  'Sand',
   'White',
-  'Black',
-  'Buff',
-  'Gray Slate',
-  'Weatherwood',
-  'Chestnut',
-  'Heather Blend',
-  'Oak',
-  'Red Blend',
-  'Pine Green',
-  'Other',
+  'Thunder Black',
 ];
+
+const MOD_BITUMEN_CAP_SWATCH: Record<string, string> = {
+  'Weathered Wood': '#8a6a4a',
+  'Russet Ridge': '#8b3d2a',
+  'Gunmetal Gray': '#5c6570',
+  'Roasted Chestnut': '#5a3218',
+  Sand: '#cbb892',
+  White: '#f4f1ea',
+  'Thunder Black': '#1c1c1c',
+};
 
 type FasciaMode = 'repair' | 'full' | '';
 type DeckingMode = 'repair' | 'full' | '';
@@ -1084,10 +1114,13 @@ type Estimate = {
   measurementId?: string;
   /** Supabase `estimates.id` when synced to cloud */
   supabaseId?: string;
-  /** Saved estimate PDF (owned by Estimates — not duplicated in Documents) */
+  /** Saved estimate PDF (owned by Estimates — also listed in Documents → Estimates) */
   pdfDocumentId?: string;
   pdfUrl?: string;
   pdfName?: string;
+  signerName?: string;
+  clientSignatureDataUrl?: string | null;
+  clientSignedAt?: string | null;
 };
 
 type LeadNote = {
@@ -1184,26 +1217,23 @@ const COST_KEY_ALIASES: Record<string, string[]> = {
   shingle_mold_labor: ['fascia_mold_labor'],
 };
 
+/** Company library on the Documents tab — blank copies + pricing to refer to. */
 const SYSTEM_DOCUMENTS = [
   {
     id: 'takeoff',
     name: 'Take off sheet',
-    description: '',
   },
   {
     id: 'pricing',
     name: 'Company pricing',
-    description: '',
   },
   {
     id: 'mitigation',
     name: 'Mitigation invoice',
-    description: '',
   },
   {
     id: 'emergency',
     name: 'Mitigation Service Agreement',
-    description: '',
   },
 ] as const;
 
@@ -1406,6 +1436,13 @@ type CatalogSku = {
   category?: 'pipe_jack' | 'vent' | 'fastener' | 'accessory' | 'shingle';
 };
 
+const TTOP_SKU_KEYS = new Set([
+  'ttop_4_al',
+  'ttop_4_gal',
+  'ttop_7_al',
+  'ttop_7_gal',
+]);
+
 const PIPE_JACK_CATALOG: CatalogSku[] = [
   { key: 'pipe_flash_1_5_al', label: '1.5" Pipe Flash Aluminum', cost: 18.65, unit: '/ea', category: 'pipe_jack' },
   { key: 'pipe_flash_1_5_gal', label: '1.5" Pipe Flash Galvanized', cost: 7, unit: '/ea', category: 'pipe_jack' },
@@ -1415,13 +1452,13 @@ const PIPE_JACK_CATALOG: CatalogSku[] = [
   { key: 'pipe_flash_3_gal', label: '3" Pipe Flash Galvanized', cost: 9, unit: '/ea', category: 'pipe_jack' },
   { key: 'pipe_flash_4_al', label: '4" Pipe Flash Aluminum', cost: 21.3, unit: '/ea', category: 'pipe_jack' },
   { key: 'pipe_flash_4_gal', label: '4" Pipe Flash Galvanized', cost: 10, unit: '/ea', category: 'pipe_jack' },
-  { key: 'ttop_4_al', label: '4" T-Top Aluminum', cost: 18, unit: '/ea', category: 'pipe_jack' },
-  { key: 'ttop_4_gal', label: '4" T-Top Galvanized', cost: 9.7, unit: '/ea', category: 'pipe_jack' },
-  { key: 'ttop_7_al', label: '7" T-Top Aluminum', cost: 22.5, unit: '/ea', category: 'pipe_jack' },
-  { key: 'ttop_7_gal', label: '7" T-Top Galvanized', cost: 11.6, unit: '/ea', category: 'pipe_jack' },
 ];
 
 const VENT_CATALOG: CatalogSku[] = [
+  { key: 'ttop_4_al', label: '4" T-Top Aluminum', cost: 18, unit: '/ea', cutInLabor: 20, category: 'vent' },
+  { key: 'ttop_4_gal', label: '4" T-Top Galvanized', cost: 9.7, unit: '/ea', cutInLabor: 20, category: 'vent' },
+  { key: 'ttop_7_al', label: '7" T-Top Aluminum', cost: 22.5, unit: '/ea', cutInLabor: 20, category: 'vent' },
+  { key: 'ttop_7_gal', label: '7" T-Top Galvanized', cost: 11.6, unit: '/ea', cutInLabor: 20, category: 'vent' },
   { key: 'vent_brv34', label: 'BRV34 Bath Vent', cost: 35, unit: '/ea', cutInLabor: 20, category: 'vent' },
   { key: 'vent_da4', label: 'DA-4 Vent', cost: 19.8, unit: '/ea', cutInLabor: 20, category: 'vent' },
   { key: 'vent_kv68', label: 'KV68 Kitchen Vent', cost: 53, unit: '/ea', cutInLabor: 20, category: 'vent' },
@@ -1890,6 +1927,155 @@ function materialOrderSectionsFor(
   return ordered;
 }
 
+const FLAT_ESTIMATE_PRODUCTS = new Set<string>([
+  'mod_bitumen',
+  'bur',
+  'full_foam',
+  'foam_overlay',
+  'elastomeric',
+  'silicone',
+  'urethane',
+  'coating',
+  'sa_underlayment',
+]);
+
+const TILE_ESTIMATE_PRODUCTS = new Set<string>([
+  'tile_dr',
+  'tile_rr',
+  'concrete',
+  'clay',
+  'concrete_s',
+  'concrete_flat',
+]);
+
+function orderTypeFromEstimate(est: Estimate): MaterialOrderType {
+  const product = est.selectedShingle || '';
+  if (FLAT_ESTIMATE_PRODUCTS.has(product)) return 'flat';
+  if (TILE_ESTIMATE_PRODUCTS.has(product)) return 'tile';
+  return 'shingle';
+}
+
+function hipRidgeSkuFromEstimate(est: Estimate): string {
+  const choice = est.hipRidgeChoice;
+  if (!choice) return '';
+  const p = est.selectedShingle || '';
+  if (p.startsWith('gaf')) return 'hip_ridge_gaf';
+  if (p.startsWith('owens')) return 'hip_ridge_oc_decoridge';
+  if (p.startsWith('certainteed')) return 'hip_ridge_ct_shadow';
+  if (p.startsWith('malarkey')) return 'hip_ridge_malarkey';
+  if (choice === 'high_profile') return 'hip_ridge_iko_ultra';
+  return 'hip_ridge_iko_std';
+}
+
+function starterSkuFromEstimate(est: Estimate): string {
+  if (est.starterChoice === 'armour') return 'starter_iko_armour';
+  if (!est.starterChoice) return '';
+  const p = est.selectedShingle || '';
+  if (p.startsWith('gaf')) return 'starter_gaf';
+  if (p.startsWith('owens')) return 'starter_oc';
+  if (p.startsWith('certainteed')) return 'starter_ct';
+  if (p.startsWith('malarkey')) return 'starter_malarkey';
+  return 'starter_iko';
+}
+
+function mbCapSkuFromEstimate(est: Estimate): string {
+  if (est.selectedShingle === 'bur' || est.mbCapChoice === 'polyglass_sa_cap') {
+    return 'polyglass_sa_cap';
+  }
+  if (
+    est.selectedShingle === 'mod_bitumen' ||
+    est.mbCapChoice === 'topshield_sa_cap' ||
+    est.mbCapChoice === 'mb_cap_sheet'
+  ) {
+    return 'mb_cap_sheet';
+  }
+  return '';
+}
+
+function seedMaterialOrderFromEstimate(
+  est: Estimate | null | undefined,
+  takeoff: TakeoffSheet | null | undefined,
+  orderType: MaterialOrderType
+): {
+  lines: Record<string, TakeoffSkuLine[]>;
+  coverage: Record<string, string>;
+} {
+  const lines: Record<string, TakeoffSkuLine[]> = {};
+  const coverage: Record<string, string> = {};
+  const sections = materialOrderSectionsFor(orderType);
+  const sq =
+    orderType === 'flat'
+      ? String(est?.modifiedBitumenSquares || est?.squares || '').trim()
+      : String(est?.squares || '').trim();
+
+  const pushSku = (sectionKey: string, skuKey: string, qty = '1') => {
+    if (!skuKey) return;
+    if (!lines[sectionKey]) lines[sectionKey] = [];
+    const line = newTakeoffSkuLine(skuKey, qty);
+    lines[sectionKey].push(line);
+    if (sq && (sectionKey === 'field_shingles' || sectionKey.startsWith('underlay') || sectionKey === 'mb_sa')) {
+      coverage[line.id] = sq;
+    }
+  };
+
+  if (est) {
+    if (orderType === 'shingle') {
+      if (est.iceWaterChoice) pushSku('ice_water', est.iceWaterChoice);
+      if (est.selectedUnderlayment) {
+        pushSku('underlay_shingle', est.selectedUnderlayment);
+      }
+      const starter = starterSkuFromEstimate(est);
+      if (starter) pushSku('starter', starter);
+      if (est.selectedShingle) pushSku('field_shingles', est.selectedShingle);
+      const ridge = hipRidgeSkuFromEstimate(est);
+      if (ridge) pushSku('hip_ridge', ridge);
+    }
+    if (orderType === 'tile' && est.selectedUnderlayment) {
+      pushSku('underlay_tile', est.selectedUnderlayment);
+    }
+    if (orderType === 'flat') {
+      if (est.iceWaterChoice) pushSku('ice_water', est.iceWaterChoice);
+      const cap = mbCapSkuFromEstimate(est);
+      if (cap) pushSku('mb_sa', cap, sq || '1');
+      if (est.selectedShingle === 'mod_bitumen' || est.mbBaseChoice) {
+        pushSku('mb_sa', 'mb_base_ply', sq || '1');
+      }
+    }
+    if (est.ridgeVentLF && parseFloat(est.ridgeVentLF) > 0) {
+      pushSku('vents', 'ridge_vent', est.ridgeVentLF);
+    }
+  }
+
+  const sheet = takeoff ? normalizeTakeoff(takeoff) : null;
+  if (sheet) {
+    for (const line of sheet.ventLines) {
+      if (!line.skuKey) continue;
+      if (!lines.vents) lines.vents = [];
+      lines.vents.push(newTakeoffSkuLine(line.skuKey, line.qty || '1'));
+    }
+    for (const line of sheet.pipeJackLines) {
+      if (!line.skuKey) continue;
+      if (!lines.pipe_jacks) lines.pipe_jacks = [];
+      lines.pipe_jacks.push(newTakeoffSkuLine(line.skuKey, line.qty || '1'));
+    }
+    if (
+      sheet.ridgeVent &&
+      parseFloat(sheet.ridgeVent) > 0 &&
+      !(est?.ridgeVentLF && parseFloat(est.ridgeVentLF) > 0)
+    ) {
+      pushSku('vents', 'ridge_vent', sheet.ridgeVent);
+    }
+  }
+
+  for (const sec of sections) {
+    if (!lines[sec.key]?.length) {
+      lines[sec.key] = [newTakeoffSkuLine('', '1')];
+    }
+  }
+
+  return { lines, coverage };
+}
+
 function newTakeoffSkuLine(skuKey = '', qty = '1'): TakeoffSkuLine {
   return {
     id: `tl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
@@ -1904,6 +2090,112 @@ function newTakeoffSkylightLine(size = '', qty = '1'): TakeoffSkylightLine {
     size,
     qty,
   };
+}
+
+function groupedSkuOptions<T extends { key: string }>(
+  options: T[]
+): { label: string; items: T[] }[] | null {
+  const ttop = options.filter((o) => o.key.startsWith('ttop_'));
+  if (ttop.length === 0) return null;
+  const ridge = options.filter(
+    (o) =>
+      o.key === 'ridge_vent' ||
+      /ridge|_lor|_or9|_or30/i.test(o.key)
+  );
+  const used = new Set([...ttop, ...ridge].map((o) => o.key));
+  const cutIn = options.filter((o) => !used.has(o.key));
+  return [
+    { label: 'T-Tops', items: ttop },
+    { label: 'Cut-in vents', items: cutIn },
+    { label: 'Ridge', items: ridge },
+  ].filter((g) => g.items.length > 0);
+}
+
+function renderSkuSelectOptions(options: { key: string; label: string }[]) {
+  const groups = groupedSkuOptions(options);
+  if (!groups) {
+    return options.map((o) => (
+      <option key={o.key} value={o.key}>
+        {o.label}
+      </option>
+    ));
+  }
+  return groups.map((g) => (
+    <optgroup key={g.label} label={g.label}>
+      {g.items.map((o) => (
+        <option key={o.key} value={o.key}>
+          {o.label}
+        </option>
+      ))}
+    </optgroup>
+  ));
+}
+
+function CapColorPicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (color: string) => void;
+}) {
+  return (
+    <div
+      className="grid grid-cols-2 sm:grid-cols-4 gap-2"
+      role="listbox"
+      aria-label="Cap color"
+    >
+      {MOD_BITUMEN_CAP_COLORS.map((c) => {
+        const selected = value === c;
+        return (
+          <button
+            key={c}
+            type="button"
+            role="option"
+            aria-selected={selected}
+            onClick={() => onChange(c)}
+            className={`flex items-center gap-2.5 rounded-2xl border px-3 py-2.5 text-left text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-zinc-400/70 ${
+              selected
+                ? 'border-zinc-900 bg-zinc-900 text-white'
+                : 'border-zinc-200 bg-white text-zinc-900 hover:border-zinc-400'
+            }`}
+          >
+            <span
+              className={`h-6 w-6 rounded-full shrink-0 shadow-sm ${
+                selected
+                  ? 'border border-white/55'
+                  : 'border border-black/15'
+              }`}
+              style={{ background: MOD_BITUMEN_CAP_SWATCH[c] }}
+              aria-hidden
+            />
+            {c}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function LockedProduct({ label }: { label: string }) {
+  return (
+    <span className="inline-flex items-center rounded-full bg-zinc-100 px-3.5 py-1.5 text-sm font-semibold text-zinc-900">
+      {label}
+    </span>
+  );
+}
+
+function orderHasSeededSku(lines: Record<string, TakeoffSkuLine[]>) {
+  return Object.values(lines).some((ls) => ls.some((l) => Boolean(l.skuKey)));
+}
+
+function orderFillSourceLabel(
+  est: Estimate | null | undefined,
+  takeoff: TakeoffSheet | null | undefined
+): string | null {
+  if (est?.date) return `estimate ${est.date}`;
+  if (est) return 'latest estimate';
+  if (takeoff) return 'takeoff';
+  return null;
 }
 
 function catalogLabel(skuKey: string): string {
@@ -2185,8 +2477,15 @@ function normalizeTakeoff(raw: unknown): TakeoffSheet {
   if (!raw || typeof raw !== 'object') return empty;
   const r = raw as Record<string, unknown>;
 
-  const pipeJackLines = normalizeTakeoffSkuLines(r.pipeJackLines);
-  const ventLines = normalizeTakeoffSkuLines(r.ventLines);
+  const pipeJackLinesRaw = normalizeTakeoffSkuLines(r.pipeJackLines);
+  const ventLinesRaw = normalizeTakeoffSkuLines(r.ventLines);
+  const migratedTtops = pipeJackLinesRaw.filter((l) =>
+    TTOP_SKU_KEYS.has(l.skuKey)
+  );
+  const pipeJackLines = pipeJackLinesRaw.filter(
+    (l) => !TTOP_SKU_KEYS.has(l.skuKey)
+  );
+  const ventLines = [...ventLinesRaw, ...migratedTtops];
 
   const legacyBits: string[] = [];
   const pushLegacy = (label: string, value: unknown) => {
@@ -2373,6 +2672,25 @@ type PhotoReport = {
 
 
 /** Lead documents: PDFs and files in Supabase Storage bucket `lead-docs`. */
+type LeadDocFolder =
+  | 'estimates'
+  | 'photo_reports'
+  | 'takeoff'
+  | 'sheets'
+  | 'company'
+  | 'documents'
+  | 'contracts';
+
+const LEAD_DOC_FOLDERS: { id: LeadDocFolder; label: string }[] = [
+  { id: 'estimates', label: 'Estimates' },
+  { id: 'photo_reports', label: 'Photo reports' },
+  { id: 'takeoff', label: 'Takeoff' },
+  { id: 'sheets', label: 'Sheets' },
+  { id: 'company', label: 'Company' },
+  { id: 'documents', label: 'Other' },
+  { id: 'contracts', label: 'Contracts' },
+];
+
 type LeadDocument = {
   id: string;
   name: string;
@@ -2380,7 +2698,66 @@ type LeadDocument = {
   size?: number;
   mimeType?: string;
   createdAt: string;
+  createdAtMs?: number;
+  folder?: LeadDocFolder;
 };
+
+function isLeadDocFolder(value: unknown): value is LeadDocFolder {
+  return (
+    typeof value === 'string' &&
+    LEAD_DOC_FOLDERS.some((f) => f.id === value)
+  );
+}
+
+function inferLeadDocFolder(doc: Pick<LeadDocument, 'id' | 'name' | 'url' | 'folder'>): LeadDocFolder {
+  if (isLeadDocFolder(doc.folder)) return doc.folder;
+  if (isEstimatePdfDocument(doc as LeadDocument)) return 'estimates';
+  const name = doc.name || '';
+  const url = doc.url || '';
+  if (/photo.?report/i.test(name) || /\/reports\//i.test(url)) return 'photo_reports';
+  if (/take.?off/i.test(name)) return 'takeoff';
+  if (/agreement/i.test(name) || /\/agreements\//i.test(url) || /^esa-/i.test(doc.id))
+    return 'contracts';
+  if (/pricing/i.test(name) || /company.?pricing/i.test(name)) return 'company';
+  if (/invoice/i.test(name) || /mitigation/i.test(name)) return 'sheets';
+  return 'documents';
+}
+
+function leadDocTimeMs(doc: LeadDocument, index: number): number {
+  if (typeof doc.createdAtMs === 'number' && Number.isFinite(doc.createdAtMs)) {
+    return doc.createdAtMs;
+  }
+  const parsed = Date.parse(doc.createdAt);
+  if (Number.isFinite(parsed)) return parsed;
+  return index;
+}
+
+function sortLeadDocumentsNewestFirst(docs: LeadDocument[]): LeadDocument[] {
+  return docs
+    .map((d, i) => ({ d, i }))
+    .sort((a, b) => leadDocTimeMs(b.d, b.i) - leadDocTimeMs(a.d, a.i))
+    .map((x) => x.d);
+}
+
+function stampLeadDocument(
+  doc: LeadDocument,
+  folder?: LeadDocFolder
+): LeadDocument {
+  return {
+    ...doc,
+    createdAtMs: doc.createdAtMs ?? Date.now(),
+    folder: folder || inferLeadDocFolder(doc),
+  };
+}
+
+function prependLeadDocuments(
+  existing: LeadDocument[] | undefined,
+  added: LeadDocument[],
+  folder?: LeadDocFolder
+): LeadDocument[] {
+  const stamped = added.map((d) => stampLeadDocument(d, folder));
+  return [...stamped, ...(existing || [])];
+}
 
 /** Soft-deleted lead media on a single lead (legacy; prefer AppTrashItem). */
 type LeadTrashItem = {
@@ -3961,9 +4338,7 @@ function replaceOneEstimate(
 }
 
 function sanitizeLeads(leads: Lead[]): Lead[] {
-  return detachEstimatePdfsFromDocuments(
-    uniquifyEstimateIds(uniquifyLeadIds(leads))
-  );
+  return uniquifyEstimateIds(uniquifyLeadIds(leads));
 }
 
 /** Parse localStorage summitLeads; null if missing/invalid. Never throws. */
@@ -4425,6 +4800,9 @@ export default function SummitApp() {
   /** Estimate form vs Internal calc (buffer / commission) — only when estimator is open. */
   const [estimateWorkspace, setEstimateWorkspace] =
     useState<EstimateWorkspace>('estimate');
+  const [expandedAdder, setExpandedAdder] = useState<EstimatorAdderId | null>(
+    null
+  );
   const [negotiatedPrice, setNegotiatedPrice] = useState(0);
   const [originalTotalForBuffer, setOriginalTotalForBuffer] = useState(0);
   const [roofSystem, setRoofSystem] = useState<RoofSystem>('shingle');
@@ -4521,6 +4899,10 @@ export default function SummitApp() {
     useState<Record<string, string>>({});
   const [profileOrdersStep, setProfileOrdersStep] =
     useState<OrdersStep>('material');
+  const [orderFilledFrom, setOrderFilledFrom] = useState<string | null>(null);
+  const [profileOrderFilledFrom, setProfileOrderFilledFrom] = useState<
+    string | null
+  >(null);
   /** Company Pricing workspace: Labor | Materials */
   const [companyPricingPane, setCompanyPricingPane] = useState<
     'labor' | 'materials'
@@ -4542,6 +4924,10 @@ export default function SummitApp() {
   const [docsUploading, setDocsUploading] = useState(false);
   const [docAddMenuOpen, setDocAddMenuOpen] = useState(false);
   const [, setSystemDocPreview] = useState<string | null>(null);
+  /** Hub = Documents tab library; lead = opened from a job. */
+  const [systemDocOrigin, setSystemDocOrigin] = useState<'hub' | 'lead'>(
+    'lead'
+  );
   const [systemDocWorkspace, setSystemDocWorkspace] = useState<
     | null
     | 'takeoff'
@@ -4556,6 +4942,19 @@ export default function SummitApp() {
   const [emergencyPreview, setEmergencyPreview] = useState(false);
   const emergencySigPadRef = useRef<HTMLCanvasElement | null>(null);
   const emergencySigDrawing = useRef(false);
+  const estimateSigPadRef = useRef<HTMLCanvasElement | null>(null);
+  const estimateSigDrawing = useRef(false);
+  const [estimateSignerName, setEstimateSignerName] = useState('');
+  const [estimateSignatureDataUrl, setEstimateSignatureDataUrl] = useState<
+    string | null
+  >(null);
+  const [estimateSignedAt, setEstimateSignedAt] = useState<string | null>(null);
+  const [docFolderView, setDocFolderView] = useState<LeadDocFolder | null>(
+    null
+  );
+  const [docUploadFolder, setDocUploadFolder] =
+    useState<LeadDocFolder>('documents');
+  const pendingDocFolderRef = useRef<LeadDocFolder | null>(null);
   const [takeoffAssignOpen, setTakeoffAssignOpen] = useState(false);
   const [takeoffAssignSearch, setTakeoffAssignSearch] = useState('');
   const [lightboxPhoto, setLightboxPhoto] = useState<LeadPhoto | null>(null);
@@ -4918,10 +5317,10 @@ export default function SummitApp() {
   const [tasksTrashOpen, setTasksTrashOpen] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  /** Desktop: icon rail vs full labels. Mobile uses drawer (`sidebarOpen`). */
+  /** Laptop (1024+): icon rail vs full labels. Phone uses drawer; iPad is always rail. */
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [isLaptopNav, setIsLaptopNav] = useState(false);
   const sidebarDocPrevCollapsed = useRef<boolean | null>(null);
-  const [sidebarProfileOpen, setSidebarProfileOpen] = useState(false);
   /** True once launched from the home-screen icon (standalone display mode). */
   const [isStandaloneApp, setIsStandaloneApp] = useState(false);
   /** Captured `beforeinstallprompt` — lets us trigger Chrome/Android's native install UI on demand. */
@@ -5629,7 +6028,10 @@ export default function SummitApp() {
   }, [systemDocWorkspace, mitigationDraft]);
 
 
-  const openSystemDoc = (id: 'takeoff' | 'pricing') => {
+  const openSystemDoc = (
+    id: 'takeoff' | 'pricing',
+    origin: 'hub' | 'lead' = 'lead'
+  ) => {
     setDocAddMenuOpen(false);
     try {
       setShowMitigationInvoice(false);
@@ -5637,27 +6039,32 @@ export default function SummitApp() {
       /* ignore */
     }
     setMitigationDraft(null);
-    // Stay in lead context — don't hijack sidebar to Documents hub
-    if (isEditingLead && profileTab !== 'estimator') {
-      setLeadToolReturnTab(profileTab);
-    } else {
-      setLeadToolReturnTab('documents');
-    }
-    if (currentLeadId != null) {
-      setIsEditingLead(true);
-      setActiveTab('leads');
+    setSystemDocOrigin(origin);
+    if (origin === 'lead') {
+      if (isEditingLead && profileTab !== 'estimator') {
+        setLeadToolReturnTab(profileTab);
+      } else {
+        setLeadToolReturnTab('documents');
+      }
+      if (currentLeadId != null) {
+        setIsEditingLead(true);
+        setActiveTab('leads');
+      }
     }
     if (id === 'takeoff') {
-      // Keep lead takeoff when opening from a lead — don't wipe saved SKUs
-      const lead =
-        currentLeadId != null
-          ? leads.find((l) => l.id === currentLeadId)
-          : null;
-      setTakeoffForm(
-        lead?.takeoff && typeof lead.takeoff === 'object'
-          ? normalizeTakeoff(lead.takeoff)
-          : emptyTakeoff()
-      );
+      if (origin === 'hub') {
+        setTakeoffForm(emptyTakeoff());
+      } else {
+        const lead =
+          currentLeadId != null
+            ? leads.find((l) => l.id === currentLeadId)
+            : null;
+        setTakeoffForm(
+          lead?.takeoff && typeof lead.takeoff === 'object'
+            ? normalizeTakeoff(lead.takeoff)
+            : emptyTakeoff()
+        );
+      }
       setTakeoffAssignOpen(false);
       setTakeoffAssignSearch('');
     }
@@ -5665,11 +6072,13 @@ export default function SummitApp() {
     setSystemDocWorkspace(id);
   };
 
-  /** One exit contract for mitigation / takeoff / pricing / emergency → back on the lead */
+  /** Exit takeoff / pricing / mitigation / emergency → Documents hub or the lead. */
   const exitLeadDocumentWorkspace = (opts?: { returnTab?: ProfileTab }) => {
+    const fromHub = systemDocOrigin === 'hub';
     const raw = opts?.returnTab ?? leadToolReturnTab ?? 'documents';
     const returnTab: ProfileTab =
       raw === 'estimator' ? 'documents' : raw;
+    setSystemDocOrigin('lead');
     setSystemDocWorkspace(null);
     setTakeoffAssignOpen(false);
     setShowMitigationInvoice(false);
@@ -5685,11 +6094,14 @@ export default function SummitApp() {
     } catch {
       /* ignore */
     }
-    if (currentLeadId != null) {
-      setIsEditingLead(true);
-      setActiveTab('leads');
-      setProfileTab(returnTab);
+    if (fromHub || currentLeadId == null) {
+      setActiveTab('documents');
+      setIsEditingLead(false);
+      return;
     }
+    setIsEditingLead(true);
+    setActiveTab('leads');
+    setProfileTab(returnTab);
   };
 
   const openMitigationWorkspace = (
@@ -5732,6 +6144,7 @@ export default function SummitApp() {
       .filter(Boolean)
       .join(', ');
     setCurrentLeadId(leadId);
+    setSystemDocOrigin('lead');
     // Remember where we came from; keep lead chrome alive under the tool
     if (isEditingLead && profileTab !== 'estimator') {
       setLeadToolReturnTab(profileTab);
@@ -5829,6 +6242,7 @@ export default function SummitApp() {
       mitigationDraft?.rateMode === 'cash' ? 'cash' : 'insurance';
 
     setCurrentLeadId(leadId);
+    setSystemDocOrigin('lead');
     if (isEditingLead && profileTab !== 'estimator') {
       setLeadToolReturnTab(profileTab);
     } else {
@@ -5911,6 +6325,48 @@ export default function SummitApp() {
       clientSignedAt: signedAt,
     });
     showToast('Electronically signed');
+  };
+
+  const clearEstimateSignaturePad = () => {
+    const canvas = estimateSigPadRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#18181b';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+  };
+
+  const captureEstimatePadIfInk = (): {
+    dataUrl: string;
+    signedAt: string;
+  } | null => {
+    if (estimateSignatureDataUrl) {
+      return {
+        dataUrl: estimateSignatureDataUrl,
+        signedAt: estimateSignedAt || new Date().toISOString(),
+      };
+    }
+    const canvas = estimateSigPadRef.current;
+    if (!canvas) return null;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let ink = 0;
+    for (let i = 0; i < pixels.length; i += 4) {
+      if (pixels[i] < 250 || pixels[i + 1] < 250 || pixels[i + 2] < 250) {
+        ink++;
+        if (ink > 40) break;
+      }
+    }
+    if (ink <= 40) return null;
+    return {
+      dataUrl: canvas.toDataURL('image/png'),
+      signedAt: new Date().toISOString(),
+    };
   };
 
   const formatSignedAtDisplay = (iso: string | null | undefined) => {
@@ -6119,13 +6575,13 @@ export default function SummitApp() {
       right - left
     );
     doc.text(scopeLines, left, y);
-    y += Math.min(28, scopeLines.length * 4 + 4);
+    y += scopeLines.length * 4 + 6;
     doc.setFontSize(8);
     doc.setTextColor(muted.r, muted.g, muted.b);
     doc.text(`Est. start: ${d.serviceStart || '—'}`, left, y);
-    y += 4;
+    y += 5;
     doc.text(`Est. complete: ${d.serviceComplete || '—'}`, left, y);
-    y += 7;
+    y += 8;
 
     ensureSpace(35);
     doc.setFont('helvetica', 'bold');
@@ -6323,10 +6779,19 @@ export default function SummitApp() {
         size: blob.size,
         mimeType: 'application/pdf',
         createdAt: stamp,
+        createdAtMs: Date.now(),
+        folder: 'contracts',
       };
       const updated = leads.map((l) =>
         l.id === leadIdAtSave
-          ? { ...l, documents: [...(l.documents || []), docEntry] }
+          ? {
+              ...l,
+              documents: prependLeadDocuments(
+                l.documents,
+                [docEntry],
+                'contracts'
+              ),
+            }
           : l
       );
       persistLeads(updated);
@@ -7009,12 +7474,9 @@ export default function SummitApp() {
     // Footer
     doc.setFontSize(7);
     doc.setTextColor(160, 160, 165);
-    doc.text(
-      'Mitigation invoice · costs are internal and not shown on this document',
-      pageW / 2,
-      pageH - 10,
-      { align: 'center' }
-    );
+    doc.text('Mitigation invoice', pageW / 2, pageH - 10, {
+      align: 'center',
+    });
 
     const fileName = `${title.replace(/\s+/g, '_')}_${
       blank ? 'BLANK' : d?.job || 'draft'
@@ -7089,10 +7551,19 @@ export default function SummitApp() {
             size: blob.size,
             mimeType: 'application/pdf',
             createdAt: stamp,
+            createdAtMs: Date.now(),
+            folder: 'sheets',
           };
           const updated = leads.map((l) =>
             l.id === leadIdAtSave
-              ? { ...l, documents: [...(l.documents || []), docEntry] }
+              ? {
+                  ...l,
+                  documents: prependLeadDocuments(
+                    l.documents,
+                    [docEntry],
+                    'sheets'
+                  ),
+                }
               : l
           );
           persistLeads(updated);
@@ -7567,6 +8038,15 @@ export default function SummitApp() {
     estimatorSourceLeadId,
     currentLeadId,
   ]);
+
+  useEffect(() => {
+    if (!docAddMenuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDocAddMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [docAddMenuOpen]);
 
   useEffect(() => {
     negotiatedPriceRef.current = negotiatedPrice;
@@ -8426,6 +8906,15 @@ export default function SummitApp() {
                   pdfName: rawData.pdfName
                     ? String(rawData.pdfName)
                     : undefined,
+                  signerName: rawData.signerName
+                    ? String(rawData.signerName)
+                    : undefined,
+                  clientSignatureDataUrl: rawData.clientSignatureDataUrl
+                    ? String(rawData.clientSignatureDataUrl)
+                    : null,
+                  clientSignedAt: rawData.clientSignedAt
+                    ? String(rawData.clientSignedAt)
+                    : null,
                   supabaseId: r.id != null ? String(r.id) : undefined,
                 };
                 if (!byLead[leadKey]) byLead[leadKey] = [];
@@ -9804,6 +10293,13 @@ export default function SummitApp() {
     /** Also generate/store PDF on the estimate (preview Save) */
     savePdf?: boolean;
   }) => {
+    const capturedSig = captureEstimatePadIfInk();
+    if (capturedSig) {
+      setEstimateSignatureDataUrl(capturedSig.dataUrl);
+      setEstimateSignedAt(capturedSig.signedAt);
+    }
+    const sigUrl = capturedSig?.dataUrl || estimateSignatureDataUrl;
+    const sigAt = capturedSig?.signedAt || estimateSignedAt;
     const client = resolveEstimatorClient();
     const linkId = currentLeadId ?? estimatorSourceLeadId ?? client.lead?.id ?? null;
     const leadEstimates =
@@ -9849,6 +10345,9 @@ export default function SummitApp() {
       dripEdgeColor,
       total: estimatorTotalPrice,
       negotiatedPrice,
+      signerName: estimateSignerName,
+      clientSignatureDataUrl: sigUrl,
+      clientSignedAt: sigAt,
     };
 
     // New save (not editing a loaded estimate): block exact duplicates
@@ -9918,6 +10417,9 @@ export default function SummitApp() {
       pdfDocumentId: targetEst?.pdfDocumentId,
       pdfUrl: targetEst?.pdfUrl,
       pdfName: targetEst?.pdfName,
+      signerName: estimateSignerName,
+      clientSignatureDataUrl: sigUrl,
+      clientSignedAt: sigAt,
     };
 
     let updatedLeads = [...leads];
@@ -10054,6 +10556,9 @@ export default function SummitApp() {
     setNegotiatedPrice(0);
     setOriginalTotalForBuffer(0);
     setEstimatorTotalPrice(0);
+    setEstimateSignerName('');
+    setEstimateSignatureDataUrl(null);
+    setEstimateSignedAt(null);
     setActiveMeasurementId(null);
     setShowProfessionalEstimate(false);
     setHasUnsavedChanges(false);
@@ -11411,6 +11916,7 @@ export default function SummitApp() {
     setInvoicePickerMode(false);
     if (systemDocWorkspace) {
       setSystemDocWorkspace(null);
+      setSystemDocOrigin('lead');
       setTakeoffAssignOpen(false);
       setEmergencyDraft(null);
       setEmergencyPreview(false);
@@ -11437,6 +11943,7 @@ export default function SummitApp() {
     setShowProfessionalEstimate(false);
     setShowMeasureAddressModal(false);
     setHubReport(null);
+    setDocFolderView(null);
     applyLeadFields(lead);
     setProfileTab(tab ?? 'overview');
     setIsEditingLead(true);
@@ -11547,8 +12054,20 @@ export default function SummitApp() {
         : ''
     );
     setSelectedUnderlayment(estimate.selectedUnderlayment || '');
-    setMbCapChoice(estimate.mbCapChoice || '');
-    setMbBaseChoice(estimate.mbBaseChoice || '');
+    setMbCapChoice(
+      product === 'bur' || estimate.mbCapChoice === 'polyglass_sa_cap'
+        ? 'polyglass_sa_cap'
+        : product === 'mod_bitumen'
+          ? estimate.mbCapChoice === 'polyglass_sa_cap'
+            ? 'topshield_sa_cap'
+            : estimate.mbCapChoice || 'topshield_sa_cap'
+          : estimate.mbCapChoice || ''
+    );
+    setMbBaseChoice(
+      product === 'mod_bitumen'
+        ? estimate.mbBaseChoice || 'topshield_sa_base'
+        : estimate.mbBaseChoice || ''
+    );
     setFasciaMode(estimate.fasciaMode || '');
     setDeckingMode(estimate.deckingMode || '');
     setFasciaType(estimate.fasciaType || '');
@@ -11557,6 +12076,9 @@ export default function SummitApp() {
     setDripEdgeColor(estimate.dripEdgeColor || '');
     setNotes(estimate.notes || '');
     setEstimatorTotalPrice(estimate.negotiatedPrice || estimate.total || 0);
+    setEstimateSignerName(estimate.signerName || '');
+    setEstimateSignatureDataUrl(estimate.clientSignatureDataUrl || null);
+    setEstimateSignedAt(estimate.clientSignedAt || null);
     setNegotiatedPrice(estimate.negotiatedPrice || estimate.total || 0);
     setOriginalTotalForBuffer(estimate.originalTotalForBuffer || estimate.total || 0);
     setEditingEstimateId(estimate.id);
@@ -11591,21 +12113,17 @@ export default function SummitApp() {
     showToast('Estimate loaded');
   };
 
-  // Close header menus / sidebar profile / mobile drawer when clicking outside or Escape
+  // Close header menus / mobile drawer when clicking outside or Escape
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
       const el = e.target as HTMLElement;
       if (!el.closest?.('[data-header-menu]')) {
         setShowUserMenu(false);
       }
-      if (!el.closest?.('[data-sidebar-profile]')) {
-        setSidebarProfileOpen(false);
-      }
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setShowUserMenu(false);
-        setSidebarProfileOpen(false);
         setSidebarOpen(false);
         setHeaderSearch('');
       }
@@ -11663,6 +12181,24 @@ export default function SummitApp() {
     } catch {
       /* ignore */
     }
+  }, []);
+
+  // iPad (768+) gets the icon rail; laptop (1024+) may expand. Close the phone drawer
+  // as soon as the rail is available so rotate/resize doesn't leave it stuck open.
+  useLayoutEffect(() => {
+    const laptop = window.matchMedia('(min-width: 1024px)');
+    const tablet = window.matchMedia('(min-width: 768px)');
+    const sync = () => {
+      setIsLaptopNav(laptop.matches);
+      if (tablet.matches) setSidebarOpen(false);
+    };
+    sync();
+    laptop.addEventListener('change', sync);
+    tablet.addEventListener('change', sync);
+    return () => {
+      laptop.removeEventListener('change', sync);
+      tablet.removeEventListener('change', sync);
+    };
   }, []);
 
   const isDocumentWorkspace =
@@ -15085,6 +15621,8 @@ export default function SummitApp() {
             size: blob.size,
             mimeType: 'application/pdf',
             createdAt: stamp,
+            createdAtMs: Date.now(),
+            folder: 'photo_reports',
           };
           const report: PhotoReport = {
             id: `${Date.now()}-r`,
@@ -15099,7 +15637,11 @@ export default function SummitApp() {
             l.id === currentLeadId
               ? {
                   ...l,
-                  documents: [...(l.documents || []), newDoc],
+                  documents: prependLeadDocuments(
+                    l.documents,
+                    [newDoc],
+                    'photo_reports'
+                  ),
                   photoReports: [...(l.photoReports || []), report],
                 }
               : l
@@ -15444,8 +15986,12 @@ export default function SummitApp() {
     }
   };
 
-  const handleDocFiles = async (fileList: FileList | File[]) => {
-    if (!currentLeadId || docsUploading) return;
+  const handleDocFiles = async (
+    fileList: FileList | File[],
+    folder: LeadDocFolder = docUploadFolder,
+    leadId: number | null = currentLeadId
+  ) => {
+    if (!leadId || docsUploading) return;
     const files = Array.from(fileList);
     if (files.length === 0) return;
     if (!supabaseEnabled || !supabase) {
@@ -15453,9 +15999,9 @@ export default function SummitApp() {
       return;
     }
 
-    const currentLead = leads.find((l) => l.id === currentLeadId);
+    const currentLead = leads.find((l) => l.id === leadId);
     const folderKey =
-      currentLead?.supabaseId?.trim() || String(currentLeadId);
+      currentLead?.supabaseId?.trim() || String(leadId);
 
     setDocsUploading(true);
     try {
@@ -15503,6 +16049,8 @@ export default function SummitApp() {
           size: file.size,
           mimeType: file.type || undefined,
           createdAt: stamp,
+          createdAtMs: Date.now(),
+          folder,
         });
       }
 
@@ -15512,11 +16060,19 @@ export default function SummitApp() {
       }
 
       const updatedLeads = leads.map((lead) =>
-        lead.id === currentLeadId
-          ? { ...lead, documents: [...(lead.documents || []), ...newDocs] }
+        lead.id === leadId
+          ? {
+              ...lead,
+              documents: prependLeadDocuments(
+                lead.documents,
+                newDocs,
+                folder
+              ),
+            }
           : lead
       );
       persistLeads(updatedLeads);
+      if (leadId === currentLeadId) setDocFolderView(folder);
       showToast(
         newDocs.length === 1
           ? 'Document uploaded'
@@ -15576,6 +16132,10 @@ export default function SummitApp() {
       setMeasurementPdfUrl(null);
       setMeasurementPdfName('');
     }
+    const remaining = (updated.find((l) => l.id === currentLeadId)?.documents ||
+      []
+    ).filter((d) => inferLeadDocFolder(d) === docFolderView);
+    if (docFolderView && remaining.length === 0) setDocFolderView(null);
     showToast('Moved to trash');
   };
 
@@ -15808,11 +16368,7 @@ export default function SummitApp() {
               className={selectCls}
             >
               <option value="">Select product…</option>
-              {catalog.map((p) => (
-                <option key={p.key} value={p.key}>
-                  {p.label}
-                </option>
-              ))}
+              {renderSkuSelectOptions(catalog)}
             </select>
             <input
               type="number"
@@ -16078,6 +16634,7 @@ export default function SummitApp() {
                   type="text"
                   value={takeoffForm.soffitOverhang}
                   onChange={(e) => setField('soffitOverhang', e.target.value)}
+                  placeholder="e.g. 24"
                   className={inputCls}
                 />
                 <select
@@ -16207,6 +16764,131 @@ export default function SummitApp() {
     );
   };
 
+  const generateTakeoffPdf = (opts?: {
+    download?: boolean;
+    asFile?: boolean;
+  }): File | null => {
+    const snapshot = normalizeTakeoff(takeoffForm);
+    const lead =
+      currentLeadId != null
+        ? leads.find((l) => l.id === currentLeadId)
+        : null;
+    const clientName = lead
+      ? [lead.clientFirstName, lead.clientLastName].filter(Boolean).join(' ')
+      : '';
+    const addr = lead
+      ? [lead.clientAddress, lead.clientCity, lead.clientState, lead.clientZip]
+          .filter(Boolean)
+          .join(', ')
+      : '';
+    const doc = new jsPDF({ unit: 'mm', format: 'letter' });
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const left = 18;
+    const right = pageW - 18;
+    const ink = { r: 28, g: 28, b: 30 };
+    const muted = { r: 100, g: 100, b: 105 };
+    const rule = { r: 190, g: 190, b: 195 };
+    const brand =
+      companyBrandName() ||
+      userCompany.trim() ||
+      DEFAULT_USER_PROFILE.company;
+
+    let y = 16;
+    const logoW = drawDocLogo(doc, left, y);
+    const textX = left + logoW + 4;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.text('CONTRACTOR', textX, y + 3);
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.text(brand, textX, y + 8.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    const bizAddr = (companySettings.address || '').trim();
+    if (bizAddr) doc.text(bizAddr, textX, y + 13);
+    const contact = companyContactLine();
+    if (contact) doc.text(contact, textX, bizAddr ? y + 17 : y + 13);
+    y += 28;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.text('Take off sheet', left, y);
+    y += 6;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.text(new Date().toLocaleDateString(), left, y);
+    y += 6;
+    doc.setDrawColor(rule.r, rule.g, rule.b);
+    doc.setLineWidth(0.4);
+    doc.line(left, y, right, y);
+    y += 8;
+
+    const meta = [
+      ['Client', clientName || '—'],
+      ['Job #', lead?.jobNumber || '—'],
+      ['Address', addr || '—'],
+    ];
+    doc.setFontSize(10);
+    for (const [label, value] of meta) {
+      if (y > pageH - 24) {
+        doc.addPage();
+        y = 20;
+      }
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(muted.r, muted.g, muted.b);
+      doc.text(label, left, y);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(ink.r, ink.g, ink.b);
+      const wrapped = doc.splitTextToSize(value, right - left - 36);
+      doc.text(wrapped, left + 36, y);
+      y += Math.max(7, wrapped.length * 4.8);
+    }
+    y += 4;
+    doc.setDrawColor(rule.r, rule.g, rule.b);
+    doc.line(left, y, right, y);
+    y += 8;
+
+    for (const { key, label } of TAKEOFF_FIELD_LABELS) {
+      if (y > pageH - 22) {
+        doc.addPage();
+        y = 20;
+      }
+      const value = formatTakeoffFieldValue(key, snapshot);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(muted.r, muted.g, muted.b);
+      doc.text(label.toUpperCase(), left, y);
+      y += 4.5;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      doc.setTextColor(ink.r, ink.g, ink.b);
+      const wrapped = doc.splitTextToSize(value || '—', right - left);
+      doc.text(wrapped, left, y);
+      y += wrapped.length * 4.8 + 3;
+    }
+
+    doc.setFontSize(7);
+    doc.setTextColor(160, 160, 165);
+    doc.text('Take off sheet', pageW / 2, pageH - 10, { align: 'center' });
+
+    const safeName = (clientName || 'Lead').replace(/[^\w.-]+/g, '_');
+    const fileName = `Takeoff-${safeName}.pdf`;
+    const blob = doc.output('blob');
+    if (opts?.download !== false && !opts?.asFile) {
+      doc.save(fileName);
+    }
+    if (opts?.asFile) {
+      return new File([blob], fileName, { type: 'application/pdf' });
+    }
+    return null;
+  };
+
   const saveTakeoff = (alsoDocument = false) => {
     if (!currentLeadId) return;
     const snapshot = normalizeTakeoff(takeoffForm);
@@ -16217,34 +16899,10 @@ export default function SummitApp() {
     persistLeads(updatedLeads);
 
     if (alsoDocument) {
-      const lead = updatedLeads.find((l) => l.id === currentLeadId);
-      const clientName = lead
-        ? [lead.clientFirstName, lead.clientLastName].filter(Boolean).join(' ')
-        : '';
-      const lines = [
-        'TAKE-OFF / INSPECTION SHEET',
-        `Job: ${lead?.jobNumber || ''}`,
-        `Client: ${clientName}`,
-        `Address: ${
-          lead
-            ? [lead.clientAddress, lead.clientCity, lead.clientState, lead.clientZip]
-                .filter(Boolean)
-                .join(', ')
-            : ''
-        }`,
-        `Date: ${new Date().toLocaleString()}`,
-        '',
-        ...TAKEOFF_FIELD_LABELS.map(
-          ({ key, label }) =>
-            `${label}: ${formatTakeoffFieldValue(key, snapshot)}`
-        ),
-      ];
-      const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
-      const safeName = (clientName || 'Lead').replace(/[^\w.-]+/g, '_');
-      const file = new File([blob], `Takeoff-${safeName}-${Date.now()}.txt`, {
-        type: 'text/plain',
-      });
-      void handleDocFiles([file]);
+      const file = generateTakeoffPdf({ download: false, asFile: true });
+      if (file) {
+        void handleDocFiles([file], 'takeoff');
+      }
       showToast('Take-off saved + added to Documents');
     } else {
       showToast('Take-off saved');
@@ -16485,7 +17143,13 @@ export default function SummitApp() {
       else if (kind === 'urethane') product = 'urethane';
       else product = '';
     }
-    if (system !== 'mod_bit') {
+    if (system === 'mod_bit') {
+      setMbCapChoice('topshield_sa_cap');
+      setMbBaseChoice('topshield_sa_base');
+    } else if (system === 'bur') {
+      setMbCapChoice('polyglass_sa_cap');
+      setMbBaseChoice('');
+    } else {
       setMbCapChoice('');
       setMbBaseChoice('');
     }
@@ -16747,17 +17411,31 @@ export default function SummitApp() {
         : 0;
     if (isModBitScope && mbScopeSq > 0) {
       // 1 base ply + SA cap only (never 2 base layers)
-      const baseName =
-        MB_BASE_OPTIONS.find((o) => o.key === mbBaseChoice)?.label ||
-        'SA base sheet';
       const capName =
-        MB_CAP_OPTIONS.find((o) => o.key === mbCapChoice)?.label ||
-        'SA cap sheet';
+        mbCapChoice === 'polyglass_sa_cap'
+          ? 'Polyglass SA Cap Sheet'
+          : 'TopShield SA Cap Sheet';
+      const baseName =
+        mbBaseChoice === 'topshield_sa_base' || !mbBaseChoice
+          ? 'TopShield SA Base Sheet'
+          : MB_BASE_OPTIONS.find((o) => o.key === mbBaseChoice)?.label ||
+            'SA base sheet';
       push(
         `Install modified bitumen — ${mbScopeSq} SQ (1 ${baseName} + ${capName}${
           modifiedBitumenColor ? `, ${modifiedBitumenColor}` : ''
         })`
       );
+    }
+
+    const isBurScope =
+      flatSystem === 'bur' || selectedShingle === 'bur';
+    if (isBurScope) {
+      const burSq = mbSqScope > 0 ? mbSqScope : sq;
+      if (burSq > 0) {
+        push(
+          `Install built-up roof (BUR) — ${burSq} SQ with Polyglass SA Cap Sheet`
+        );
+      }
     }
 
     const iso48n = parseFloat(foamIso48) || 0;
@@ -16798,6 +17476,13 @@ export default function SummitApp() {
     const wantSave = opts?.save === true;
     // Legacy: generatePDF() with no opts = download only
     const doDownload = opts == null ? true : wantDownload;
+    const capturedSig = captureEstimatePadIfInk();
+    if (capturedSig) {
+      setEstimateSignatureDataUrl(capturedSig.dataUrl);
+      setEstimateSignedAt(capturedSig.signedAt);
+    }
+    const pdfSignatureUrl = capturedSig?.dataUrl || estimateSignatureDataUrl;
+    const pdfSignedAt = capturedSig?.signedAt || estimateSignedAt;
     const client = resolveEstimatorClient();
     const doc = new jsPDF({ unit: 'mm', format: 'letter' });
     const scopeItems = buildScopeOfWork();
@@ -17039,6 +17724,47 @@ export default function SummitApp() {
       left,
       y
     );
+    y += 12;
+
+    if (y > pageH - 55) {
+      doc.addPage();
+      y = 20;
+    }
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.text('CLIENT — ELECTRONIC SIGNATURE', left, y);
+    y += 4;
+    const sigW = Math.min(90, (right - left) / 2);
+    if (pdfSignatureUrl) {
+      try {
+        doc.addImage(pdfSignatureUrl, 'PNG', left, y, sigW, 18);
+      } catch {
+        doc.setDrawColor(rule.r, rule.g, rule.b);
+        doc.line(left, y + 16, left + sigW, y + 16);
+      }
+    } else {
+      doc.setDrawColor(rule.r, rule.g, rule.b);
+      doc.line(left, y + 16, left + sigW, y + 16);
+    }
+    y += 22;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(ink.r, ink.g, ink.b);
+    doc.text(
+      `Signed by: ${estimateSignerName.trim() || '__________'}`,
+      left,
+      y
+    );
+    y += 4;
+    doc.setTextColor(muted.r, muted.g, muted.b);
+    doc.text(
+      pdfSignatureUrl
+        ? `Electronically signed ${formatSignedAtDisplay(pdfSignedAt) || '__________'}`
+        : 'Date: __________',
+      left,
+      y
+    );
 
     doc.setFontSize(7);
     doc.setTextColor(160, 160, 165);
@@ -17123,6 +17849,20 @@ export default function SummitApp() {
         pdfUrl: durableUrl,
         pdfName: fileName,
       };
+      const stampMs = Date.now();
+      const docEntry: LeadDocument = stampLeadDocument(
+        {
+          id,
+          name: fileName,
+          url: durableUrl,
+          size: blob.size,
+          mimeType: 'application/pdf',
+          createdAt: new Date().toISOString(),
+          createdAtMs: stampMs,
+          folder: 'estimates',
+        },
+        'estimates'
+      );
       const updated = sourceLeads.map((l) => {
         if (l.id !== leadIdAtSave) return l;
         let estimates = l.estimates || [];
@@ -17144,11 +17884,14 @@ export default function SummitApp() {
             return e;
           });
         }
-        // Never dual-write estimate PDFs into Documents
-        const documents = (l.documents || []).filter(
-          (d) => !isEstimatePdfDocument(d) && d.id !== id && d.url !== durableUrl
+        const withoutDup = (l.documents || []).filter(
+          (d) => d.id !== id && d.url !== durableUrl
         );
-        return { ...l, estimates, documents };
+        return {
+          ...l,
+          estimates,
+          documents: prependLeadDocuments(withoutDup, [docEntry], 'estimates'),
+        };
       });
       if (targetEstimateId != null) {
         dirtyEstimateKeysRef.current.add(
@@ -17190,7 +17933,7 @@ export default function SummitApp() {
             </button>
             <button
               onClick={() => void generatePDF({ download: true })}
-              className="btn-primary px-6 sm:px-8 py-3 rounded-3xl font-semibold"
+              className="px-6 py-2 border border-zinc-300 rounded-2xl text-sm hover:bg-zinc-100"
             >
               Download PDF
             </button>
@@ -17292,7 +18035,7 @@ export default function SummitApp() {
                     <span className="text-zinc-500">Email:</span>{' '}
                     <a
                       href={`mailto:${estimatePmEmail()}`}
-                      className="text-sky-800 hover:underline"
+                      className="text-[var(--graphite)] hover:underline"
                     >
                       {estimatePmEmail()}
                     </a>
@@ -17311,7 +18054,7 @@ export default function SummitApp() {
                   >
                     <div className="min-w-0">• {item.text}</div>
                     {item.amount != null && item.amount > 0 && (
-                      <div className="shrink-0 tabular-nums font-medium text-emerald-700">
+                      <div className="shrink-0 tabular-nums font-medium text-[var(--accent-green)]">
                         ${Math.round(item.amount).toLocaleString()}
                       </div>
                     )}
@@ -17321,25 +18064,25 @@ export default function SummitApp() {
             </div>
 
             {notes.trim() && (
-              <div className="mb-8 p-5 bg-amber-50/80 border border-amber-200/80 rounded-2xl">
-                <div className="font-semibold text-lg mb-2 text-amber-900">ADDITIONAL NOTES</div>
-                <div className="text-sm whitespace-pre-wrap text-amber-950/80">{notes}</div>
+              <div className="mb-8 p-5 bg-zinc-50 border border-zinc-200 rounded-2xl">
+                <div className="font-semibold text-lg mb-2 text-zinc-900">ADDITIONAL NOTES</div>
+                <div className="text-sm whitespace-pre-wrap text-zinc-600">{notes}</div>
               </div>
             )}
 
             <div className="pt-8 border-t border-zinc-200">
               <div className="flex justify-between items-center text-3xl font-semibold mb-1 text-zinc-900">
                 <div>Total Investment</div>
-                <div className="tabular-nums text-emerald-700">${estimatorTotalPrice.toLocaleString()}</div>
+                <div className="tabular-nums text-[var(--accent-green)]">${estimatorTotalPrice.toLocaleString()}</div>
               </div>
               {bufferUsed > 0 && (
-                <div className="text-amber-700 text-right font-medium">
+                <div className="text-zinc-500 text-right font-medium">
                   Special discount applied — ${bufferUsed.toLocaleString()}
                 </div>
               )}
             </div>
 
-            <div className="mt-8 text-xs text-amber-800/90 border-t border-amber-100 pt-6">
+            <div className="mt-8 text-xs text-zinc-500 border-t border-zinc-200 pt-6">
               Pricing subject to change upon signed change order for unforeseen conditions
               (decking, fascia, structure, etc.). This estimate is valid for 30 days.
             </div>
@@ -17348,6 +18091,116 @@ export default function SummitApp() {
               {userTitle.trim() ? ` (${userTitle})` : ''} ·{' '}
               {estimatePmPhone() || '—'}
               {estimatePmEmail() ? ` · ${estimatePmEmail()}` : ''}
+            </div>
+
+            <div className="mt-10 pt-8 border-t border-zinc-200 space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-semibold text-zinc-900">
+                  Signature
+                </div>
+                {estimateSignatureDataUrl ? (
+                  <span className="text-xs font-medium text-[var(--accent-green)]">
+                    Signed {formatSignedAtDisplay(estimateSignedAt)}
+                  </span>
+                ) : null}
+              </div>
+              <div>
+                <label className="text-sm text-zinc-500 mb-1.5 block">
+                  Signer&apos;s full legal name
+                </label>
+                <input
+                  value={estimateSignerName}
+                  onChange={(e) => setEstimateSignerName(e.target.value)}
+                  placeholder="Name as it should appear on the estimate"
+                  className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base text-zinc-900 bg-white focus:outline-none focus:ring-2 focus:ring-zinc-300/50 focus:border-zinc-400"
+                />
+              </div>
+              {estimateSignatureDataUrl ? (
+                <div className="space-y-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={estimateSignatureDataUrl}
+                    alt="Client signature"
+                    className="w-full max-h-28 object-contain border border-zinc-200 rounded-2xl bg-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEstimateSignatureDataUrl(null);
+                      setEstimateSignedAt(null);
+                      window.setTimeout(() => clearEstimateSignaturePad(), 50);
+                    }}
+                    className="text-sm text-zinc-500 hover:text-zinc-800"
+                  >
+                    Clear
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <canvas
+                    ref={(el) => {
+                      estimateSigPadRef.current = el;
+                      if (el && !el.dataset.ready) {
+                        el.dataset.ready = '1';
+                        el.width = 600;
+                        el.height = 160;
+                        const ctx = el.getContext('2d');
+                        if (ctx) {
+                          ctx.fillStyle = '#ffffff';
+                          ctx.fillRect(0, 0, el.width, el.height);
+                          ctx.strokeStyle = '#18181b';
+                          ctx.lineWidth = 2;
+                          ctx.lineCap = 'round';
+                          ctx.lineJoin = 'round';
+                        }
+                      }
+                    }}
+                    aria-label="Signature"
+                    className="w-full h-40 border border-zinc-200 rounded-2xl bg-white touch-none cursor-crosshair"
+                    onPointerDown={(e) => {
+                      const canvas = estimateSigPadRef.current;
+                      if (!canvas) return;
+                      estimateSigDrawing.current = true;
+                      canvas.setPointerCapture(e.pointerId);
+                      const ctx = canvas.getContext('2d');
+                      if (!ctx) return;
+                      const rect = canvas.getBoundingClientRect();
+                      const x =
+                        ((e.clientX - rect.left) / rect.width) * canvas.width;
+                      const y =
+                        ((e.clientY - rect.top) / rect.height) * canvas.height;
+                      ctx.beginPath();
+                      ctx.moveTo(x, y);
+                    }}
+                    onPointerMove={(e) => {
+                      if (!estimateSigDrawing.current) return;
+                      const canvas = estimateSigPadRef.current;
+                      if (!canvas) return;
+                      const ctx = canvas.getContext('2d');
+                      if (!ctx) return;
+                      const rect = canvas.getBoundingClientRect();
+                      const x =
+                        ((e.clientX - rect.left) / rect.width) * canvas.width;
+                      const y =
+                        ((e.clientY - rect.top) / rect.height) * canvas.height;
+                      ctx.lineTo(x, y);
+                      ctx.stroke();
+                    }}
+                    onPointerUp={() => {
+                      estimateSigDrawing.current = false;
+                    }}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => clearEstimateSignaturePad()}
+                      className="px-4 py-2 rounded-full text-sm font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <button
@@ -17389,6 +18242,7 @@ export default function SummitApp() {
     // Leaving a document workspace via nav — return to normal shell
     if (systemDocWorkspace) {
       setSystemDocWorkspace(null);
+      setSystemDocOrigin('lead');
       setTakeoffAssignOpen(false);
       setEmergencyDraft(null);
       setEmergencyPreview(false);
@@ -17446,8 +18300,7 @@ export default function SummitApp() {
   const isSidebarTabActive = (tab: AppTab) =>
     !showProfessionalEstimate &&
     (activeTab === tab ||
-      (tab === 'leads' && isEditingLead && currentLeadId != null) ||
-      (tab === 'settings' && activeTab === 'settings'));
+      (tab === 'leads' && isEditingLead && currentLeadId != null));
 
   const SidebarIcon = ({
     icon,
@@ -17534,13 +18387,6 @@ export default function SummitApp() {
             <path d="M14 3v5h5" />
           </svg>
         );
-      case 'settings':
-        return (
-          <svg {...common}>
-            <circle cx="12" cy="12" r="3" />
-            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-          </svg>
-        );
       default:
         return null;
     }
@@ -17558,14 +18404,13 @@ export default function SummitApp() {
             type="button"
             title={collapsed ? item.label : undefined}
             onClick={() => {
-              setSidebarProfileOpen(false);
               openNavTab(item.tab);
               onNavigate?.();
             }}
             className={`flex items-center w-full rounded-full text-sm font-medium transition-all ${
               collapsed
-                ? 'justify-center px-0 py-2.5'
-                : 'gap-3 px-3.5 py-2.5'
+                ? 'justify-center px-0 py-2.5 min-h-11'
+                : 'gap-3 px-3.5 py-2.5 min-h-11'
             } ${
               active
                 ? 'tint-blue'
@@ -17586,163 +18431,60 @@ export default function SummitApp() {
     );
   };
 
-  /** Grok-style profile dock — bottom of sidebar */
-  const renderSidebarProfile = (
-    onNavigate?: () => void,
-    opts?: { collapsed?: boolean }
-  ) => {
-    const collapsed = opts?.collapsed === true;
-    const displayName = userName || (email ? email.split('@')[0] : 'Account');
-    const subtitle =
-      userCompany.trim() || userTitle.trim() || userEmail || email || '';
-    const profileActive = activeTab === 'settings' && !showProfessionalEstimate;
-
-    return (
-      <div
-        className={`safe-bottom relative shrink-0 border-t border-[var(--glass-border)] py-2.5 ${
-          collapsed ? 'px-1.5' : 'px-2.5'
-        }`}
-        data-sidebar-profile
-      >
-        {sidebarProfileOpen && (
-          <div
-            className={`glass glass-strong absolute bottom-full mb-1.5 rounded-2xl overflow-hidden z-50 ${
-              collapsed
-                ? 'left-1.5 w-52'
-                : 'left-2.5 right-2.5'
-            }`}
-          >
-            <button
-              type="button"
-              onClick={() => {
-                setSidebarProfileOpen(false);
-                openNavTab('settings');
-                onNavigate?.();
-              }}
-              className="w-full text-left px-3.5 py-2.5 text-sm font-medium text-zinc-800 hover:bg-black/[0.04]"
-            >
-              Profile settings
-            </button>
-            {!isStandaloneApp && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSidebarProfileOpen(false);
-                  handleInstallApp();
-                }}
-                className="w-full text-left px-3.5 py-2.5 text-sm font-medium text-zinc-800 hover:bg-black/[0.04] border-t border-[var(--glass-border)]"
-              >
-                Install app
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                setSidebarProfileOpen(false);
-                void handleSignOut();
-              }}
-              className="w-full text-left px-3.5 py-2.5 text-sm font-medium text-zinc-600 hover:bg-black/[0.04] border-t border-[var(--glass-border)]"
-            >
-              Sign out
-            </button>
-          </div>
-        )}
-        <button
-          type="button"
-          title={collapsed ? displayName : undefined}
-          onClick={() => {
-            setShowUserMenu(false);
-            setSidebarProfileOpen((v) => !v);
-          }}
-          className={`w-full flex items-center rounded-full text-left transition-colors ${
-            collapsed ? 'justify-center px-0 py-2' : 'gap-2.5 px-2 py-2'
-          } ${
-            profileActive || sidebarProfileOpen
-              ? 'tint-blue'
-              : 'hover:bg-black/[0.04]'
-          }`}
-          aria-expanded={sidebarProfileOpen}
-          aria-haspopup="menu"
-        >
-          {renderUserAvatar({ size: 'md' })}
-          {!collapsed && (
-            <>
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-semibold text-zinc-900 truncate leading-tight">
-                  {displayName}
-                </div>
-                {subtitle ? (
-                  <div className="text-[11px] text-zinc-500 truncate mt-0.5 leading-tight">
-                    {subtitle}
-                  </div>
-                ) : null}
-              </div>
-              <svg
-                className={`w-4 h-4 shrink-0 text-zinc-400 transition-transform ${
-                  sidebarProfileOpen ? 'rotate-180' : ''
-                }`}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.75"
-                viewBox="0 0 24 24"
-                aria-hidden
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
-              </svg>
-            </>
-          )}
-        </button>
-      </div>
-    );
-  };
-
-  const desktopSidebarWidth = sidebarCollapsed
-    ? SIDEBAR_WIDTH_COLLAPSED
-    : SIDEBAR_WIDTH_EXPANDED;
+  const sidebarRail = !isLaptopNav || sidebarCollapsed;
 
   /** Document workspaces sit beside the sidebar and below the app header. */
-  const documentWorkspaceClass = `fixed top-[var(--header-h)] bottom-0 right-0 z-[35] bg-zinc-50 overflow-y-auto transition-[left] duration-200 ease-out left-0 ${
-    sidebarCollapsed ? 'lg:left-[4.25rem]' : 'lg:left-[15.5rem]'
+  const documentWorkspaceClass = `fixed top-[var(--header-h)] bottom-0 right-0 z-[35] bg-zinc-50 overflow-y-auto overflow-x-hidden transition-[left] duration-200 ease-out left-0 md:left-[4.25rem] ${
+    sidebarRail ? 'lg:left-[4.25rem]' : 'lg:left-[15.5rem]'
   }`;
 
   const renderAppSidebar = () => (
     <>
-      {/* Desktop sidebar */}
+      {/* iPad rail + laptop sidebar */}
       <aside
-        className="glass glass-strong safe-left hidden lg:flex fixed inset-y-0 left-0 z-40 flex-col transition-[width] duration-200 ease-out"
-        style={{ width: desktopSidebarWidth }}
+        className="glass glass-strong safe-left app-header-safe-top hidden md:flex fixed inset-y-0 left-0 z-40 flex-col transition-[width] duration-200 ease-out"
+        style={{
+          width: sidebarRail ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED,
+        }}
         aria-label="Main navigation"
-        data-collapsed={sidebarCollapsed ? 'true' : 'false'}
+        data-app-sidebar
+        data-collapsed={sidebarRail ? 'true' : 'false'}
       >
         <div
           className={`h-14 sm:h-16 flex items-center border-b border-[var(--glass-border)] shrink-0 ${
-            sidebarCollapsed ? 'justify-center px-1.5' : 'gap-2.5 px-3'
+            sidebarRail ? 'justify-center px-1.5' : 'gap-2.5 px-3'
           }`}
         >
-          {sidebarCollapsed ? (
-            <button
-              type="button"
-              onClick={toggleSidebarCollapsed}
-              className="w-9 h-9 rounded-xl flex items-center justify-center hover:opacity-90 transition-opacity overflow-hidden"
-              title="Expand sidebar"
-              aria-label="Expand sidebar"
-            >
-              {renderAppMark({
+          {sidebarRail ? (
+            isLaptopNav ? (
+              <button
+                type="button"
+                onClick={toggleSidebarCollapsed}
+                className="w-9 h-9 rounded-xl flex items-center justify-center hover:opacity-90 transition-opacity overflow-hidden"
+                title="Expand sidebar"
+                aria-label="Expand sidebar"
+              >
+                {renderAppMark({
+                  size: 'md',
+                  className: 'w-9 h-9',
+                  imgClassName:
+                    'w-9 h-9 rounded-xl object-contain border border-zinc-200 bg-white',
+                })}
+              </button>
+            ) : (
+              renderAppMark({
                 size: 'md',
                 className: 'w-9 h-9',
                 imgClassName:
                   'w-9 h-9 rounded-xl object-contain border border-zinc-200 bg-white',
-              })}
-            </button>
+              })
+            )
           ) : (
             <>
               {renderAppMark({ size: 'md' })}
               <div className="min-w-0 flex-1">
                 <div className="font-semibold text-[15px] tracking-tight text-zinc-900 truncate">
                   {appDisplayName()}
-                </div>
-                <div className="text-[10px] uppercase tracking-wider text-zinc-400 font-medium">
-                  Roofing OS
                 </div>
               </div>
               <button
@@ -17771,26 +18513,27 @@ export default function SummitApp() {
           )}
         </div>
         <div className="flex-1 overflow-y-auto overflow-x-hidden py-1">
-          {renderSidebarNav(undefined, { collapsed: sidebarCollapsed })}
+          {renderSidebarNav(undefined, { collapsed: sidebarRail })}
         </div>
-        {renderSidebarProfile(undefined, { collapsed: sidebarCollapsed })}
       </aside>
 
-      {/* Mobile drawer */}
+      {/* Phone drawer */}
       {sidebarOpen && (
-        <div className="lg:hidden fixed inset-0 z-[60]" role="dialog" aria-modal="true">
+        <div className="md:hidden fixed inset-0 z-[60]" role="dialog" aria-modal="true">
           <button
             type="button"
             className="absolute inset-0 bg-black/40"
             aria-label="Close menu"
             onClick={() => {
               setSidebarOpen(false);
-              setSidebarProfileOpen(false);
             }}
           />
-          <aside className="glass glass-strong safe-left absolute inset-y-0 left-0 w-[17rem] max-w-[85vw] flex flex-col animate-[page-fade-in_0.18s_ease-out]">
-            <div className="h-14 flex items-center justify-between gap-2 px-4 border-b border-[var(--glass-border)]">
-              <div className="flex items-center gap-2.5 min-w-0">
+          <aside
+            className="menu-panel safe-left app-header-safe-top absolute inset-y-0 left-0 w-[17rem] max-w-[85vw] flex flex-col rounded-none border-y-0 border-l-0 animate-[page-fade-in_0.18s_ease-out]"
+            data-app-sidebar
+          >
+            <div className="h-14 flex items-center justify-between gap-2 px-3 border-b border-zinc-200">
+              <div className="flex items-center gap-2.5 min-w-0 flex-1">
                 {renderAppMark({ size: 'md' })}
                 <span className="font-semibold text-zinc-900 truncate">
                   {appDisplayName()}
@@ -17800,17 +18543,25 @@ export default function SummitApp() {
                 type="button"
                 onClick={() => {
                   setSidebarOpen(false);
-                  setSidebarProfileOpen(false);
                 }}
-                className="px-3 py-1.5 rounded-full text-sm text-zinc-600 hover:bg-black/[0.05]"
+                className="shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-zinc-600 hover:bg-black/[0.05]"
+                aria-label="Close menu"
               >
-                Close
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  viewBox="0 0 24 24"
+                  aria-hidden
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M18 6 6 18" />
+                </svg>
               </button>
             </div>
             <div className="flex-1 overflow-y-auto">
               {renderSidebarNav(() => setSidebarOpen(false))}
             </div>
-            {renderSidebarProfile(() => setSidebarOpen(false))}
           </aside>
         </div>
       )}
@@ -17826,7 +18577,7 @@ export default function SummitApp() {
       <div className="h-14 sm:h-16 flex items-center gap-2 sm:gap-3 px-3 sm:px-5 lg:px-6">
         <button
           type="button"
-          className="lg:hidden shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-zinc-700 hover:bg-black/[0.05]"
+          className="md:hidden shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-zinc-700 hover:bg-black/[0.05]"
           onClick={() => {
             setSidebarOpen(true);
             setShowUserMenu(false);
@@ -17838,7 +18589,7 @@ export default function SummitApp() {
           </svg>
         </button>
 
-        {/* Desktop: expand rail when collapsed (sidebar logo also expands) */}
+        {/* Laptop: expand rail when collapsed (sidebar logo also expands) */}
         {sidebarCollapsed && (
           <button
             type="button"
@@ -17860,13 +18611,13 @@ export default function SummitApp() {
           </button>
         )}
 
-        <div className="lg:hidden flex items-center gap-2 shrink-0 min-w-0">
+        <div className="md:hidden flex items-center gap-2 shrink-0 min-w-0">
           {renderAppMark({
             size: 'sm',
             imgClassName:
               'w-8 h-8 rounded-xl object-contain border border-[var(--glass-border)] bg-white/60',
           })}
-          <span className="font-semibold text-sm text-zinc-900 truncate hidden xs:inline sm:inline">
+          <span className="font-semibold text-sm text-zinc-900 truncate hidden sm:inline">
             {appDisplayName()}
           </span>
         </div>
@@ -17884,7 +18635,7 @@ export default function SummitApp() {
             className="glass w-full h-10 px-4 rounded-full text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue-ring)]"
           />
           {headerSearchQuery && (
-            <div className="glass glass-strong absolute left-0 right-0 mt-2 rounded-2xl text-zinc-900 overflow-hidden z-[60]">
+            <div className="menu-panel z-[60] overflow-hidden rounded-2xl text-zinc-900 max-md:fixed max-md:left-3 max-md:right-3 max-md:top-[calc(var(--header-h)+0.35rem)] md:absolute md:left-0 md:right-0 md:mt-2">
               {headerSearchResults.length === 0 ? (
                 <div className="px-4 py-6 text-sm text-zinc-400 text-center">
                   No matches for “{headerSearch.trim()}”
@@ -17902,7 +18653,7 @@ export default function SummitApp() {
                           setHeaderSearch('');
                           setSidebarOpen(false);
                         }}
-                        className="w-full text-left px-4 py-3 hover:bg-black/[0.04] transition-colors border-b border-[var(--glass-border)] last:border-0"
+                        className="w-full text-left px-4 py-3 hover:bg-black/[0.04] transition-colors border-b border-zinc-200 last:border-0"
                       >
                         <div className="flex items-center justify-between gap-2">
                           <div className="font-medium text-sm truncate">
@@ -17934,7 +18685,7 @@ export default function SummitApp() {
             onClick={() => {
               setShowUserMenu((v) => !v);
             }}
-            className={`flex items-center gap-2 h-10 pl-1.5 pr-2 sm:pr-3 rounded-full transition-colors ${
+            className={`flex items-center gap-2 h-11 pl-1.5 pr-2 sm:h-10 sm:pr-3 rounded-full transition-colors ${
               showUserMenu ? 'tint-blue' : 'hover:bg-black/[0.05]'
             }`}
             aria-label="User menu"
@@ -17945,8 +18696,8 @@ export default function SummitApp() {
             </span>
           </button>
           {showUserMenu && (
-            <div className="glass glass-strong absolute right-0 mt-2 w-56 rounded-2xl text-zinc-900 overflow-hidden z-[60]">
-              <div className="px-4 py-3 border-b border-[var(--glass-border)]">
+            <div className="menu-panel absolute right-0 mt-2 w-56 max-w-[calc(100vw-1.5rem)] rounded-2xl text-zinc-900 overflow-hidden z-[60]">
+              <div className="px-4 py-3 border-b border-zinc-200">
                 <div className="text-sm font-semibold truncate">
                   {userName || email || 'Signed in'}
                 </div>
@@ -17960,7 +18711,7 @@ export default function SummitApp() {
                   setShowUserMenu(false);
                   handleTabChange('home');
                 }}
-                className="w-full text-left px-4 py-2.5 text-sm hover:bg-black/[0.04] text-zinc-700"
+                className="w-full text-left px-4 py-2.5 min-h-11 text-sm hover:bg-black/[0.04] text-zinc-700"
               >
                 Home
               </button>
@@ -17970,17 +18721,29 @@ export default function SummitApp() {
                   setShowUserMenu(false);
                   handleTabChange('settings');
                 }}
-                className="w-full text-left px-4 py-2.5 text-sm hover:bg-black/[0.04] text-zinc-700"
+                className="w-full text-left px-4 py-2.5 min-h-11 text-sm hover:bg-black/[0.04] text-zinc-700"
               >
                 Profile settings
               </button>
+              {!isStandaloneApp && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowUserMenu(false);
+                    handleInstallApp();
+                  }}
+                  className="w-full text-left px-4 py-2.5 min-h-11 text-sm hover:bg-black/[0.04] text-zinc-700"
+                >
+                  Install app
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
                   setShowUserMenu(false);
                   void handleSignOut();
                 }}
-                className="w-full text-left px-4 py-2.5 text-sm hover:bg-black/[0.04] text-zinc-800 border-t border-[var(--glass-border)]"
+                className="w-full text-left px-4 py-2.5 min-h-11 text-sm hover:bg-black/[0.04] text-zinc-800 border-t border-zinc-200"
               >
                 Sign out
               </button>
@@ -18022,20 +18785,19 @@ export default function SummitApp() {
 
   if (!isLoggedIn) {
     return (
-      <div className="min-h-screen bg-zinc-100 flex items-center justify-center p-6">
-        <div className="w-full max-w-md text-center">
+      <div className="min-h-screen flex items-center justify-center p-6">
+        <div className="w-full max-w-md text-center glass rounded-[32px] p-8 sm:p-10">
           <div className="mx-auto mb-8 flex justify-center">
             {renderAppMark({
               size: 'xl',
               imgClassName:
-                'w-20 h-20 rounded-3xl object-contain border border-zinc-200 bg-white',
+                'w-20 h-20 rounded-3xl object-contain border border-[var(--glass-border)] bg-[var(--surface-raised)]',
             })}
           </div>
 
-          <div className="font-bold text-5xl tracking-tighter text-zinc-900 mb-1">
+          <div className="font-bold text-5xl tracking-tighter text-zinc-900 mb-12">
             {appDisplayName()}
           </div>
-          <p className="text-zinc-500 mb-12">Roofing OS</p>
 
           {authMode === 'recovery' ? (
             <div className="space-y-6">
@@ -18063,7 +18825,7 @@ export default function SummitApp() {
                 type="button"
                 disabled={authBusy}
                 onClick={() => void handleUpdateRecoveryPassword()}
-                className="btn-primary w-full py-4 rounded-3xl font-semibold text-lg disabled:opacity-50"
+                className="btn-primary btn-primary-lg w-full disabled:opacity-50"
               >
                 Update password
               </button>
@@ -18136,7 +18898,7 @@ export default function SummitApp() {
                 onClick={() =>
                   void (phoneOtpSent ? handlePhoneVerify() : handleLogin())
                 }
-                className="btn-primary w-full py-4 rounded-3xl font-semibold text-lg disabled:opacity-50"
+                className="btn-primary btn-primary-lg w-full disabled:opacity-50"
               >
                 {phoneOtpSent
                   ? 'Verify code'
@@ -18145,56 +18907,66 @@ export default function SummitApp() {
                     : 'Sign In'}
               </button>
 
-              {phoneOtpSent ? (
-                <button
-                  type="button"
-                  disabled={authBusy}
-                  onClick={() => void handlePhoneSendCode()}
-                  className="text-sm text-zinc-500 hover:text-zinc-700 disabled:opacity-50"
-                >
-                  Resend code
-                </button>
-              ) : looksLikePhoneIdentifier(email) ? null : (
-                <button
-                  type="button"
-                  disabled={authBusy}
-                  onClick={() => void handleCreateAccount()}
-                  className="w-full py-4 rounded-3xl font-semibold text-lg border border-zinc-200 bg-white text-zinc-800 disabled:opacity-50"
-                >
-                  Create account
-                </button>
-              )}
-
-              <button
-                type="button"
-                disabled={authBusy}
-                onClick={() => void handleOAuth('google')}
-                className="w-full py-4 rounded-3xl font-semibold text-lg border border-zinc-200 bg-white text-zinc-800 disabled:opacity-50"
-              >
-                Continue with Google
-              </button>
-
-              <button
-                type="button"
-                disabled={authBusy}
-                onClick={() => void handleOAuth('azure')}
-                className="w-full py-4 rounded-3xl font-semibold text-lg border border-zinc-200 bg-white text-zinc-800 disabled:opacity-50"
-              >
-                Continue with Microsoft
-              </button>
-
-              {looksLikePhoneIdentifier(email) ? null : (
-                <div className="text-center">
+              <div className="space-y-3">
+                {phoneOtpSent ? (
                   <button
                     type="button"
                     disabled={authBusy}
-                    onClick={() => void handleForgotPassword()}
-                    className="text-sm text-zinc-500 hover:text-zinc-700 disabled:opacity-50"
+                    onClick={() => void handlePhoneSendCode()}
+                    className="btn-text w-full disabled:opacity-50"
                   >
-                    Forgot password?
+                    Resend code
                   </button>
-                </div>
-              )}
+                ) : looksLikePhoneIdentifier(email) ? null : (
+                  <button
+                    type="button"
+                    disabled={authBusy}
+                    onClick={() => void handleCreateAccount()}
+                    className="btn-text w-full disabled:opacity-50"
+                  >
+                    Create account
+                  </button>
+                )}
+
+                {phoneOtpSent ? null : (
+                  <>
+                    <div className="flex items-center gap-3 pt-1">
+                      <span className="h-px flex-1 bg-[var(--chrome-line)]" />
+                      <span className="text-xs text-[var(--steel)]">or</span>
+                      <span className="h-px flex-1 bg-[var(--chrome-line)]" />
+                    </div>
+                    <button
+                      type="button"
+                      disabled={authBusy}
+                      onClick={() => void handleOAuth('google')}
+                      className="btn-secondary w-full disabled:opacity-50"
+                    >
+                      Continue with Google
+                    </button>
+                    <button
+                      type="button"
+                      disabled={authBusy}
+                      onClick={() => void handleOAuth('azure')}
+                      className="btn-secondary w-full disabled:opacity-50"
+                    >
+                      Continue with Microsoft
+                    </button>
+                  </>
+                )}
+
+                {looksLikePhoneIdentifier(email) ? null : (
+                  <div>
+                    <button
+                      type="button"
+                      disabled={authBusy}
+                      onClick={() => void handleForgotPassword()}
+                      className="btn-text w-full disabled:opacity-50"
+                    >
+                      Forgot password?
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -18218,6 +18990,8 @@ export default function SummitApp() {
     setCoverageInputs: typeof setMaterialOrderCoverageInputs;
     step: OrdersStep;
     setStep: typeof setOrdersStep;
+    filledFrom: string | null;
+    setFilledFrom: typeof setOrderFilledFrom;
     fixedLead?: Lead | null;
     embedded?: boolean;
   }) => {
@@ -18229,6 +19003,8 @@ export default function SummitApp() {
     const setCoverageInputs = opts.setCoverageInputs;
     const ordersStep = opts.step;
     const setOrdersStep = opts.setStep;
+    const filledFrom = opts.filledFrom;
+    const setFilledFrom = opts.setFilledFrom;
     const fixedLead = opts.fixedLead ?? null;
     const embedded = opts.embedded ?? false;
 
@@ -18376,7 +19152,7 @@ export default function SummitApp() {
           <>
         {!embedded && (
         <div className="mb-8">
-          <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
+          <h1 className="page-title">
             Orders
           </h1>
         </div>
@@ -18389,59 +19165,33 @@ export default function SummitApp() {
                 Material Order
               </h2>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {(
-                [
-                  {
-                    id: 'shingle' as const,
-                    label: 'Shingle order',
-                    desc: 'Shingles, hip & ridge, starter, underlayment',
-                  },
-                  {
-                    id: 'tile' as const,
-                    label: 'Tile order',
-                    desc: 'Tile, hip & ridge, underlayment, accessories',
-                  },
-                  {
-                    id: 'flat' as const,
-                    label: 'Low-slope order',
-                    desc: 'Modified bitumen, coatings, foam, ice & water',
-                  },
-                ] as const
-              ).map((sys) => (
-                <button
-                  key={sys.id}
-                  type="button"
-                  onClick={() => {
-                    setMaterialOrderType(sys.id);
-                    // Seed one empty line per first few sections for speed
-                    setMaterialOrderLines((prev) => {
-                      const next = { ...prev };
-                      for (const sec of materialOrderSectionsFor(
-                        sys.id
-                      )) {
-                        if (!next[sec.key]?.length) {
-                          next[sec.key] = [newTakeoffSkuLine('', '1')];
-                        }
-                      }
-                      return next;
-                    });
-                  }}
-                  className="text-left bg-white border-2 border-zinc-200 hover:border-zinc-400 hover:shadow-md rounded-3xl p-6 sm:p-8 transition-all group"
-                >
-                  <div className="text-zinc-500 text-xs font-semibold mb-2 uppercase tracking-wide group-hover:text-zinc-700">
-                    Order type
-                  </div>
-                  <div className="text-2xl font-semibold text-zinc-900 mb-2">
-                    {sys.label}
-                  </div>
-                  <p className="text-sm text-zinc-500">{sys.desc}</p>
-                  <div className="mt-5 text-sm font-semibold text-graphite">
-                    Continue →
-                  </div>
-                </button>
-              ))}
-            </div>
+            <RoofSystemPicker
+              variant="order"
+              onSelect={(sys) => {
+                    setMaterialOrderType(sys);
+                    const seedLead =
+                      fixedLead ||
+                      (currentLeadId != null
+                        ? leads.find((l) => l.id === currentLeadId) || null
+                        : null);
+                    const seedEst =
+                      seedLead?.estimates && seedLead.estimates.length > 0
+                        ? seedLead.estimates[seedLead.estimates.length - 1]
+                        : null;
+                    const seeded = seedMaterialOrderFromEstimate(
+                      seedEst,
+                      seedLead?.takeoff,
+                      sys
+                    );
+                    setMaterialOrderLines(seeded.lines);
+                    setCoverageInputs(seeded.coverage);
+                    setFilledFrom(
+                      orderHasSeededSku(seeded.lines)
+                        ? orderFillSourceLabel(seedEst, seedLead?.takeoff)
+                        : null
+                    );
+              }}
+            />
           </div>
         ) : (
           <>
@@ -18453,17 +19203,27 @@ export default function SummitApp() {
               }
             >
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <div>
-                  <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
-                    Material Order
-                  </div>
-                  <div className="text-xl sm:text-2xl font-semibold text-zinc-900 tracking-tight">
-                    {orderTypeLabel}
-                  </div>
+                <div className="flex items-center gap-3 min-w-0">
+                  {materialOrderType ? (
+                    <span
+                      className={`roof-chip glass ${
+                        materialOrderType === 'flat' ? 'glass-tint-blue' : ''
+                      }`}
+                    >
+                      {orderTypeLabel}
+                    </span>
+                  ) : (
+                    <div className="text-xl sm:text-2xl font-semibold text-zinc-900 tracking-tight">
+                      {orderTypeLabel}
+                    </div>
+                  )}
                 </div>
                 <button
                   type="button"
-                  onClick={() => setMaterialOrderType(null)}
+                  onClick={() => {
+                    setMaterialOrderType(null);
+                    setFilledFrom(null);
+                  }}
                   className="text-sm font-medium text-graphite hover:text-graphite-hover self-start sm:self-auto"
                 >
                   ← Change order type
@@ -18471,13 +19231,37 @@ export default function SummitApp() {
               </div>
             </div>
 
+            {filledFrom ? (
+              <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3">
+                <p className="text-sm font-medium text-zinc-800">
+                  Filled from {filledFrom}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const empty = seedMaterialOrderFromEstimate(
+                      null,
+                      null,
+                      materialOrderType
+                    );
+                    setMaterialOrderLines(empty.lines);
+                    setCoverageInputs(empty.coverage);
+                    setFilledFrom(null);
+                  }}
+                  className="text-sm font-medium text-graphite hover:text-graphite-hover"
+                >
+                  Clear
+                </button>
+              </div>
+            ) : null}
+
             <div className="space-y-6">
               {sections.map((sec) => {
                 const lines = materialOrderLines[sec.key] || [];
                 return (
                   <section
                     key={sec.key}
-                    className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm"
+                    className="glass list-card"
                   >
                     <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-4">
                       {sec.title}
@@ -18519,12 +19303,21 @@ export default function SummitApp() {
                                 className="flex-1 min-w-[12rem] border border-zinc-200 rounded-2xl px-3 py-2.5 text-sm text-zinc-900 bg-white"
                               >
                                 <option value="">Select product…</option>
-                                {sec.options.map((opt) => (
-                                  <option key={opt.key} value={opt.key}>
-                                    {opt.label}
-                                    {opt.unit ? ` · ${opt.unit}` : ''}
-                                  </option>
-                                ))}
+                                {(() => {
+                                  const groups = groupedSkuOptions(sec.options);
+                                  const renderOpt = (opt: (typeof sec.options)[number]) => (
+                                    <option key={opt.key} value={opt.key}>
+                                      {opt.label}
+                                      {opt.unit ? ` · ${opt.unit}` : ''}
+                                    </option>
+                                  );
+                                  if (!groups) return sec.options.map(renderOpt);
+                                  return groups.map((g) => (
+                                    <optgroup key={g.label} label={g.label}>
+                                      {g.items.map(renderOpt)}
+                                    </optgroup>
+                                  ));
+                                })()}
                               </select>
                               <input
                                 type="number"
@@ -18621,7 +19414,7 @@ export default function SummitApp() {
                                       </button>
                                     )}
                                     {coverage.approx && (
-                                      <span className="text-xs text-amber-700">
+                                      <span className="text-xs text-zinc-500">
                                         ≈ confirm coverage
                                       </span>
                                     )}
@@ -18648,14 +19441,14 @@ export default function SummitApp() {
             <div
               className={
                 embedded
-                  ? 'bg-white border border-zinc-200 rounded-3xl py-4 px-4 sm:px-6 mt-8'
-                  : 'safe-bottom sticky bottom-0 bg-white/95 backdrop-blur border-t border-zinc-200 py-4 z-40 -mx-[var(--page-pad-x)] px-[var(--page-pad-x)] mt-8'
+                  ? 'glass list-card mt-8'
+                  : 'safe-bottom sticky bottom-0 glass glass-strong py-4 z-40 -mx-[var(--page-pad-x)] px-[var(--page-pad-x)] mt-8'
               }
             >
               <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-xs text-zinc-500">ORDER TOTAL</div>
-                  <div className="text-2xl sm:text-3xl font-semibold text-emerald-700 tabular-nums">
+                  <div className="text-2xl sm:text-3xl font-semibold text-[var(--accent-green)] tabular-nums">
                     {selectedLines.length === 0
                       ? '—'
                       : `$${orderMatTotal.toLocaleString(undefined, {
@@ -19147,7 +19940,7 @@ export default function SummitApp() {
 
         <div className={embedded ? 'space-y-6' : 'space-y-6 pb-28'}>
           {!fixedLead && (
-          <section className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm">
+          <section className="glass list-card">
             <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-4">
               Job
             </div>
@@ -19234,7 +20027,7 @@ export default function SummitApp() {
 
           {laborLead && (
             <>
-              <section className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm">
+              <section className="glass list-card">
                 <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-4">
                   Crew packet
                 </div>
@@ -19254,7 +20047,7 @@ export default function SummitApp() {
                 </div>
               </section>
 
-              <section className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm">
+              <section className="glass list-card">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
                   <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase">
                     Crew
@@ -19271,7 +20064,7 @@ export default function SummitApp() {
                 </div>
 
                 {selectedCrew ? (
-                  <div className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50/50 px-4 py-3">
+                  <div className="mb-5 rounded-2xl border border-[var(--accent-green)] bg-[var(--accent-green-soft)] px-4 py-3">
                     <div className="font-semibold text-zinc-900">
                       {selectedCrew.name}
                       {selectedCrew.preferred ? ' · Preferred' : ''}
@@ -19282,7 +20075,7 @@ export default function SummitApp() {
                         ? ` · ${selectedCrew.phone}`
                         : ''}
                     </div>
-                    <div className="text-sm text-emerald-800 font-medium tabular-nums mt-2">
+                    <div className="text-sm text-[var(--accent-green-ink)] font-medium tabular-nums mt-2">
                       {REGION_LABEL[laborRegion]}{' '}
                       {formatCrewRate(selectedCrew.shingle[laborRegion])}
                     </div>
@@ -19327,11 +20120,7 @@ export default function SummitApp() {
                           {crew.contact}
                           {crew.phone ? ` · ${crew.phone}` : ''}
                         </div>
-                        <div
-                          className={`text-sm font-medium tabular-nums mt-1 ${
-                            active ? 'text-emerald-300' : 'text-emerald-700'
-                          }`}
-                        >
+                        <div className="text-sm font-medium tabular-nums mt-1 text-[var(--accent-green)]">
                           {formatCrewRate(crew.shingle[laborRegion])}
                         </div>
                       </button>
@@ -19369,11 +20158,7 @@ export default function SummitApp() {
                             {crew.phone ? ` · ${crew.phone}` : ''}
                           </span>
                         </span>
-                        <span
-                          className={`tabular-nums font-medium shrink-0 ${
-                            active ? 'text-emerald-300' : 'text-emerald-700'
-                          }`}
-                        >
+                        <span className="tabular-nums font-medium shrink-0 text-[var(--accent-green)]">
                           {formatCrewRate(crew.shingle[laborRegion])}
                         </span>
                       </button>
@@ -19382,7 +20167,7 @@ export default function SummitApp() {
                 </div>
               </section>
 
-              <section className="bg-white border border-zinc-200/80 rounded-3xl p-5 sm:p-6 shadow-sm">
+              <section className="glass list-card">
                 <div className="text-xs font-semibold text-zinc-500 tracking-wider uppercase mb-4">
                   Labor adders
                 </div>
@@ -19390,7 +20175,7 @@ export default function SummitApp() {
                   {LABOR_ADDERS_SUMMARY.map((a) => (
                     <div
                       key={a.label}
-                      className="flex items-center justify-between gap-3 rounded-2xl border border-zinc-100 px-3 py-2.5 text-sm"
+                      className="flex items-center justify-between gap-3 py-2.5 text-sm border-b border-[var(--glass-border)] last:border-b-0"
                     >
                       <span className="text-zinc-700">{a.label}</span>
                       <span className="tabular-nums font-medium text-zinc-900 shrink-0">
@@ -19407,8 +20192,8 @@ export default function SummitApp() {
         <div
           className={
             embedded
-              ? 'bg-white border border-zinc-200 rounded-3xl py-4 px-4 sm:px-6 mt-2'
-              : 'safe-bottom sticky bottom-0 bg-white/95 backdrop-blur border-t border-zinc-200 py-4 z-40 -mx-[var(--page-pad-x)] px-[var(--page-pad-x)]'
+              ? 'glass list-card mt-2'
+              : 'safe-bottom sticky bottom-0 glass glass-strong py-4 z-40 -mx-[var(--page-pad-x)] px-[var(--page-pad-x)]'
           }
         >
           <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2">
@@ -19451,7 +20236,7 @@ export default function SummitApp() {
               >
                 ← Back to lead
               </button>
-              <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
+              <h1 className="page-title">
                 Mitigation invoice
               </h1>
             </div>
@@ -19493,7 +20278,7 @@ export default function SummitApp() {
                   </div>
                   <div className="mb-6">
                     <div className="text-sm text-zinc-500">Total invoice (sell)</div>
-                    <div className="text-4xl font-semibold tabular-nums text-emerald-700">
+                    <div className="text-4xl font-semibold tabular-nums text-[var(--accent-green)]">
                       $
                       {mitigationListSell.toLocaleString(undefined, {
                         minimumFractionDigits: 2,
@@ -19519,7 +20304,7 @@ export default function SummitApp() {
                     </div>
                     <div className="flex justify-between items-center text-zinc-900 px-2 -mx-2">
                       <div className="font-semibold">Margin</div>
-                      <div className="font-semibold text-emerald-700 tabular-nums">
+                      <div className="font-semibold text-[var(--accent-green)] tabular-nums">
                         $
                         {mitigationMargin.toLocaleString(undefined, {
                           minimumFractionDigits: 2,
@@ -19566,7 +20351,7 @@ export default function SummitApp() {
                                   </span>
                                 </span>
                                 <span className="shrink-0 tabular-nums text-right">
-                                  <span className="block text-emerald-700">
+                                  <span className="block text-[var(--accent-green)]">
                                     sell ${money(Number(ln.amount || 0))}
                                   </span>
                                   <span className="block text-red-600">
@@ -19590,7 +20375,7 @@ export default function SummitApp() {
                           </div>
                           <div className="flex justify-between font-semibold">
                             <span>Margin</span>
-                            <span className="text-emerald-700">
+                            <span className="text-[var(--accent-green)]">
                               $
                               {mitigationMargin.toLocaleString(undefined, {
                                 minimumFractionDigits: 2,
@@ -19608,11 +20393,11 @@ export default function SummitApp() {
                   <div className="font-semibold text-xl mb-6 text-zinc-900">
                     Your margin
                   </div>
-                  <div className="bg-emerald-50/60 border border-emerald-100 rounded-3xl p-6 mb-4">
+                  <div className="bg-[var(--accent-green-soft)] border border-[var(--accent-green-soft)] rounded-3xl p-6 mb-4">
                     <div className="text-sm text-zinc-500 mb-1">
                       Negotiated sell − material cost
                     </div>
-                    <div className="text-4xl font-semibold text-emerald-700 tabular-nums">
+                    <div className="text-4xl font-semibold text-[var(--accent-green)] tabular-nums">
                       $
                       {mitigationMargin.toLocaleString(undefined, {
                         minimumFractionDigits: 2,
@@ -19633,12 +20418,12 @@ export default function SummitApp() {
                 </div>
 
                 {/* Negotiation buffer — twin of estimate, starts at list sell */}
-                <div className="bg-white rounded-3xl p-6 border border-amber-200/80 shadow-sm ring-1 ring-amber-100/80">
+                <div className="bg-white rounded-3xl p-6 border border-zinc-200 shadow-sm ring-1 ring-zinc-100">
                   <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-2">
                     <div className="font-semibold text-xl text-zinc-900">
                       Negotiation buffer
                     </div>
-                    <div className="text-xs font-semibold uppercase tracking-wide text-amber-800 bg-amber-50 border border-amber-100 px-2.5 py-1 rounded-full w-fit">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-zinc-600 bg-zinc-50 border border-zinc-200 px-2.5 py-1 rounded-full w-fit">
                       ${MITIGATION_BUFFER_CAP.toLocaleString()} discount room
                     </div>
                   </div>
@@ -19656,25 +20441,25 @@ export default function SummitApp() {
                     </div>
                     <div className="h-3 rounded-full bg-zinc-100 overflow-hidden flex">
                       <div
-                        className="h-full bg-amber-500 transition-all duration-300"
+                        className="h-full bg-zinc-400 transition-all duration-300"
                         style={{ width: `${mitigationBufferUsedPct}%` }}
                       />
                       <div
-                        className="h-full bg-emerald-500/80 transition-all duration-300"
+                        className="h-full bg-[var(--accent-green)] transition-all duration-300"
                         style={{
                           width: `${100 - mitigationBufferUsedPct}%`,
                         }}
                       />
                     </div>
                     <div className="flex justify-between text-[11px] mt-1.5">
-                      <span className="text-amber-700 font-medium">
+                      <span className="text-zinc-500 font-medium">
                         Used $
                         {mitigationBufferUsed.toLocaleString(undefined, {
                           minimumFractionDigits: 2,
                           maximumFractionDigits: 2,
                         })}
                       </span>
-                      <span className="text-emerald-700 font-medium">
+                      <span className="text-[var(--accent-green)] font-medium">
                         Left $
                         {mitigationBufferRemaining.toLocaleString(undefined, {
                           minimumFractionDigits: 2,
@@ -19701,7 +20486,7 @@ export default function SummitApp() {
                           negotiatedTotal: Number(e.target.value),
                         })
                       }
-                      className="text-4xl font-semibold w-full border border-zinc-200 rounded-2xl px-4 py-3 text-zinc-900 focus:outline-none focus:border-amber-300 focus:ring-2 focus:ring-amber-100"
+                      className="text-4xl font-semibold w-full border border-zinc-200 rounded-2xl px-4 py-3 text-zinc-900 focus:outline-none focus:border-[var(--accent-blue)] focus:ring-2 focus:ring-[var(--accent-blue-ring)]"
                     />
                   </div>
                   <button
@@ -19712,11 +20497,11 @@ export default function SummitApp() {
                     Apply negotiated price
                   </button>
                   <div className="grid grid-cols-2 gap-4">
-                    <div className="rounded-2xl bg-amber-50 border border-amber-100 p-4">
-                      <div className="text-xs font-medium text-amber-800/80 uppercase tracking-wide">
+                    <div className="rounded-2xl bg-zinc-50 border border-zinc-200 p-4">
+                      <div className="text-xs font-medium text-zinc-500 uppercase tracking-wide">
                         Buffer used
                       </div>
-                      <div className="text-3xl font-semibold text-amber-700 tabular-nums mt-1">
+                      <div className="text-3xl font-semibold text-zinc-500 tabular-nums mt-1">
                         $
                         {mitigationBufferUsed.toLocaleString(undefined, {
                           minimumFractionDigits: 2,
@@ -19724,11 +20509,11 @@ export default function SummitApp() {
                         })}
                       </div>
                     </div>
-                    <div className="rounded-2xl bg-emerald-50 border border-emerald-100 p-4">
-                      <div className="text-xs font-medium text-emerald-800/80 uppercase tracking-wide">
+                    <div className="rounded-2xl bg-[var(--accent-green-soft)] border border-[var(--accent-green-soft)] p-4">
+                      <div className="text-xs font-medium text-[var(--accent-green)] uppercase tracking-wide">
                         Remaining
                       </div>
-                      <div className="text-3xl font-semibold text-emerald-700 tabular-nums mt-1">
+                      <div className="text-3xl font-semibold text-[var(--accent-green)] tabular-nums mt-1">
                         $
                         {mitigationBufferRemaining.toLocaleString(undefined, {
                           minimumFractionDigits: 2,
@@ -19781,7 +20566,7 @@ export default function SummitApp() {
                   </div>
                   {mitigationDraft.entity === 'prowest' &&
                     !companySettingsConfigured() && (
-                      <div className="text-xs text-amber-700 mt-2">
+                      <div className="text-xs text-zinc-500 mt-2">
                         Company details empty — add them in Settings
                       </div>
                     )}
@@ -19867,7 +20652,7 @@ export default function SummitApp() {
                             <div className="min-w-0">
                               {formatMitigationLineDescription(ln)}
                             </div>
-                            <div className="shrink-0 tabular-nums font-medium text-emerald-700">
+                            <div className="shrink-0 tabular-nums font-medium text-[var(--accent-green)]">
                               $
                               {Number(ln.amount || 0).toLocaleString(undefined, {
                                 minimumFractionDigits: 2,
@@ -19893,7 +20678,7 @@ export default function SummitApp() {
 
                   <div className="pt-6 border-t border-zinc-200">
                     {mitigationBufferUsed > 0 && (
-                      <div className="flex justify-between text-sm text-amber-700 mb-2">
+                      <div className="flex justify-between text-sm text-zinc-500 mb-2">
                         <span>Special discount</span>
                         <span className="tabular-nums">
                           −$
@@ -19906,7 +20691,7 @@ export default function SummitApp() {
                     )}
                     <div className="flex justify-between items-center text-2xl font-semibold text-zinc-900">
                       <span>Total amount due</span>
-                      <span className="tabular-nums text-emerald-700">
+                      <span className="tabular-nums text-[var(--accent-green)]">
                         $
                         {mitigationNegotiated.toLocaleString(undefined, {
                           minimumFractionDigits: 2,
@@ -19937,7 +20722,7 @@ export default function SummitApp() {
                         'Agreement prefilled from invoice — save invoice PDF and agreement as separate files'
                       );
                     }}
-                    className="w-full py-4 rounded-3xl font-semibold text-lg border-2 border-sky-500 text-sky-800 bg-sky-50 hover:bg-sky-100"
+                    className="w-full py-4 rounded-3xl font-semibold text-lg border-2 border-[var(--accent-blue)] text-[var(--accent-blue-ink)] bg-[var(--accent-blue-soft)] hover:bg-[var(--accent-blue-soft)]"
                   >
                     Continue to agreement →
                   </button>
@@ -19962,7 +20747,7 @@ export default function SummitApp() {
                       }}
                       className={`text-left rounded-2xl border-2 p-4 transition-all ${
                         mitigationDraft.entity === 'roslie'
-                          ? 'border-sky-500 bg-sky-50 shadow-sm'
+                          ? 'border-[var(--accent-blue)] bg-[var(--accent-blue-soft)] shadow-sm'
                           : 'border-zinc-200 hover:border-zinc-300 bg-white'
                       }`}
                     >
@@ -19984,7 +20769,7 @@ export default function SummitApp() {
                       }}
                       className={`text-left rounded-2xl border-2 p-4 transition-all ${
                         mitigationDraft.entity === 'prowest'
-                          ? 'border-sky-500 bg-sky-50 shadow-sm'
+                          ? 'border-[var(--accent-blue)] bg-[var(--accent-blue-soft)] shadow-sm'
                           : 'border-zinc-200 hover:border-zinc-300 bg-white'
                       }`}
                     >
@@ -20047,7 +20832,7 @@ export default function SummitApp() {
                       onClick={() => setMitigationRateMode('insurance')}
                       className={`text-left rounded-2xl border-2 p-4 transition-all ${
                         mitigationDraft.rateMode === 'insurance'
-                          ? 'border-sky-500 bg-sky-50 shadow-sm'
+                          ? 'border-[var(--accent-blue)] bg-[var(--accent-blue-soft)] shadow-sm'
                           : 'border-zinc-200 hover:border-zinc-300 bg-white'
                       }`}
                     >
@@ -20063,7 +20848,7 @@ export default function SummitApp() {
                       onClick={() => setMitigationRateMode('cash')}
                       className={`text-left rounded-2xl border-2 p-4 transition-all ${
                         mitigationDraft.rateMode === 'cash'
-                          ? 'border-sky-500 bg-sky-50 shadow-sm'
+                          ? 'border-[var(--accent-blue)] bg-[var(--accent-blue-soft)] shadow-sm'
                           : 'border-zinc-200 hover:border-zinc-300 bg-white'
                       }`}
                     >
@@ -20207,7 +20992,7 @@ export default function SummitApp() {
                             key={gid}
                             className={`rounded-2xl border p-4 space-y-3 ${
                               isActive
-                                ? 'border-sky-400 bg-sky-50/40'
+                                ? 'border-[var(--accent-blue)] bg-[var(--accent-blue-soft)]'
                                 : 'border-zinc-200 bg-zinc-50/40'
                             }`}
                             onClick={() => setActiveTarpGroupId(gid)}
@@ -20216,7 +21001,7 @@ export default function SummitApp() {
                               <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
                                 {label}
                                 {isActive ? (
-                                  <span className="ml-2 text-sky-700 normal-case tracking-normal font-medium">
+                                  <span className="ml-2 text-[var(--accent-blue)] normal-case tracking-normal font-medium">
                                     · adding here
                                   </span>
                                 ) : null}
@@ -20238,7 +21023,7 @@ export default function SummitApp() {
                                 <div className="flex-1 min-w-[8rem] font-medium text-zinc-900">
                                   {formatMitigationLineDescription(tarpLine)}
                                 </div>
-                                <div className="w-24 text-right tabular-nums font-medium text-emerald-700">
+                                <div className="w-24 text-right tabular-nums font-medium text-[var(--accent-green)]">
                                   $
                                   {Number(tarpLine.amount || 0).toLocaleString(
                                     undefined,
@@ -20299,7 +21084,7 @@ export default function SummitApp() {
                                     )
                                   }
                                 />
-                                <div className="w-20 text-right tabular-nums font-medium text-emerald-700">
+                                <div className="w-20 text-right tabular-nums font-medium text-[var(--accent-green)]">
                                   $
                                   {Number(ln.amount || 0).toLocaleString(
                                     undefined,
@@ -20381,7 +21166,7 @@ export default function SummitApp() {
                               )
                             }
                           />
-                          <div className="w-24 text-right tabular-nums font-medium text-emerald-700">
+                          <div className="w-24 text-right tabular-nums font-medium text-[var(--accent-green)]">
                             $
                             {Number(ln.amount || 0).toLocaleString(undefined, {
                               minimumFractionDigits: 2,
@@ -20405,7 +21190,7 @@ export default function SummitApp() {
                   <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-xs text-zinc-500">TOTAL AMOUNT DUE</div>
-                      <div className="text-4xl sm:text-5xl font-semibold text-emerald-700 tabular-nums">
+                      <div className="text-4xl sm:text-5xl font-semibold text-[var(--accent-green)] tabular-nums">
                         $
                         {mitigationNegotiated.toLocaleString(undefined, {
                           minimumFractionDigits: 2,
@@ -20413,7 +21198,7 @@ export default function SummitApp() {
                         })}
                       </div>
                       {mitigationBufferUsed > 0 && (
-                        <div className="text-xs text-amber-700 mt-0.5">
+                        <div className="text-xs text-zinc-500 mt-0.5">
                           List $
                           {mitigationListSell.toLocaleString(undefined, {
                             minimumFractionDigits: 2,
@@ -20520,7 +21305,7 @@ export default function SummitApp() {
                     }
                     placeholder="Add title"
                     autoFocus
-                    className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                    className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue-ring)]"
                   />
                 </label>
                 <label className="flex items-center gap-2 text-sm text-zinc-800">
@@ -20555,7 +21340,7 @@ export default function SummitApp() {
                               : d.endDate,
                         }))
                       }
-                      className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                      className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue-ring)]"
                     />
                   </label>
                   <label className="block space-y-1.5">
@@ -20571,7 +21356,7 @@ export default function SummitApp() {
                           endDate: e.target.value,
                         }))
                       }
-                      className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                      className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue-ring)]"
                     />
                   </label>
                 </div>
@@ -20594,7 +21379,7 @@ export default function SummitApp() {
                                 : d.endTime,
                           }))
                         }
-                        className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                        className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue-ring)]"
                       />
                     </label>
                     <label className="block space-y-1.5">
@@ -20610,7 +21395,7 @@ export default function SummitApp() {
                             endTime: e.target.value,
                           }))
                         }
-                        className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                        className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue-ring)]"
                       />
                     </label>
                   </div>
@@ -20675,7 +21460,7 @@ export default function SummitApp() {
                         };
                       });
                     }}
-                    className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300 bg-white"
+                    className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue-ring)] bg-white"
                   >
                     {recurrencePresetOptions(calEventDraft.startDate || '').map(
                       (opt) => (
@@ -20716,7 +21501,7 @@ export default function SummitApp() {
                               },
                             }))
                           }
-                          className="w-full rounded-xl border border-zinc-200 px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300 bg-white"
+                          className="w-full rounded-xl border border-zinc-200 px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue-ring)] bg-white"
                         />
                       </label>
                       <label className="block space-y-1.5">
@@ -20746,7 +21531,7 @@ export default function SummitApp() {
                               },
                             }))
                           }
-                          className="w-full rounded-xl border border-zinc-200 px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300 bg-white"
+                          className="w-full rounded-xl border border-zinc-200 px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue-ring)] bg-white"
                         >
                           <option value="DAILY">Day</option>
                           <option value="WEEKLY">Week</option>
@@ -20801,7 +21586,7 @@ export default function SummitApp() {
                                 }
                                 className={`h-8 w-8 rounded-full text-xs font-semibold ${
                                   on
-                                    ? 'bg-sky-600 text-white'
+                                    ? 'bg-[var(--solid-blue)] text-[var(--solid-blue-ink)]'
                                     : 'bg-white border border-zinc-200 text-zinc-700'
                                 }`}
                               >
@@ -20958,7 +21743,7 @@ export default function SummitApp() {
                     }
                     rows={3}
                     placeholder="Add description"
-                    className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-300 resize-none"
+                    className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue-ring)] resize-none"
                   />
                 </label>
                 {safeGoogleCalendarList.length > 0 ? (
@@ -20974,7 +21759,7 @@ export default function SummitApp() {
                           calendarId: e.target.value,
                         }))
                       }
-                      className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-sky-300 bg-white"
+                      className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue-ring)] bg-white"
                     >
                       {safeGoogleCalendarList.map((c) => (
                         <option key={c.id} value={c.id}>
@@ -21049,7 +21834,7 @@ export default function SummitApp() {
                     Link lead
                   </div>
                   {calEventDraft.leadId != null ? (
-                    <div className="flex items-center justify-between gap-2 rounded-2xl border border-sky-200 bg-sky-50/50 px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-2 rounded-2xl border border-[var(--accent-blue)] bg-[var(--accent-blue-soft)] px-3 py-2.5">
                       <div className="min-w-0">
                         <div className="text-sm font-semibold text-zinc-900 truncate">
                           {linkedLabel}
@@ -21095,7 +21880,7 @@ export default function SummitApp() {
                           }))
                         }
                         placeholder="Search leads…"
-                        className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-300"
+                        className="w-full rounded-2xl border border-zinc-200 px-3 py-2.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue-ring)]"
                       />
                       <div className="max-h-36 overflow-y-auto space-y-1">
                         {leadChoices.map((lead) => {
@@ -21299,8 +22084,8 @@ export default function SummitApp() {
       {renderAppSidebar()}
       {/* Main column offset for fixed desktop sidebar */}
       <div
-        className={`min-h-screen pb-8 flex flex-col transition-[padding] duration-200 ease-out ${
-          sidebarCollapsed ? 'lg:pl-[4.25rem]' : 'lg:pl-[15.5rem]'
+        className={`min-h-dvh pb-8 flex flex-col min-w-0 overflow-x-clip transition-[padding] duration-200 ease-out md:pl-[4.25rem] ${
+          sidebarRail ? 'lg:pl-[4.25rem]' : 'lg:pl-[15.5rem]'
         }`}
       >
       {/* Single global shell: search + user on every page */}
@@ -21434,7 +22219,7 @@ export default function SummitApp() {
                                   workspace: estimatePickerMode,
                                 });
                               }}
-                              className="w-full text-left rounded-2xl border border-zinc-200 px-4 py-3 hover:border-sky-300 hover:bg-sky-50/40 transition-colors"
+                              className="w-full text-left rounded-2xl border border-zinc-200 px-4 py-3 hover:border-[var(--accent-blue)] hover:bg-[var(--accent-blue-soft)] transition-colors"
                             >
                               <div className="flex items-center justify-between gap-2">
                                 <div className="min-w-0">
@@ -21450,7 +22235,7 @@ export default function SummitApp() {
                                       : ''}
                                   </div>
                                 </div>
-                                <span className="text-xs font-semibold text-sky-800 shrink-0">
+                                <span className="text-xs font-semibold text-[var(--graphite)] shrink-0">
                                   Start →
                                 </span>
                               </div>
@@ -21483,7 +22268,7 @@ export default function SummitApp() {
                             onClick={() =>
                               openLeadEstimate(lead.id, estimate, lead)
                             }
-                            className="w-full text-left rounded-2xl border border-zinc-200 px-4 py-3 hover:border-sky-300 hover:bg-sky-50/30 transition-colors"
+                            className="w-full text-left rounded-2xl border border-zinc-200 px-4 py-3 hover:border-[var(--accent-blue)] hover:bg-[var(--accent-blue-soft)] transition-colors"
                           >
                             <div className="flex items-center justify-between gap-2">
                               <div className="min-w-0">
@@ -21500,7 +22285,7 @@ export default function SummitApp() {
                                     : ''}
                                 </div>
                               </div>
-                              <span className="text-sm font-semibold text-emerald-700 tabular-nums shrink-0">
+                              <span className="text-sm font-semibold text-[var(--accent-green)] tabular-nums shrink-0">
                                 ${(estimate.negotiatedPrice || estimate.total || 0).toLocaleString()}
                               </span>
                             </div>
@@ -21796,7 +22581,7 @@ export default function SummitApp() {
                         className="flex justify-between text-sm py-1.5 border-b border-zinc-100 last:border-0"
                       >
                         <span className="text-zinc-500">{k}</span>
-                        <span className="font-medium tabular-nums text-emerald-700">{v}</span>
+                        <span className="font-medium tabular-nums text-[var(--accent-green)]">{v}</span>
                       </div>
                     ))}
                     {measurement.sections?.map((s, i) => (
@@ -21881,9 +22666,9 @@ export default function SummitApp() {
                   onClick={() => exitLeadDocumentWorkspace()}
                   className="text-sm text-zinc-500 hover:text-zinc-800 mb-2 inline-flex items-center gap-1"
                 >
-                  ← Back to lead
+                  {systemDocOrigin === 'hub' ? '← Back' : '← Back to lead'}
                 </button>
-                <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
+                <h1 className="page-title">
                   Take off sheet
                 </h1>
               </div>
@@ -21909,22 +22694,10 @@ export default function SummitApp() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-6">
                 <button
                   type="button"
-                  className="btn-primary btn-primary-lg w-full rounded-full"
+                  className="w-full py-4 rounded-full text-sm font-semibold border border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-50"
                   onClick={() => {
-                    const snapshot = normalizeTakeoff(takeoffForm);
-                    const lines = TAKEOFF_FIELD_LABELS.map(
-                      ({ key, label }) =>
-                        `${label}: ${formatTakeoffFieldValue(key, snapshot)}`
-                    );
-                    const blob = new Blob([lines.join('\n')], {
-                      type: 'text/plain',
-                    });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `takeoff-${currentLeadId || 'draft'}.txt`;
-                    a.click();
-                    URL.revokeObjectURL(url);
+                    generateTakeoffPdf({ download: true });
+                    showToast('Take-off sheet downloaded');
                   }}
                 >
                   Download sheet
@@ -22036,7 +22809,7 @@ export default function SummitApp() {
               >
                 ← Back to lead
               </button>
-              <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
+              <h1 className="page-title">
                 Mitigation Service Agreement
               </h1>
               {mitigationDraft &&
@@ -22049,7 +22822,7 @@ export default function SummitApp() {
                       setShowMitigationPreview(true);
                       setEmergencyPreview(false);
                     }}
-                    className="mt-3 text-sm font-semibold text-sky-700 hover:underline"
+                    className="mt-3 text-sm font-semibold text-[var(--accent-blue)] hover:underline"
                   >
                     ← Back to invoice preview
                   </button>
@@ -22074,7 +22847,7 @@ export default function SummitApp() {
                       }
                       className={`text-left rounded-2xl border-2 p-4 transition-all ${
                         emergencyDraft.entity === 'roslie'
-                          ? 'border-sky-500 bg-sky-50 shadow-sm'
+                          ? 'border-[var(--accent-blue)] bg-[var(--accent-blue-soft)] shadow-sm'
                           : 'border-zinc-200 hover:border-zinc-300 bg-white'
                       }`}
                     >
@@ -22095,7 +22868,7 @@ export default function SummitApp() {
                       }
                       className={`text-left rounded-2xl border-2 p-4 transition-all ${
                         emergencyDraft.entity === 'prowest'
-                          ? 'border-sky-500 bg-sky-50 shadow-sm'
+                          ? 'border-[var(--accent-blue)] bg-[var(--accent-blue-soft)] shadow-sm'
                           : 'border-zinc-200 hover:border-zinc-300 bg-white'
                       }`}
                     >
@@ -22249,7 +23022,7 @@ export default function SummitApp() {
                         }
                         className={`px-4 py-2 rounded-full text-sm font-semibold border transition-colors ${
                           emergencyDraft.paymentMode === mode
-                            ? 'border-sky-500 bg-sky-50 text-zinc-900'
+                            ? 'border-[var(--accent-blue)] bg-[var(--accent-blue-soft)] text-zinc-900'
                             : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'
                         }`}
                       >
@@ -22382,7 +23155,7 @@ export default function SummitApp() {
                         15 of completed work.
                       </p>
                       {emergencyDraft.paymentAmount ? (
-                        <div className="mt-2 text-base font-semibold tabular-nums text-emerald-700">
+                        <div className="mt-2 text-base font-semibold tabular-nums text-[var(--accent-green)]">
                           Amount: $
                           {Number(emergencyDraft.paymentAmount).toLocaleString(
                             undefined,
@@ -22447,7 +23220,7 @@ export default function SummitApp() {
                       Electronic signature
                     </div>
                     {emergencyDraft.clientSignatureDataUrl ? (
-                      <span className="text-xs font-medium text-emerald-700">
+                      <span className="text-xs font-medium text-[var(--accent-green)]">
                         Signed{' '}
                         {formatSignedAtDisplay(emergencyDraft.clientSignedAt)}
                       </span>
@@ -22596,7 +23369,7 @@ export default function SummitApp() {
                         {emergencyDraft.clientName || 'Mitigation Service Agreement'}
                       </div>
                       {emergencyDraft.paymentAmount ? (
-                        <div className="text-sm text-emerald-700 tabular-nums mt-0.5">
+                        <div className="text-sm text-[var(--accent-green)] tabular-nums mt-0.5">
                           $
                           {Number(emergencyDraft.paymentAmount).toLocaleString(
                             undefined,
@@ -22659,7 +23432,7 @@ export default function SummitApp() {
                   ) : null}
                   {emergencyDraft.entity === 'prowest' &&
                     !companySettingsConfigured() && (
-                      <div className="text-xs text-amber-700 mt-2">
+                      <div className="text-xs text-zinc-500 mt-2">
                         Company details empty — add them in Settings
                       </div>
                     )}
@@ -22781,7 +23554,7 @@ export default function SummitApp() {
                       15 of completed work.
                     </p>
                     {emergencyDraft.paymentAmount ? (
-                      <div className="mt-2 text-base font-semibold tabular-nums text-emerald-700">
+                      <div className="mt-2 text-base font-semibold tabular-nums text-[var(--accent-green)]">
                         Amount: $
                         {Number(emergencyDraft.paymentAmount).toLocaleString(
                           undefined,
@@ -22981,17 +23754,12 @@ export default function SummitApp() {
                   inv.leadId == null || activeLeadIds.has(inv.leadId)
               );
               return (
-          <div className="pb-8 w-full">
-            <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-8">
+          <div className="page-shell page-fade pb-8 w-full">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
               <div>
-                <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
+                <h1 className="page-title">
                   Invoices
                 </h1>
-                <p className="text-zinc-500 mt-1">
-                  {visibleInvoices.length === 0
-                    ? 'All invoices across leads'
-                    : `${visibleInvoices.length} invoice${visibleInvoices.length === 1 ? '' : 's'}`}
-                </p>
               </div>
               <button
                 type="button"
@@ -23003,27 +23771,8 @@ export default function SummitApp() {
             </div>
 
             {visibleInvoices.length === 0 ? (
-              <div className="rounded-3xl border border-dashed border-zinc-200 bg-white px-6 py-16 text-center">
+              <div className="py-12">
                 <p className="text-sm font-medium text-zinc-800">No invoices yet</p>
-                <p className="text-sm text-zinc-500 mt-2 max-w-md mx-auto">
-                  New invoice asks you to select or create a lead first — they all list here.
-                </p>
-                <div className="mt-6 flex flex-wrap justify-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => startNewInvoice()}
-                    className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold"
-                  >
-                    New invoice
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleTabChange('leads')}
-                    className="px-5 py-2.5 rounded-2xl text-sm font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
-                  >
-                    Go to jobs
-                  </button>
-                </div>
               </div>
             ) : (
               <div className="space-y-3">
@@ -23032,7 +23781,7 @@ export default function SummitApp() {
                     key={inv.id}
                     role="button"
                     tabIndex={0}
-                    className="bg-white border border-zinc-200 rounded-3xl p-5 hover:border-zinc-300 hover:shadow-sm transition-all cursor-pointer"
+                    className="list-row row-in cursor-pointer"
                     onClick={() => {
                       if (inv.leadId == null) return;
                       setCurrentLeadId(inv.leadId);
@@ -23062,7 +23811,7 @@ export default function SummitApp() {
                         </div>
                       </div>
                       <div className="flex items-center gap-3 shrink-0">
-                        <div className="text-xl font-semibold tabular-nums text-emerald-700">
+                        <div className="text-xl font-semibold tabular-nums text-[var(--accent-green)]">
                           $
                           {Number(inv.total).toLocaleString(undefined, {
                             minimumFractionDigits: 2,
@@ -23102,10 +23851,10 @@ export default function SummitApp() {
         {activeTab === 'estimates' && (() => {
           const items = allEstimates();
           return (
-            <div className="pb-8 w-full">
+            <div className="page-shell page-fade pb-8 w-full">
               <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-8">
                 <div>
-                  <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
+                  <h1 className="page-title">
                     Estimates
                   </h1>
                 </div>
@@ -23119,9 +23868,9 @@ export default function SummitApp() {
               </div>
 
               {items.length === 0 ? (
-                <div className="rounded-3xl border border-dashed border-zinc-200 bg-white px-6 py-16 text-center">
+                <div className="py-12">
                   <p className="text-sm font-medium text-zinc-800">No estimates yet</p>
-                  <div className="mt-6 flex flex-wrap justify-center gap-2">
+                  <div className="mt-6 flex flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={() => openEstimatePicker('estimate')}
@@ -23153,7 +23902,7 @@ export default function SummitApp() {
                     return (
                       <div
                         key={`${lead.id}-${estimate.supabaseId || estimate.id}-${estimateIndex}`}
-                        className="bg-white border border-zinc-200 rounded-3xl p-5 hover:border-zinc-300 hover:shadow-sm transition-all"
+                        className="glass list-card glass-hover row-in"
                       >
                         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                           <button
@@ -23178,7 +23927,7 @@ export default function SummitApp() {
                             </div>
                           </button>
                           <div className="flex items-center gap-3 shrink-0">
-                            <div className="text-xl font-semibold tabular-nums text-emerald-700">
+                            <div className="text-xl font-semibold tabular-nums text-[var(--accent-green)]">
                               ${total.toLocaleString()}
                             </div>
                             {estimate.pdfUrl ? (
@@ -23222,10 +23971,10 @@ export default function SummitApp() {
 
         {activeTab === 'documents' && (
           <div className="page-shell page-fade">
-            <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight mb-8">
+            <h1 className="page-title mb-8">
               Documents
             </h1>
-            <div className="space-y-3">
+            <div>
               {SYSTEM_DOCUMENTS.map((doc) => (
                 <button
                   key={doc.id}
@@ -23241,28 +23990,11 @@ export default function SummitApp() {
                       );
                       return;
                     }
-                    if (doc.id === 'takeoff') {
-                      const lead =
-                        currentLeadId != null
-                          ? leads.find((l) => l.id === currentLeadId)
-                          : null;
-                      setTakeoffForm(
-                        lead?.takeoff && typeof lead.takeoff === 'object'
-                          ? normalizeTakeoff(lead.takeoff)
-                          : emptyTakeoff()
-                      );
-                      setSystemDocWorkspace('takeoff');
-                      setSystemDocPreview(null);
-                      setTakeoffAssignOpen(false);
-                      setTakeoffAssignSearch('');
-                    } else if (doc.id === 'pricing') {
-                      setSystemDocWorkspace('pricing');
-                      setSystemDocPreview(null);
-                    }
+                    openSystemDoc(doc.id, 'hub');
                   }}
-                  className="w-full text-left rounded-3xl border border-zinc-200 bg-white p-5 hover:border-zinc-300 hover:shadow-sm transition-all"
+                  className="list-row font-semibold text-zinc-900"
                 >
-                  <div className="font-semibold text-zinc-900">{doc.name}</div>
+                  {doc.name}
                 </button>
               ))}
             </div>
@@ -23549,14 +24281,14 @@ export default function SummitApp() {
             <div className="page-shell page-fade space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div>
-                  <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
+                  <h1 className="page-title">
                     {appDisplayName()} Calendar
                   </h1>
                   {gcalEmail ? (
                     <p className="text-zinc-500 mt-1 text-sm">{gcalEmail}</p>
                   ) : null}
                 </div>
-                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2 sm:justify-end">
                   <div
                     className="inline-flex rounded-2xl border border-zinc-200 p-0.5 bg-zinc-50/80"
                     role="group"
@@ -23565,7 +24297,7 @@ export default function SummitApp() {
                     <button
                       type="button"
                       onClick={() => setCalendarViewMode('month')}
-                      className={`px-3.5 py-2 rounded-[0.9rem] text-sm font-semibold transition-colors ${
+                      className={`px-3.5 py-2 rounded-[0.9rem] text-sm font-medium transition-colors ${
                         calendarViewMode === 'month'
                           ? 'bg-white text-zinc-900 shadow-sm'
                           : 'text-zinc-500 hover:text-zinc-800'
@@ -23582,7 +24314,7 @@ export default function SummitApp() {
                           : calendarCursor;
                         setCalendarCursor(anchor);
                       }}
-                      className={`px-3.5 py-2 rounded-[0.9rem] text-sm font-semibold transition-colors ${
+                      className={`px-3.5 py-2 rounded-[0.9rem] text-sm font-medium transition-colors ${
                         calendarViewMode === 'week'
                           ? 'bg-white text-zinc-900 shadow-sm'
                           : 'text-zinc-500 hover:text-zinc-800'
@@ -23600,7 +24332,7 @@ export default function SummitApp() {
                         setCalendarCursor(anchor);
                         setCalendarSelectedDay(toLocalIsoDate(anchor));
                       }}
-                      className={`px-3.5 py-2 rounded-[0.9rem] text-sm font-semibold transition-colors ${
+                      className={`px-3.5 py-2 rounded-[0.9rem] text-sm font-medium transition-colors ${
                         calendarViewMode === 'day'
                           ? 'bg-white text-zinc-900 shadow-sm'
                           : 'text-zinc-500 hover:text-zinc-800'
@@ -23617,36 +24349,16 @@ export default function SummitApp() {
                       setCalendarSelectedDay(toLocalIsoDate(now));
                       setCalendarViewMode('day');
                     }}
-                    className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50"
+                    className="btn-text"
                   >
                     Today
                   </button>
-                  <div
-                    className="inline-flex rounded-2xl border border-zinc-200 p-0.5 bg-zinc-50/80"
-                    role="group"
-                    aria-label="Calendar or Tasks"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => handleTabChange('calendar')}
-                      className="px-3.5 py-2 rounded-[0.9rem] text-sm font-semibold transition-colors bg-white text-zinc-900 shadow-sm"
-                    >
-                      Calendar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleTabChange('tasks')}
-                      className="px-3.5 py-2 rounded-[0.9rem] text-sm font-semibold transition-colors text-zinc-500 hover:text-zinc-800"
-                    >
-                      Tasks
-                    </button>
-                  </div>
                   {!gcalConnected ? (
                     <button
                       type="button"
                       disabled={gcalBusy}
                       onClick={() => void connectGoogleCalendar()}
-                      className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
+                      className="btn-text disabled:opacity-50"
                     >
                       Connect
                     </button>
@@ -23658,7 +24370,7 @@ export default function SummitApp() {
                       onClick={() =>
                         void connectGoogleCalendar({ forceConsent: true })
                       }
-                      className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-amber-300 text-amber-950 bg-amber-50 hover:bg-amber-100 disabled:opacity-50"
+                      className="btn-secondary disabled:opacity-50"
                     >
                       Reconnect
                     </button>
@@ -23675,7 +24387,7 @@ export default function SummitApp() {
 
               {/* Month or week grid — hidden in Day mode (day breakdown is primary) */}
               {calendarViewMode !== 'day' ? (
-              <div className="rounded-3xl border border-zinc-200 bg-white overflow-hidden">
+              <div className="glass list-card-flush">
                 <div className="flex items-center justify-between px-4 sm:px-5 py-4 border-b border-zinc-100">
                   <button
                     type="button"
@@ -23808,8 +24520,8 @@ export default function SummitApp() {
                                     : chip.kind === 'event'
                                       ? 'bg-zinc-100 text-zinc-950'
                                       : chip.kind === 'task'
-                                        ? 'bg-amber-100 text-amber-950'
-                                        : 'bg-emerald-100 text-emerald-900'
+                                        ? 'bg-zinc-100 text-zinc-800'
+                                        : 'bg-[var(--accent-green-soft)] text-[var(--accent-green-ink)]'
                                 }`}
                               >
                                 {chip.label}
@@ -23903,8 +24615,8 @@ export default function SummitApp() {
                                     top: (nowMinutes / 60) * WEEK_VIEW_HOUR_PX,
                                   }}
                                 >
-                                  <div className="relative border-t-2 border-rose-500">
-                                    <span className="absolute -left-1 -top-1.5 h-3 w-3 rounded-full bg-rose-500" />
+                                  <div className="relative border-t-2 border-[var(--danger)]">
+                                    <span className="absolute -left-1 -top-1.5 h-3 w-3 rounded-full bg-[var(--danger)]" />
                                   </div>
                                 </div>
                               ) : null}
@@ -23930,7 +24642,7 @@ export default function SummitApp() {
                                   className={`absolute overflow-hidden rounded-md px-1.5 pt-0.5 pb-0.5 text-left text-[10px] sm:text-[11px] font-semibold leading-tight shadow-sm flex flex-col justify-start items-stretch ${
                                     colorStyle
                                       ? ''
-                                      : 'bg-amber-400 text-amber-950'
+                                      : 'bg-zinc-200 text-zinc-900'
                                   }`}
                                   style={{
                                     top: block.top,
@@ -24078,8 +24790,8 @@ export default function SummitApp() {
                                       : chip.kind === 'event'
                                         ? 'bg-zinc-100 text-zinc-950'
                                           : chip.kind === 'task'
-                                          ? 'bg-amber-100 text-amber-950'
-                                          : 'bg-emerald-100 text-emerald-900'
+                                          ? 'bg-zinc-100 text-zinc-800'
+                                          : 'bg-[var(--accent-green-soft)] text-[var(--accent-green-ink)]'
                                   }`}
                                 >
                                   {chip.label}
@@ -24102,7 +24814,7 @@ export default function SummitApp() {
               ) : null}
 
               {/* Day breakdown — primary content in Day mode; also shown under Month/Week */}
-              <div className="rounded-3xl border border-zinc-200 bg-white p-5 sm:p-6 space-y-4">
+              <div className="glass list-card space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                   <div className="flex items-start gap-2 min-w-0">
                     {calendarViewMode === 'day' ? (
@@ -24241,7 +24953,7 @@ export default function SummitApp() {
                     {dayTasks.map((task) => (
                       <div
                         key={`day-task-${task.id}`}
-                        className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-2xl border border-amber-200 bg-amber-50/50 px-4 py-3"
+                        className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3"
                       >
                         <button
                           type="button"
@@ -24252,7 +24964,7 @@ export default function SummitApp() {
                             })
                           }
                         >
-                          <span className="mt-0.5 w-4 h-4 rounded border border-amber-400 shrink-0 bg-white" />
+                          <span className="mt-0.5 w-4 h-4 rounded border border-zinc-400 shrink-0 bg-white" />
                           <div className="min-w-0">
                             <div className="font-semibold text-zinc-900 truncate">
                               {task.title}
@@ -24267,7 +24979,7 @@ export default function SummitApp() {
                         <button
                           type="button"
                           onClick={() => handleTabChange('tasks')}
-                          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-amber-300 text-amber-950 hover:bg-amber-100 shrink-0"
+                          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-zinc-300 text-zinc-800 hover:bg-zinc-100 shrink-0"
                         >
                           Open Tasks
                         </button>
@@ -24288,7 +25000,7 @@ export default function SummitApp() {
             console.error('Calendar render failed:', calErr);
             return (
               <div className="page-shell page-fade space-y-4">
-                <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
+                <h1 className="page-title">
                   {appDisplayName()} Calendar
                 </h1>
                 <p className="text-sm text-zinc-600">
@@ -24347,31 +25059,11 @@ export default function SummitApp() {
             <div className="page-shell page-fade space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
-                  <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
+                  <h1 className="page-title">
                     Tasks
                   </h1>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <div
-                    className="inline-flex rounded-2xl border border-zinc-200 p-0.5 bg-zinc-50/80"
-                    role="group"
-                    aria-label="Calendar or Tasks"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => handleTabChange('calendar')}
-                      className="px-3.5 py-2 rounded-[0.9rem] text-sm font-semibold transition-colors text-zinc-500 hover:text-zinc-800"
-                    >
-                      Calendar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleTabChange('tasks')}
-                      className="px-3.5 py-2 rounded-[0.9rem] text-sm font-semibold transition-colors bg-white text-zinc-900 shadow-sm"
-                    >
-                      Tasks
-                    </button>
-                  </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                   {!gcalConnected ? (
                     <button
                       type="button"
@@ -24379,7 +25071,7 @@ export default function SummitApp() {
                       onClick={() =>
                         void connectGoogleCalendar({ forceConsent: true })
                       }
-                      className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-zinc-200 text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
+                      className="btn-text disabled:opacity-50"
                     >
                       Connect
                     </button>
@@ -24390,19 +25082,19 @@ export default function SummitApp() {
                       onClick={() =>
                         void connectGoogleCalendar({ forceConsent: true })
                       }
-                      className="px-4 py-2.5 rounded-2xl text-sm font-semibold border border-amber-300 text-amber-950 bg-amber-50 hover:bg-amber-100 disabled:opacity-50"
+                      className="btn-secondary disabled:opacity-50"
                     >
                       Reconnect
                     </button>
                   ) : (
-                    <span className="px-3 py-2 rounded-2xl text-xs font-semibold uppercase tracking-wide text-emerald-800 bg-emerald-50 border border-emerald-200">
+                    <span className="text-xs font-medium text-[var(--steel)]">
                       Connected
                     </span>
                   )}
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-zinc-200 bg-white p-5 sm:p-6">
+              <div className="space-y-6">
                 <div className="flex flex-col gap-3">
                   <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
                     <h2 className="text-sm font-semibold text-zinc-900 leading-10">
@@ -24538,7 +25230,7 @@ export default function SummitApp() {
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-zinc-200 bg-white p-5 sm:p-6 space-y-4">
+              <div className="space-y-4">
                 <div className="text-sm font-semibold text-zinc-900">
                   Add task
                   {activeTaskList ? (
@@ -24602,7 +25294,7 @@ export default function SummitApp() {
                         onClick={() =>
                           void updateTaskLocal(task.id, { completed: true })
                         }
-                        className="mt-0.5 w-5 h-5 rounded border border-zinc-300 hover:border-emerald-500 hover:bg-emerald-50 shrink-0"
+                        className="mt-0.5 w-5 h-5 rounded border border-zinc-300 hover:border-[var(--accent-green)] hover:bg-[var(--accent-green-soft)] shrink-0"
                       />
                       <div className="flex-1 min-w-0 space-y-2">
                         <input
@@ -24630,7 +25322,7 @@ export default function SummitApp() {
                             className="rounded-lg border border-zinc-200 px-2 py-1 text-xs text-zinc-700"
                           />
                           {gcalConnected && task.googleTaskId ? (
-                            <span className="text-[10px] font-medium uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                            <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--accent-green)] bg-[var(--accent-green-soft)] border border-[var(--accent-green)] px-2 py-0.5 rounded-full">
                               Google
                             </span>
                           ) : null}
@@ -24710,7 +25402,7 @@ export default function SummitApp() {
                                 completed: false,
                               })
                             }
-                            className="w-5 h-5 rounded border border-emerald-500 bg-emerald-500 text-white text-[10px] flex items-center justify-center shrink-0"
+                            className="w-5 h-5 rounded border border-[var(--accent-green)] bg-[var(--accent-green)] text-[var(--accent-green-ink)] text-[10px] flex items-center justify-center shrink-0"
                           >
                             ✓
                           </button>
@@ -24809,7 +25501,7 @@ export default function SummitApp() {
             console.error('Tasks render failed:', tasksErr);
             return (
               <div className="page-shell page-fade space-y-4">
-                <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
+                <h1 className="page-title">
                   Tasks
                 </h1>
                 <p className="text-sm text-zinc-600">
@@ -24861,13 +25553,13 @@ export default function SummitApp() {
           return (
             <div className="page-shell page-fade">
               <div className="mb-8">
-                <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
+                <h1 className="page-title">
                   Performance
                 </h1>
               </div>
 
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">
-                <div className="rounded-3xl border border-zinc-200 bg-white p-5">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-6 mb-10">
+                <div>
                   <div className="text-[11px] uppercase tracking-wide text-zinc-400 font-medium">
                     Active jobs
                   </div>
@@ -24875,7 +25567,7 @@ export default function SummitApp() {
                     {leads.length}
                   </div>
                 </div>
-                <div className="rounded-3xl border border-zinc-200 bg-white p-5">
+                <div>
                   <div className="text-[11px] uppercase tracking-wide text-zinc-400 font-medium">
                     Estimates
                   </div>
@@ -24883,19 +25575,19 @@ export default function SummitApp() {
                     {estimates.length}
                   </div>
                 </div>
-                <div className="rounded-3xl border border-zinc-200 bg-white p-5">
+                <div>
                   <div className="text-[11px] uppercase tracking-wide text-zinc-400 font-medium">
                     Pipeline value
                   </div>
-                  <div className="text-3xl font-semibold tabular-nums text-emerald-700 mt-1">
+                  <div className="text-3xl font-semibold tabular-nums text-[var(--accent-green)] mt-1">
                     ${pipelineValue.toLocaleString()}
                   </div>
                 </div>
-                <div className="rounded-3xl border border-zinc-200 bg-white p-5">
+                <div>
                   <div className="text-[11px] uppercase tracking-wide text-zinc-400 font-medium">
                     Avg estimate
                   </div>
-                  <div className="text-3xl font-semibold tabular-nums text-emerald-700 mt-1">
+                  <div className="text-3xl font-semibold tabular-nums text-[var(--accent-green)] mt-1">
                     ${avgDeal.toLocaleString()}
                   </div>
                   {closedCount > 0 && (
@@ -24906,7 +25598,7 @@ export default function SummitApp() {
                 </div>
               </div>
 
-              <section className="rounded-3xl border border-zinc-200 bg-white p-5 sm:p-6">
+              <section>
                 <h2 className="text-lg font-semibold text-zinc-900 mb-6">
                   Pipeline by stage
                 </h2>
@@ -24963,36 +25655,36 @@ export default function SummitApp() {
             setCoverageInputs: setMaterialOrderCoverageInputs,
             step: ordersStep,
             setStep: setOrdersStep,
+            filledFrom: orderFilledFrom,
+            setFilledFrom: setOrderFilledFrom,
           })}
         {activeTab === 'tools' && (
           <div className="page-shell page-fade">
             <div className="mb-8">
-              <h1 className="text-3xl font-semibold text-zinc-900 tracking-tight">
+              <h1 className="page-title">
                 Tools
               </h1>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
               <button
                 type="button"
                 onClick={() => handleTabChange('weather')}
-                className="text-left bg-white border border-zinc-200 rounded-3xl p-6 sm:p-7 hover:border-zinc-300 hover:shadow-sm transition-all"
+                className="list-row"
               >
-                <div className="text-xl font-semibold text-zinc-900 mb-1">
-                  Weather
-                </div>
-                <p className="text-sm text-zinc-500">
+                <div className="text-lg font-semibold text-zinc-900">Weather</div>
+                <p className="text-sm text-zinc-500 mt-0.5">
                   Live hail, wind &amp; tornado reports
                 </p>
               </button>
               <button
                 type="button"
                 onClick={() => handleTabChange('canvassing')}
-                className="text-left bg-white border border-zinc-200 rounded-3xl p-6 sm:p-7 hover:border-zinc-300 hover:shadow-sm transition-all"
+                className="list-row"
               >
-                <div className="text-xl font-semibold text-zinc-900 mb-1">
+                <div className="text-lg font-semibold text-zinc-900">
                   Canvassing
                 </div>
-                <p className="text-sm text-zinc-500">
+                <p className="text-sm text-zinc-500 mt-0.5">
                   Map neighborhoods and track doors knocked
                 </p>
               </button>
@@ -25013,12 +25705,12 @@ export default function SummitApp() {
 
         {activeTab === 'settings' && (
           <div className="page-shell page-fade">
-            <h1 className="text-3xl font-semibold text-[var(--graphite)] tracking-tight mb-8">
+            <h1 className="page-title mb-8">
               Profile settings
             </h1>
 
             <div className="space-y-6">
-              <section className="bg-white border border-[var(--chrome-line)] rounded-3xl p-5 sm:p-6 space-y-4">
+              <section className="glass list-card space-y-4">
                 <h2 className="text-lg font-semibold text-[var(--graphite)]">
                   Account
                 </h2>
@@ -25062,15 +25754,15 @@ export default function SummitApp() {
                 </button>
               </section>
 
-              <section className="bg-white border border-[var(--chrome-line)] rounded-3xl p-5 sm:p-6 space-y-4">
+              <section className="glass list-card space-y-4">
                 <h2 className="text-lg font-semibold text-[var(--graphite)]">
                   Google Calendar & Tasks
                 </h2>
 
                 {gcalConnected ? (
                   <div className="space-y-3">
-                    <div className="rounded-2xl border border-[var(--emerald)]/30 bg-[var(--emerald-soft)] px-4 py-3">
-                      <div className="text-sm font-semibold text-[var(--emerald)]">
+                    <div className="rounded-2xl border border-[var(--accent-green)]/30 bg-[var(--accent-green-soft)] px-4 py-3">
+                      <div className="text-sm font-semibold text-[var(--accent-green-ink)]">
                         Connected
                       </div>
                       <div className="text-sm text-[var(--graphite)] mt-0.5">
@@ -25133,7 +25825,7 @@ export default function SummitApp() {
                       </button>
                     </div>
                     {gcalCalendarListNeedsReconnect ? (
-                      <p className="text-xs text-[var(--amber)]">
+                      <p className="text-xs text-[var(--steel)]">
                         Calendar colors (Eucalyptus, Mango, …) need calendar list
                         permission — tap Reconnect for colors and allow access.
                       </p>
@@ -25163,7 +25855,7 @@ export default function SummitApp() {
                 )}
               </section>
 
-              <section className="bg-white border border-[var(--chrome-line)] rounded-3xl p-5 sm:p-6 space-y-4">
+              <section className="glass list-card space-y-4">
                 <div>
                   <h2 className="text-lg font-semibold text-[var(--graphite)]">
                     Appearance
@@ -25221,7 +25913,7 @@ export default function SummitApp() {
                 </div>
               </section>
 
-              <section className="bg-white border border-[var(--chrome-line)] rounded-3xl p-5 sm:p-6 space-y-4">
+              <section className="glass list-card space-y-4">
                 <h2 className="text-lg font-semibold text-[var(--graphite)]">Profile</h2>
                 <div>
                   <div className="text-xs font-medium uppercase tracking-wide text-[var(--steel)] mb-1.5">
@@ -25317,7 +26009,7 @@ export default function SummitApp() {
                 </div>
               </section>
 
-              <section className="bg-white border border-[var(--chrome-line)] rounded-3xl p-5 sm:p-6 space-y-4">
+              <section className="glass list-card space-y-4">
                 <h2 className="text-lg font-semibold text-[var(--graphite)]">Company</h2>
                 <div>
                   <div className="text-xs font-medium uppercase tracking-wide text-[var(--steel)] mb-1.5">
@@ -25528,67 +26220,79 @@ export default function SummitApp() {
         {isEditingLead &&
           currentLeadId != null &&
           profileTab === 'estimator' && (
-          <div className="page-shell !pt-4 w-full">
-            {/* Lead identity — same job shell language as profile */}
-            <div className="mb-4 rounded-2xl border border-zinc-200 bg-white px-4 py-3 space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                <div className="min-w-0 flex items-start gap-3">
+          <div className="page-shell !pt-0 w-full">
+            <div className="sticky top-[var(--header-h)] z-30 -mx-[var(--page-pad-x)] px-[var(--page-pad-x)] py-2.5 mb-6 bg-[var(--surface)]/95 backdrop-blur border-b border-zinc-200/70">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0 flex items-center gap-3">
                   <button
                     type="button"
                     onClick={() => leaveEstimator({ returnToLead: true })}
-                    className="shrink-0 px-3 py-2 rounded-xl text-sm font-medium text-zinc-600 hover:bg-zinc-100 border border-zinc-200 transition-colors"
+                    className="shrink-0 min-h-11 px-3 rounded-xl text-sm font-medium text-zinc-600 hover:bg-zinc-100 border border-zinc-200 transition-colors"
                   >
                     ← Lead
                   </button>
-                  <div className="min-w-0">
+                    <div className="min-w-0">
                     <div className="text-sm font-semibold text-zinc-900 truncate">
                       {estimatorClient.fullName !== 'N/A'
                         ? estimatorClient.fullName
                         : 'Lead estimate'}
                     </div>
-                    <p className="text-xs text-zinc-500 mt-0.5 truncate">
-                      {[
-                        roofSystem && estimateFlow !== 'pick' ? roofSystem : null,
-                        estimatorClient.jobNumber
-                          ? `Job #${estimatorClient.jobNumber}`
-                          : null,
-                        estimatorClient.fullAddress !== 'N/A'
-                          ? estimatorClient.fullAddress
-                          : null,
-                        hasUnsavedChanges ? 'unsaved changes' : null,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                      {roofSystem && estimateFlow !== 'pick' ? (
+                        <button
+                          type="button"
+                          onClick={() => setEstimateFlow('pick')}
+                          className={`roof-chip glass ${
+                            roofSystem === 'flat' ? 'glass-tint-blue' : ''
+                          }`}
+                          title="Change roof type"
+                        >
+                          {roofSystemLabel(roofSystem)}
+                        </button>
+                      ) : null}
+                      <p className="text-xs text-zinc-500 truncate">
+                        {[
+                          estimatorClient.jobNumber
+                            ? `Job #${estimatorClient.jobNumber}`
+                            : null,
+                          estimatorClient.fullAddress !== 'N/A'
+                            ? estimatorClient.fullAddress
+                            : null,
+                          hasUnsavedChanges ? 'Unsaved' : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </p>
+                    </div>
                   </div>
                 </div>
+                {estimateFlow === 'estimate' && (
+                  <div className="inline-flex shrink-0 p-1 rounded-full bg-zinc-100">
+                    <button
+                      type="button"
+                      onClick={() => setEstimateWorkspace('estimate')}
+                      className={`min-h-11 px-3 sm:px-4 rounded-full text-sm font-semibold transition-colors ${
+                        estimateWorkspace === 'estimate'
+                          ? 'bg-white text-zinc-900 shadow-sm'
+                          : 'text-zinc-500 hover:text-zinc-800'
+                      }`}
+                    >
+                      Estimate
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEstimateWorkspace('internal')}
+                      className={`min-h-11 px-3 sm:px-4 rounded-full text-sm font-semibold transition-colors ${
+                        estimateWorkspace === 'internal'
+                          ? 'bg-white text-zinc-900 shadow-sm'
+                          : 'text-zinc-500 hover:text-zinc-800'
+                      }`}
+                    >
+                      Internal
+                    </button>
+                  </div>
+                )}
               </div>
-              {estimateFlow === 'estimate' && (
-                <div className="inline-flex p-1 rounded-full bg-zinc-100">
-                  <button
-                    type="button"
-                    onClick={() => setEstimateWorkspace('estimate')}
-                    className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-colors ${
-                      estimateWorkspace === 'estimate'
-                        ? 'bg-white text-zinc-900 shadow-sm'
-                        : 'text-zinc-500 hover:text-zinc-800'
-                    }`}
-                  >
-                    Estimate
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setEstimateWorkspace('internal')}
-                    className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-colors ${
-                      estimateWorkspace === 'internal'
-                        ? 'bg-white text-zinc-900 shadow-sm'
-                        : 'text-zinc-500 hover:text-zinc-800'
-                    }`}
-                  >
-                    Internal
-                  </button>
-                </div>
-              )}
             </div>
 
             {estimateWorkspace === 'internal' && (
@@ -25599,7 +26303,7 @@ export default function SummitApp() {
                   </div>
                   <div className="mb-6">
                     <div className="text-sm text-zinc-500">Total job value</div>
-                    <div className="text-4xl font-semibold tabular-nums text-emerald-700">
+                    <div className="text-4xl font-semibold tabular-nums text-[var(--accent-green)]">
                       ${estimatorTotalPrice.toLocaleString()}
                     </div>
                   </div>
@@ -25724,7 +26428,7 @@ export default function SummitApp() {
                         {(selectedShingle === 'tile_rr' || tileMode === 'rr') &&
                           tileBrand === 'clay' &&
                           tileMaterialCost === 0 && (
-                          <div className="flex justify-between text-amber-700">
+                          <div className="flex justify-between text-zinc-500">
                             <span>Tile (clay)</span>
                             <span>Mat $ TBD — Joe</span>
                           </div>
@@ -25779,9 +26483,9 @@ export default function SummitApp() {
                     Your profit & commission
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="bg-emerald-50/60 border border-emerald-100 rounded-3xl p-6">
+                    <div className="bg-[var(--accent-green-soft)] border border-[var(--accent-green-soft)] rounded-3xl p-6">
                       <div className="text-sm text-zinc-500 mb-1">Gross profit</div>
-                      <div className="text-4xl font-semibold text-emerald-700 tabular-nums">
+                      <div className="text-4xl font-semibold text-[var(--accent-green)] tabular-nums">
                         ${grossProfit.toFixed(2)}
                       </div>
                     </div>
@@ -25802,19 +26506,19 @@ export default function SummitApp() {
                   </div>
                   <div className="mt-8 pt-8 border-t border-zinc-100">
                     <div className="text-sm text-zinc-500">Your commission payout</div>
-                    <div className="text-5xl font-semibold text-emerald-700 tabular-nums">
+                    <div className="text-5xl font-semibold text-[var(--accent-green)] tabular-nums">
                       ${yourCommission.toLocaleString()}
                     </div>
                   </div>
                 </div>
 
                 {/* Negotiation buffer — highlight */}
-                <div className="bg-white rounded-3xl p-6 border border-amber-200/80 shadow-sm ring-1 ring-amber-100/80">
+                <div className="bg-white rounded-3xl p-6 border border-zinc-200 shadow-sm ring-1 ring-zinc-100">
                   <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-2">
                     <div className="font-semibold text-xl text-zinc-900">
                       Negotiation buffer
                     </div>
-                    <div className="text-xs font-semibold uppercase tracking-wide text-amber-800 bg-amber-50 border border-amber-100 px-2.5 py-1 rounded-full w-fit">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-zinc-600 bg-zinc-50 border border-zinc-200 px-2.5 py-1 rounded-full w-fit">
                       ${NEGOTIATION_BUFFER_CAP.toLocaleString()} built-in room
                     </div>
                   </div>
@@ -25828,19 +26532,19 @@ export default function SummitApp() {
                     </div>
                     <div className="h-3 rounded-full bg-zinc-100 overflow-hidden flex">
                       <div
-                        className="h-full bg-amber-500 transition-all duration-300"
+                        className="h-full bg-zinc-400 transition-all duration-300"
                         style={{ width: `${bufferUsedPct}%` }}
                       />
                       <div
-                        className="h-full bg-emerald-500/80 transition-all duration-300"
+                        className="h-full bg-[var(--accent-green)] transition-all duration-300"
                         style={{ width: `${100 - bufferUsedPct}%` }}
                       />
                     </div>
                     <div className="flex justify-between text-[11px] mt-1.5">
-                      <span className="text-amber-700 font-medium">
+                      <span className="text-zinc-500 font-medium">
                         Used ${bufferUsed.toLocaleString()}
                       </span>
-                      <span className="text-emerald-700 font-medium">
+                      <span className="text-[var(--accent-green)] font-medium">
                         Left ${bufferRemaining.toLocaleString()}
                       </span>
                     </div>
@@ -25854,7 +26558,7 @@ export default function SummitApp() {
                       type="number"
                       value={negotiatedPrice}
                       onChange={(e) => setNegotiatedPrice(Number(e.target.value))}
-                      className="text-4xl font-semibold w-full border border-zinc-200 rounded-2xl px-4 py-3 text-zinc-900 focus:outline-none focus:border-amber-300 focus:ring-2 focus:ring-amber-100"
+                      className="text-4xl font-semibold w-full border border-zinc-200 rounded-2xl px-4 py-3 text-zinc-900 focus:outline-none focus:border-[var(--accent-blue)] focus:ring-2 focus:ring-[var(--accent-blue-ring)]"
                     />
                   </div>
                   <button
@@ -25865,19 +26569,19 @@ export default function SummitApp() {
                     Apply negotiated price
                   </button>
                   <div className="grid grid-cols-2 gap-4">
-                    <div className="rounded-2xl bg-amber-50 border border-amber-100 p-4">
-                      <div className="text-xs font-medium text-amber-800/80 uppercase tracking-wide">
+                    <div className="rounded-2xl bg-zinc-50 border border-zinc-200 p-4">
+                      <div className="text-xs font-medium text-zinc-500 uppercase tracking-wide">
                         Buffer used
                       </div>
-                      <div className="text-3xl font-semibold text-amber-700 tabular-nums mt-1">
+                      <div className="text-3xl font-semibold text-zinc-500 tabular-nums mt-1">
                         ${bufferUsed.toLocaleString()}
                       </div>
                     </div>
-                    <div className="rounded-2xl bg-emerald-50 border border-emerald-100 p-4">
-                      <div className="text-xs font-medium text-emerald-800/80 uppercase tracking-wide">
+                    <div className="rounded-2xl bg-[var(--accent-green-soft)] border border-[var(--accent-green-soft)] p-4">
+                      <div className="text-xs font-medium text-[var(--accent-green)] uppercase tracking-wide">
                         Remaining
                       </div>
-                      <div className="text-3xl font-semibold text-emerald-700 tabular-nums mt-1">
+                      <div className="text-3xl font-semibold text-[var(--accent-green)] tabular-nums mt-1">
                         ${bufferRemaining.toLocaleString()}
                       </div>
                     </div>
@@ -25901,256 +26605,177 @@ export default function SummitApp() {
                     New estimate
                   </h2>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {(
-                    [
-                      {
-                        id: 'shingle' as const,
-                        label: 'Shingle',
-                        desc: 'Start an architectural asphalt shingle quote',
-                      },
-                      {
-                        id: 'tile' as const,
-                        label: 'Tile',
-                        desc: 'Start a detach-reset or tear-off tile quote',
-                      },
-                      {
-                        id: 'flat' as const,
-                        label: 'Low Slope',
-                        desc: 'Start a mod bit, foam, or coating quote',
-                      },
-                    ] as const
-                  ).map((sys) => (
-                    <button
-                      key={sys.id}
-                      type="button"
-                      onClick={() => selectRoofSystem(sys.id)}
-                      className="text-left bg-white border-2 border-zinc-200 hover:border-zinc-300 hover:shadow-md rounded-3xl p-6 sm:p-8 transition-all group"
-                    >
-                      <div className="text-zinc-500 text-xs font-semibold mb-2 uppercase tracking-wide group-hover:text-zinc-700">
-                        Roof system
-                      </div>
-                      <div className="text-2xl font-semibold text-zinc-900 mb-2">
-                        {sys.label}
-                      </div>
-                      <p className="text-sm text-zinc-500">{sys.desc}</p>
-                      <div className="mt-5 text-sm font-semibold text-graphite">
-                        Continue →
-                      </div>
-                    </button>
-                  ))}
-                </div>
+                <RoofSystemPicker onSelect={(sys) => selectRoofSystem(sys)} />
               </div>
             )}
 
             {estimateWorkspace === 'estimate' && estimateFlow === 'estimate' && (
             <>
-            {/* Optional measurement helpers — never required */}
-            <div className="mb-6 rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="mb-10">
+              <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,16rem)_1fr] gap-6 lg:gap-8 items-start">
                 <div>
-                  <div className="text-sm font-semibold text-zinc-900">
-                    Roof measurement (optional)
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {currentLeadId &&
-                    (leads.find((l) => l.id === currentLeadId)?.measurements?.length || 0) >
-                      0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const lead = leads.find((l) => l.id === currentLeadId);
-                          const list = lead?.measurements || [];
-                          const m = list[list.length - 1];
-                          if (lead && m) {
-                            setEstimatorSourceLeadId(lead.id);
-                            applyMeasurementToEstimator(m, lead);
-                            const p = Number(m.squares) || 0;
-                            const f = Number(m.flatSquares) || 0;
-                            showToast(
-                              f > 0 && p > 0
-                                ? `Applied · ${p} pitched + ${f} flat sq`
-                                : f > 0
-                                  ? `Applied · ${f} flat squares`
-                                  : `Applied · ${p} pitched squares`
-                            );
-                          }
-                        }}
-                        className="btn-primary px-8 py-3 rounded-full text-sm font-semibold"
-                      >
-                        Apply latest measurement
-                      </button>
-                    )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (currentLeadId) openMeasureRoof(currentLeadId);
-                      else openHomeMeasurements();
-                    }}
-                    className="btn-primary px-8 py-3 rounded-full text-sm font-semibold"
+                  <label
+                    htmlFor="estimator-squares"
+                    className="block text-sm font-medium text-zinc-500 mb-1"
                   >
-                    Measure by address
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Client/job — read-only from lead (edit on lead Overview) */}
-            <div className="mb-8">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
-                <div className="text-sm font-semibold text-zinc-600">
-                  CLIENT / JOB INFO
-                  <span className="ml-2 font-normal text-zinc-400">
-                    from lead
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (leaveEstimator({ returnToLead: true }) !== false) {
-                      setProfileTab('overview');
-                    }
-                  }}
-                  className="text-sm font-medium text-graphite hover:text-graphite-hover self-start sm:self-auto"
-                >
-                  Edit on lead profile →
-                </button>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                <div className="bg-zinc-50 rounded-3xl p-4 border border-zinc-200/80 sm:col-span-2 lg:col-span-1">
-                  <div className="text-[10px] uppercase tracking-wide text-zinc-400 mb-1">
-                    Client
-                  </div>
-                  <div className="text-base font-semibold text-zinc-900 truncate">
-                    {estimatorClient.fullName !== 'N/A'
-                      ? estimatorClient.fullName
-                      : '—'}
-                  </div>
-                </div>
-                <div className="bg-zinc-50 rounded-3xl p-4 border border-zinc-200/80">
-                  <div className="text-[10px] uppercase tracking-wide text-zinc-400 mb-1">
-                    Phone
-                  </div>
-                  <div className="text-base font-medium text-zinc-900 truncate">
-                    {estimatorClient.phone || '—'}
-                  </div>
-                </div>
-                <div className="bg-zinc-50 rounded-3xl p-4 border border-zinc-200/80">
-                  <div className="text-[10px] uppercase tracking-wide text-zinc-400 mb-1">
-                    Email
-                  </div>
-                  <div className="text-base font-medium text-zinc-900 truncate">
-                    {estimatorClient.email || '—'}
-                  </div>
-                </div>
-                <div className="bg-zinc-50 rounded-3xl p-4 border border-zinc-200/80">
-                  <div className="text-[10px] uppercase tracking-wide text-zinc-400 mb-1">
-                    Job #
-                  </div>
-                  <div className="text-base font-medium text-zinc-900 truncate">
-                    {estimatorClient.jobNumber || '—'}
-                  </div>
-                </div>
-                <div className="bg-zinc-50 rounded-3xl p-4 border border-zinc-200/80 sm:col-span-2">
-                  <div className="text-[10px] uppercase tracking-wide text-zinc-400 mb-1">
-                    Property address
-                  </div>
-                  <div className="text-base font-medium text-zinc-900">
-                    {estimatorClient.fullAddress !== 'N/A'
-                      ? estimatorClient.fullAddress
-                      : '—'}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="mb-8">
-              <div className="text-sm font-semibold text-zinc-600 mb-4">ROOF DETAILS</div>
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                <div className="bg-white rounded-3xl p-5 border border-zinc-200">
-                  <div className="text-xs text-zinc-500 mb-1">PITCHED SQUARES</div>
+                    Pitched squares
+                  </label>
                   <input
+                    id="estimator-squares"
                     type="number"
                     min={0}
                     step={0.1}
                     value={squares}
                     onChange={(e) => setSquares(e.target.value)}
                     placeholder="0"
-                    className="text-3xl font-semibold w-full bg-transparent border-0 focus:outline-none p-0 text-zinc-900"
+                    className="text-4xl sm:text-5xl font-semibold w-full bg-transparent border-0 border-b border-zinc-200 focus:outline-none focus:border-zinc-900 p-0 pb-1 text-zinc-900 tabular-nums"
                   />
+                  <div className="flex flex-wrap items-center gap-x-4 mt-1">
+                    {currentLeadId &&
+                      (leads.find((l) => l.id === currentLeadId)?.measurements
+                        ?.length || 0) > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const lead = leads.find((l) => l.id === currentLeadId);
+                            const list = lead?.measurements || [];
+                            const m = list[list.length - 1];
+                            if (lead && m) {
+                              setEstimatorSourceLeadId(lead.id);
+                              applyMeasurementToEstimator(m, lead);
+                              const p = Number(m.squares) || 0;
+                              const f = Number(m.flatSquares) || 0;
+                              showToast(
+                                f > 0 && p > 0
+                                  ? `Applied · ${p} pitched + ${f} flat sq`
+                                  : f > 0
+                                    ? `Applied · ${f} flat squares`
+                                    : `Applied · ${p} pitched squares`
+                              );
+                            }
+                          }}
+                          className="text-sm font-semibold text-graphite hover:text-graphite-hover min-h-11"
+                        >
+                          Apply measurement
+                        </button>
+                      )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (currentLeadId) openMeasureRoof(currentLeadId);
+                        else openHomeMeasurements();
+                      }}
+                      className="text-sm font-medium text-zinc-600 hover:text-zinc-900 min-h-11"
+                    >
+                      Measure
+                    </button>
+                  </div>
                 </div>
-                <div className="bg-white rounded-3xl p-5 border border-zinc-200">
-                  <div className="text-xs text-zinc-500 mb-1">LAYERS</div>
-                  <select value={layers} onChange={(e) => setLayers(e.target.value)} className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900">
-                    <option value="">Select...</option>
-                    <option value="1">1 Layer</option>
-                    <option value="2">2 Layers</option>
-                    <option value="3">3 Layers</option>
-                    <option value="4">4 Layers</option>
-                  </select>
-                </div>
-                <div className="bg-white rounded-3xl p-5 border border-zinc-200">
-                  <div className="text-xs text-zinc-500 mb-1">PITCH</div>
-                  <select value={pitch} onChange={(e) => setPitch(e.target.value)} className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900">
-                    <option value="">Select...</option>
-                    <option>Flat</option><option>2/12</option><option>3/12</option><option>4/12</option><option>5/12</option><option>6/12</option><option>7/12</option><option>8/12</option><option>9/12</option><option>10/12</option><option>11/12</option><option>12/12</option>
-                  </select>
-                </div>
-                <div className="bg-white rounded-3xl p-5 border border-zinc-200">
-                  <div className="text-xs text-zinc-500 mb-1">STORIES</div>
-                  <select value={stories} onChange={(e) => setStories(e.target.value as '1' | '2' | '3' | '')} className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900">
-                    <option value="">Select...</option>
-                    <option value="1">1 Story</option>
-                    <option value="2">2 Story</option>
-                    <option value="3">3 Story</option>
-                  </select>
-                </div>
-                <div className="bg-white rounded-3xl p-5 border border-zinc-200">
-                  <div className="text-xs text-zinc-500 mb-1">WASTE FACTOR</div>
-                  <select value={waste} onChange={(e) => setWaste(e.target.value)} className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900">
-                    <option value="">0% (None)</option>
-                    <option value="0.05">5%</option><option value="0.06">6%</option><option value="0.07">7%</option><option value="0.08">8%</option><option value="0.09">9%</option><option value="0.10">10%</option><option value="0.11">11%</option><option value="0.12">12%</option><option value="0.13">13%</option><option value="0.14">14%</option><option value="0.15">15%</option><option value="0.16">16%</option><option value="0.18">18%</option><option value="0.20">20%</option><option value="0.22">22%</option><option value="0.25">25%</option>
-                  </select>
-                </div>
-                <div className="bg-white rounded-3xl p-5 border border-zinc-200">
-                  <div className="text-xs text-zinc-500 mb-1">DRIP EDGE COLOR</div>
-                  <select value={dripEdgeColor} onChange={(e) => setDripEdgeColor(e.target.value)} className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900">
-                    <option value="">Select...</option>
-                    <option>Mill Finish</option><option>Black</option><option>White</option><option>Brown</option>
-                  </select>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                  <div>
+                    <label
+                      htmlFor="estimator-layers"
+                      className="block text-sm font-medium text-zinc-500 mb-1"
+                    >
+                      Layers
+                    </label>
+                    <select
+                      id="estimator-layers"
+                      value={layers}
+                      onChange={(e) => setLayers(e.target.value)}
+                      className="w-full min-h-11 border border-zinc-200 rounded-xl px-3 text-sm text-zinc-900 bg-white"
+                    >
+                      <option value="">Select…</option>
+                      <option value="1">1 Layer</option>
+                      <option value="2">2 Layers</option>
+                      <option value="3">3 Layers</option>
+                      <option value="4">4 Layers</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="estimator-pitch"
+                      className="block text-sm font-medium text-zinc-500 mb-1"
+                    >
+                      Pitch
+                    </label>
+                    <select
+                      id="estimator-pitch"
+                      value={pitch}
+                      onChange={(e) => setPitch(e.target.value)}
+                      className="w-full min-h-11 border border-zinc-200 rounded-xl px-3 text-sm text-zinc-900 bg-white"
+                    >
+                      <option value="">Select…</option>
+                      <option>Flat</option><option>2/12</option><option>3/12</option><option>4/12</option><option>5/12</option><option>6/12</option><option>7/12</option><option>8/12</option><option>9/12</option><option>10/12</option><option>11/12</option><option>12/12</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="estimator-stories"
+                      className="block text-sm font-medium text-zinc-500 mb-1"
+                    >
+                      Stories
+                    </label>
+                    <select
+                      id="estimator-stories"
+                      value={stories}
+                      onChange={(e) => setStories(e.target.value as '1' | '2' | '3' | '')}
+                      className="w-full min-h-11 border border-zinc-200 rounded-xl px-3 text-sm text-zinc-900 bg-white"
+                    >
+                      <option value="">Select…</option>
+                      <option value="1">1 Story</option>
+                      <option value="2">2 Story</option>
+                      <option value="3">3 Story</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="estimator-waste"
+                      className="block text-sm font-medium text-zinc-500 mb-1"
+                    >
+                      Waste
+                    </label>
+                    <select
+                      id="estimator-waste"
+                      value={waste}
+                      onChange={(e) => setWaste(e.target.value)}
+                      className="w-full min-h-11 border border-zinc-200 rounded-xl px-3 text-sm text-zinc-900 bg-white"
+                    >
+                      <option value="">0%</option>
+                      <option value="0.05">5%</option><option value="0.06">6%</option><option value="0.07">7%</option><option value="0.08">8%</option><option value="0.09">9%</option><option value="0.10">10%</option><option value="0.11">11%</option><option value="0.12">12%</option><option value="0.13">13%</option><option value="0.14">14%</option><option value="0.15">15%</option><option value="0.16">16%</option><option value="0.18">18%</option><option value="0.20">20%</option><option value="0.22">22%</option><option value="0.25">25%</option>
+                    </select>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div className="mb-8">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
-                <div>
-                  <div className="text-sm font-semibold text-zinc-600">
-                    {roofSystem === 'shingle'
-                      ? 'CHOOSE YOUR SHINGLE'
-                      : roofSystem === 'tile'
-                        ? 'CHOOSE YOUR TILE SYSTEM'
-                        : 'CHOOSE YOUR LOW SLOPE SYSTEM'}
-                  </div>
-                </div>
+            <div className="mb-10">
+              <div className="flex items-baseline justify-between gap-3 mb-3">
+                <h2 className="text-base font-semibold text-zinc-900">
+                  {roofSystem === 'shingle'
+                    ? 'Shingle'
+                    : roofSystem === 'tile'
+                      ? 'Tile'
+                      : 'Low slope'}
+                </h2>
                 <button
                   type="button"
                   onClick={() => {
                     setEstimateFlow('pick');
                     setEstimateWorkspace('estimate');
                   }}
-                  className="text-sm font-medium text-graphite hover:text-graphite-hover self-start sm:self-auto"
+                  className="text-sm font-medium text-graphite hover:text-graphite-hover min-h-11"
                 >
-                  ← Change system
+                  Change system
                 </button>
               </div>
 
               {roofSystem === 'shingle' && (
-                <div className="bg-white rounded-3xl p-5 border border-zinc-200 space-y-4">
-                  {/* Product */}
+                <div className="space-y-4">
                   <div className="space-y-2">
-                    <div className="text-xs text-zinc-500">PRODUCT</div>
+                    <label className="block text-sm font-medium text-zinc-500">
+                      Product
+                    </label>
                     <select
                       value={selectedShingle}
                       onChange={(e) => {
@@ -26165,7 +26790,7 @@ export default function SummitApp() {
                         }
                         setHasUnsavedChanges(true);
                       }}
-                      className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white"
+                      className="w-full min-h-11 border border-zinc-200 rounded-xl px-3 text-sm text-zinc-900 bg-white"
                     >
                       <option value="">Select product…</option>
                       {SHINGLE_PRODUCTS.map((p) => (
@@ -26174,23 +26799,14 @@ export default function SummitApp() {
                         </option>
                       ))}
                     </select>
-
-                    {/* Description for selected product */}
-                    {selectedShingle && (
-                      <p className="text-sm text-zinc-500 leading-relaxed">
-                        {
-                          SHINGLE_PRODUCTS.find((p) => p.key === selectedShingle)
-                            ?.description
-                        }
-                      </p>
-                    )}
                   </div>
 
-                  {/* Color dropdown — only when a product is selected */}
                   {selectedShingle &&
                     SHINGLE_PRODUCTS.some((p) => p.key === selectedShingle) && (
                       <div className="space-y-2">
-                        <div className="text-xs text-zinc-500">COLOR</div>
+                        <label className="block text-sm font-medium text-zinc-500">
+                          Color
+                        </label>
                         <select
                           value={
                             selectedShingle === 'cambridge'
@@ -26205,7 +26821,7 @@ export default function SummitApp() {
                             setProductColor(selectedShingle, e.target.value);
                             setHasUnsavedChanges(true);
                           }}
-                          className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white"
+                          className="w-full min-h-11 border border-zinc-200 rounded-xl px-3 text-sm text-zinc-900 bg-white"
                         >
                           <option value="">Select color…</option>
                           {(
@@ -26220,18 +26836,19 @@ export default function SummitApp() {
                       </div>
                     )}
 
-                  {/* Hip & ridge — sell option only (no material $/bdl) */}
                   {selectedShingle &&
                     SHINGLE_PRODUCTS.some((p) => p.key === selectedShingle) && (
                       <div className="space-y-2">
-                        <div className="text-xs text-zinc-500">HIP &amp; RIDGE</div>
+                        <label className="block text-sm font-medium text-zinc-500">
+                          Hip &amp; ridge
+                        </label>
                         <select
                           value={hipRidgeChoice}
                           onChange={(e) => {
                             setHipRidgeChoice(e.target.value as HipRidgeChoice);
                             setHasUnsavedChanges(true);
                           }}
-                          className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white"
+                          className="w-full min-h-11 border border-zinc-200 rounded-xl px-3 text-sm text-zinc-900 bg-white"
                         >
                           <option value="">Select hip &amp; ridge…</option>
                           {HIP_RIDGE_OPTIONS.map((opt) => (
@@ -26246,9 +26863,11 @@ export default function SummitApp() {
               )}
 
               {roofSystem === 'tile' && (
-                <div className="bg-white rounded-3xl p-5 border border-zinc-200 space-y-4">
+                <div className="space-y-4">
                   <div>
-                    <div className="text-xs text-zinc-500 mb-2">TILE SCOPE</div>
+                    <div className="text-sm font-medium text-zinc-500 mb-2">
+                      Scope
+                    </div>
                     <div className="flex gap-2">
                       <button
                         type="button"
@@ -26258,7 +26877,7 @@ export default function SummitApp() {
                           setTileProduct('');
                           setHasUnsavedChanges(true);
                         }}
-                        className={`flex-1 py-2.5 rounded-2xl text-sm font-medium border transition-all ${
+                        className={`flex-1 min-h-11 py-2.5 rounded-xl text-sm font-medium border transition-colors ${
                           tileMode === 'dr' || selectedShingle === 'tile_dr'
                             ? 'border-zinc-900 bg-zinc-900 text-white'
                             : 'border-zinc-300 text-zinc-700'
@@ -26287,7 +26906,7 @@ export default function SummitApp() {
 
                   {(tileMode === 'rr' || selectedShingle === 'tile_rr') && (
                     <div className="space-y-2">
-                      <div className="text-xs text-zinc-500">NEW TILE PRODUCT</div>
+                      <div className="text-sm font-medium text-zinc-500">Product</div>
                       <select
                         value={tileProduct}
                         onChange={(e) => {
@@ -26295,7 +26914,7 @@ export default function SummitApp() {
                           setTileBrand('');
                           setHasUnsavedChanges(true);
                         }}
-                        className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white"
+                        className="w-full min-h-11 border border-zinc-200 rounded-xl px-3 text-sm text-zinc-900 bg-white"
                       >
                         <option value="">Select tile…</option>
                         {TILE_PRODUCTS.map((p) => (
@@ -26305,16 +26924,8 @@ export default function SummitApp() {
                         ))}
                       </select>
                       {tileProduct && (
-                        <p className="text-sm text-zinc-500 leading-relaxed">
-                          {
-                            TILE_PRODUCTS.find((p) => p.key === tileProduct)
-                              ?.description
-                          }
-                        </p>
-                      )}
-                      {tileProduct && (
                         <div className="mt-3 space-y-2">
-                          <div className="text-xs text-zinc-500">BRAND</div>
+                          <div className="text-sm font-medium text-zinc-500">Brand</div>
                           <select
                             value={tileBrand}
                             onChange={(e) => {
@@ -26342,7 +26953,7 @@ export default function SummitApp() {
 
                   {(tileMode === 'dr' || selectedShingle === 'tile_dr') && (
                     <div className="space-y-2">
-                      <div className="text-xs text-zinc-500">CURRENT TILE ON ROOF</div>
+                      <div className="text-sm font-medium text-zinc-500">Current tile</div>
                       <input
                         type="text"
                         value={currentTile}
@@ -26360,10 +26971,10 @@ export default function SummitApp() {
 
               {roofSystem === 'flat' && (
                 <div className="space-y-4">
-                  <div className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
-                    <div className="text-xs font-semibold tracking-wide text-zinc-500 mb-3">
-                      SYSTEM
-                    </div>
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-500 mb-2">
+                      System
+                    </label>
                     <select
                       value={
                         flatSystem === 'mod_bit'
@@ -26409,74 +27020,35 @@ export default function SummitApp() {
                         </option>
                       ))}
                     </select>
-                    {(flatSystem === 'mod_bit' ||
-                      flatSystem === 'bur' ||
-                      flatSystem === 'foam' ||
-                      flatSystem === 'coating') && (
-                      <p className="text-sm text-zinc-500 mt-3 leading-relaxed">
-                        {
-                          LOW_SLOPE_TYPES.find((p) => {
-                            if (flatSystem === 'mod_bit')
-                              return p.key === 'mod_bitumen';
-                            if (flatSystem === 'bur') return p.key === 'bur';
-                            if (flatSystem === 'foam')
-                              return (
-                                p.key ===
-                                (foamKind === 'overlay'
-                                  ? 'foam_overlay'
-                                  : 'full_foam')
-                              );
-                            if (flatSystem === 'coating')
-                              return p.key === 'coating';
-                            return false;
-                          })?.description
-                        }
-                      </p>
-                    )}
-
-                    {/* SA base / cap products + cap color — mod bitumen */}
+                    {/* SA cap + color — TopShield on mod-bit, Polyglass on BUR */}
                     {flatSystem === 'mod_bit' && (
                       <div className="mt-4 space-y-4">
                         <div>
-                          <div className="text-xs font-semibold tracking-wide text-zinc-500 mb-3">
+                          <div className="text-xs font-semibold tracking-wide text-zinc-500 mb-2">
                             SA CAP
                           </div>
-                          <select
-                            value={mbCapChoice}
-                            onChange={(e) => {
-                              setMbCapChoice(e.target.value);
-                              setHasUnsavedChanges(true);
-                            }}
-                            className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-300/50"
-                          >
-                            <option value="">Select cap sheet…</option>
-                            {MB_CAP_OPTIONS.map((o) => (
-                              <option key={o.key} value={o.key}>
-                                {o.label}
-                              </option>
-                            ))}
-                          </select>
+                          <LockedProduct label="TopShield SA Cap Sheet" />
                         </div>
                         <div>
                           <div className="text-xs font-semibold tracking-wide text-zinc-500 mb-3">
                             CAP COLOR
                           </div>
-                          <select
+                          <CapColorPicker
                             value={modifiedBitumenColor}
-                            onChange={(e) => {
-                              setModifiedBitumenColor(e.target.value);
+                            onChange={(c) => {
+                              setModifiedBitumenColor(c);
                               setHasUnsavedChanges(true);
                             }}
-                            className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-300/50"
-                          >
-                            <option value="">Select color…</option>
-                            {MOD_BITUMEN_CAP_COLORS.map((c) => (
-                              <option key={c} value={c}>
-                                {c}
-                              </option>
-                            ))}
-                          </select>
+                          />
                         </div>
+                      </div>
+                    )}
+                    {flatSystem === 'bur' && (
+                      <div className="mt-4">
+                        <div className="text-xs font-semibold tracking-wide text-zinc-500 mb-2">
+                          SA CAP
+                        </div>
+                        <LockedProduct label="Polyglass SA Cap Sheet" />
                       </div>
                     )}
 
@@ -26503,14 +27075,6 @@ export default function SummitApp() {
                             </option>
                           ))}
                         </select>
-                        {coatingKind && (
-                          <p className="text-sm text-zinc-500 mt-3 leading-relaxed">
-                            {
-                              COATING_TYPES.find((p) => p.key === coatingKind)
-                                ?.description
-                            }
-                          </p>
-                        )}
                       </div>
                     )}
 
@@ -26543,8 +27107,8 @@ export default function SummitApp() {
                   {flatSystem === 'foam' && foamKind && (
                     <div className="bg-white border border-zinc-200 rounded-3xl p-5 space-y-4">
                       <div>
-                        <div className="text-xs font-semibold tracking-wide text-zinc-500 mb-3">
-                          ISO BOARD
+                        <div className="text-sm font-medium text-zinc-500 mb-2">
+                          ISO board
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div>
@@ -26580,8 +27144,8 @@ export default function SummitApp() {
                         </div>
                       </div>
                       <div>
-                        <div className="text-xs font-semibold tracking-wide text-zinc-500 mb-2">
-                          FOAM ADDERS
+                        <div className="text-sm font-medium text-zinc-500 mb-2">
+                          Foam adders
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                           {(
@@ -26635,7 +27199,7 @@ export default function SummitApp() {
                     flatSystem === 'foam') && (
                     <div className="mb-2">
                       <div className="text-sm font-semibold text-zinc-600 mb-4">
-                        COATING ADDERS
+                        Coating adders
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="bg-white border border-zinc-200 rounded-3xl p-5">
@@ -26716,18 +27280,36 @@ export default function SummitApp() {
                   )}
                 </div>
               )}
+
+              <div className="mt-5 max-w-xs">
+                <label
+                  htmlFor="estimator-drip"
+                  className="block text-sm font-medium text-zinc-500 mb-1"
+                >
+                  Drip edge
+                </label>
+                <select
+                  id="estimator-drip"
+                  value={dripEdgeColor}
+                  onChange={(e) => setDripEdgeColor(e.target.value)}
+                  className="w-full min-h-11 border border-zinc-200 rounded-xl px-3 text-sm text-zinc-900 bg-white"
+                >
+                  <option value="">Select…</option>
+                  <option>Mill Finish</option>
+                  <option>Black</option>
+                  <option>White</option>
+                  <option>Brown</option>
+                </select>
+              </div>
             </div>
 
             {/* Low slope adder — for shingle & tile (flat systems pick type as main product) */}
             {roofSystem !== 'flat' && (
-              <div className="mb-8">
-                <div className="text-sm font-semibold text-zinc-600 mb-3">
-                  LOW SLOPE ROOF
-                </div>
-                <p className="text-xs text-zinc-500 mb-3">
-                  Optional attached or detached low-slope area on this job.
-                </p>
-                <div className="grid grid-cols-3 gap-3 mb-4">
+              <div className="mb-10">
+                <h2 className="text-base font-semibold text-zinc-900 mb-3">
+                  Low slope
+                </h2>
+                <div className="grid grid-cols-3 gap-2 mb-4">
                   {(
                     [
                       { id: 'none' as const, label: 'None' },
@@ -26780,6 +27362,10 @@ export default function SummitApp() {
                           type="button"
                           onClick={() => {
                             setLowSlopeType(t.id);
+                            if (t.id === 'mod_bitumen') {
+                              setMbCapChoice('topshield_sa_cap');
+                              setMbBaseChoice('topshield_sa_base');
+                            }
                             setHasUnsavedChanges(true);
                           }}
                           className={`rounded-2xl border px-4 py-3 text-sm font-semibold transition text-left ${
@@ -26794,7 +27380,7 @@ export default function SummitApp() {
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
-                        <div className="text-xs text-zinc-500 mb-1">LOW SLOPE SQUARES</div>
+                        <div className="text-sm font-medium text-zinc-500 mb-1">Squares</div>
                         <input
                           type="number"
                           min={0}
@@ -26810,94 +27396,89 @@ export default function SummitApp() {
                       </div>
                       {lowSlopeType === 'mod_bitumen' && (
                         <div>
-                          <div className="text-xs text-zinc-500 mb-1">COLOR</div>
-                          <select
+                          <div className="text-xs text-zinc-500 mb-2">COLOR</div>
+                          <CapColorPicker
                             value={modifiedBitumenColor}
-                            onChange={(e) => {
-                              setModifiedBitumenColor(e.target.value);
+                            onChange={(c) => {
+                              setModifiedBitumenColor(c);
                               setHasUnsavedChanges(true);
                             }}
-                            className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
-                          >
-                            <option value="">Select color…</option>
-                            {MOD_BITUMEN_CAP_COLORS.map((c) => (
-                              <option key={c} value={c}>
-                                {c}
-                              </option>
-                            ))}
-                          </select>
+                          />
                         </div>
                       )}
                     </div>
                     {lowSlopeType === 'mod_bitumen' && (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                          <div className="text-xs text-zinc-500 mb-1">SA CAP</div>
-                          <select
-                            value={mbCapChoice}
-                            onChange={(e) => {
-                              setMbCapChoice(e.target.value);
-                              setHasUnsavedChanges(true);
-                            }}
-                            className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
-                          >
-                            <option value="">Select cap sheet…</option>
-                            {MB_CAP_OPTIONS.map((o) => (
-                              <option key={o.key} value={o.key}>
-                                {o.label}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                      <div className="mt-2">
+                        <div className="text-xs text-zinc-500 mb-2">SA CAP</div>
+                        <LockedProduct label="TopShield SA Cap Sheet" />
                       </div>
                     )}
                   </div>
                 )}
               </div>
             )}
-            <div className="mb-8">
-              <div className="text-sm font-semibold text-zinc-600 mb-4">UNDERLAYMENT</div>
-              <div className="bg-white border border-zinc-200 rounded-3xl p-5 mb-4">
-                <select
-                  value={selectedUnderlayment}
-                  onChange={(e) => {
-                    setSelectedUnderlayment(e.target.value as Underlayment);
-                    setHasUnsavedChanges(true);
-                  }}
-                  className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900 bg-white"
-                >
-                  <option value="">Select underlayment…</option>
-                  {underlaymentOptionsForSystem(
-                    roofSystem === 'tile'
-                      ? 'tile'
-                      : roofSystem === 'flat'
-                        ? 'flat'
-                        : 'shingle'
-                  ).map((o) => (
-                    <option key={o.key} value={o.key}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <div className="mb-10 max-w-lg">
+              <label
+                htmlFor="estimator-underlayment"
+                className="block text-base font-semibold text-zinc-900 mb-2"
+              >
+                Underlayment
+              </label>
+              <select
+                id="estimator-underlayment"
+                value={selectedUnderlayment}
+                onChange={(e) => {
+                  setSelectedUnderlayment(e.target.value as Underlayment);
+                  setHasUnsavedChanges(true);
+                }}
+                className="w-full min-h-11 border border-zinc-200 rounded-xl px-3 text-sm text-zinc-900 bg-white"
+              >
+                <option value="">Select underlayment…</option>
+                {underlaymentOptionsForSystem(
+                  roofSystem === 'tile'
+                    ? 'tile'
+                    : roofSystem === 'flat'
+                      ? 'flat'
+                      : 'shingle'
+                ).map((o) => (
+                  <option key={o.key} value={o.key}>
+                    {underlaymentPickerLabel(o.key)}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            <div className="mb-8">
-              <div className="text-sm font-semibold text-zinc-600 mb-4">ADDERS</div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                {/* Fascia */}
-                <div className="bg-white border border-zinc-200 rounded-3xl p-6">
-                  <div className="mb-3">
-                    <div className="font-semibold text-zinc-900">Fascia</div>
-                    <div className="text-xs text-amber-700/80 mt-0.5">
+            <div className="mb-10">
+              <h2 className="text-base font-semibold text-zinc-900 mb-1">Adders</h2>
+              <div className="border-t border-zinc-200">
+                <div className="border-b border-zinc-200">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpandedAdder((cur) => (cur === 'fascia' ? null : 'fascia'))
+                    }
+                    aria-expanded={expandedAdder === 'fascia'}
+                    className="w-full flex items-center justify-between gap-3 min-h-11 py-3 text-left"
+                  >
+                    <span className="font-semibold text-zinc-900">Fascia</span>
+                    <span className="text-sm text-zinc-500 tabular-nums truncate">
+                      {fasciaMode
+                        ? `${fasciaMode === 'full' ? 'Full' : 'Repair'}${
+                            fasciaLF ? ` · ${fasciaLF} LF` : ''
+                          }`
+                        : 'Off'}
+                    </span>
+                  </button>
+                  {expandedAdder === 'fascia' && (
+                  <div className="pb-4 space-y-3">
+                    <p className="text-xs text-zinc-500">
                       10 LF fascia + mold included
-                    </div>
-                  </div>
+                    </p>
                   <div className="flex gap-2 mb-3">
                     <button
                       type="button"
                       onClick={() => toggleFascia('repair')}
-                      className={`flex-1 py-2 rounded-2xl text-sm font-medium border transition-all ${
+                      className={`flex-1 min-h-11 py-2.5 rounded-xl text-sm font-medium border transition-colors ${
                         fasciaMode === 'repair'
                           ? 'border-zinc-900 bg-zinc-900 text-white'
                           : 'border-zinc-300'
@@ -26908,7 +27489,7 @@ export default function SummitApp() {
                     <button
                       type="button"
                       onClick={() => toggleFascia('full')}
-                      className={`flex-1 py-2 rounded-2xl text-sm font-medium border transition-all ${
+                      className={`flex-1 min-h-11 py-2.5 rounded-xl text-sm font-medium border transition-colors ${
                         fasciaMode === 'full'
                           ? 'border-zinc-900 bg-zinc-900 text-white'
                           : 'border-zinc-300'
@@ -26942,28 +27523,58 @@ export default function SummitApp() {
                   />
                   {parseFloat(fasciaLF || '0') > 10 &&
                     (fasciaMode || fasciaType) && (
-                      <div className="mt-3 text-sm flex justify-between items-center">
-                        <div className="text-amber-700">Cost</div>
-                        <div className="font-semibold text-emerald-700">
+                      <div className="text-sm flex justify-between items-center">
+                        <div className="text-zinc-500">Cost</div>
+                        <div className="font-semibold text-[var(--accent-green)]">
                           + ${Number(fasciaCost || 0).toLocaleString()}
                         </div>
                       </div>
                     )}
+                  </div>
+                  )}
                 </div>
 
-                {/* Decking */}
-                <div className="bg-white border border-zinc-200 rounded-3xl p-6">
-                  <div className="mb-3">
-                    <div className="font-semibold text-zinc-900">Decking</div>
-                    <div className="text-xs text-amber-700/80 mt-0.5">
+                <div className="border-b border-zinc-200">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpandedAdder((cur) =>
+                        cur === 'decking' ? null : 'decking'
+                      )
+                    }
+                    aria-expanded={expandedAdder === 'decking'}
+                    className="w-full flex items-center justify-between gap-3 min-h-11 py-3 text-left"
+                  >
+                    <span className="font-semibold text-zinc-900">Decking</span>
+                    <span className="text-sm text-zinc-500 tabular-nums truncate">
+                      {deckingMode === 'full'
+                        ? `Re-deck · ${sheetsNeeded} sheets`
+                        : deckingMode === 'repair'
+                          ? `${
+                              [
+                                parseFloat(deckingOsbSheets || '0') > 0
+                                  ? `${deckingOsbSheets} OSB`
+                                  : null,
+                                parseFloat(deckingCdxSheets || '0') > 0
+                                  ? `${deckingCdxSheets} CDX`
+                                  : null,
+                              ]
+                                .filter(Boolean)
+                                .join(' · ') || 'Repair'
+                            }`
+                          : 'Off'}
+                    </span>
+                  </button>
+                  {expandedAdder === 'decking' && (
+                  <div className="pb-4 space-y-3">
+                    <p className="text-xs text-zinc-500">
                       2 sheets included at no cost
-                    </div>
-                  </div>
+                    </p>
                   <div className="flex gap-2 mb-4">
                     <button
                       type="button"
                       onClick={() => toggleDecking('repair')}
-                      className={`flex-1 py-2 rounded-2xl text-sm font-medium border transition-all ${
+                      className={`flex-1 min-h-11 py-2.5 rounded-xl text-sm font-medium border transition-colors ${
                         deckingMode === 'repair'
                           ? 'border-zinc-900 bg-zinc-900 text-white'
                           : 'border-zinc-300'
@@ -26974,7 +27585,7 @@ export default function SummitApp() {
                     <button
                       type="button"
                       onClick={() => toggleDecking('full')}
-                      className={`flex-1 py-2 rounded-2xl text-sm font-medium border transition-all ${
+                      className={`flex-1 min-h-11 py-2.5 rounded-xl text-sm font-medium border transition-colors ${
                         deckingMode === 'full'
                           ? 'border-zinc-900 bg-zinc-900 text-white'
                           : 'border-zinc-300'
@@ -26992,8 +27603,8 @@ export default function SummitApp() {
                         </div>
                       </div>
                       <div className="flex justify-between items-center mt-2">
-                        <div className="text-sm text-amber-700">Cost</div>
-                        <div className="text-sm font-semibold text-emerald-700">
+                        <div className="text-sm text-zinc-500">Cost</div>
+                        <div className="text-sm font-semibold text-[var(--accent-green)]">
                           + ${Number(deckingCost || 0).toLocaleString()}
                         </div>
                       </div>
@@ -27025,24 +27636,40 @@ export default function SummitApp() {
                       {(parseFloat(deckingOsbSheets || '0') > 0 ||
                         parseFloat(deckingCdxSheets || '0') > 0) && (
                         <div className="flex justify-between items-center text-sm">
-                          <div className="text-amber-700">Cost</div>
-                          <div className="font-semibold text-emerald-700">
+                          <div className="text-zinc-500">Cost</div>
+                          <div className="font-semibold text-[var(--accent-green)]">
                             + ${Number(deckingCost || 0).toLocaleString()}
                           </div>
                         </div>
                       )}
                     </div>
                   ) : null}
+                  </div>
+                  )}
                 </div>
 
-                {/* Gutters */}
-                <div className="bg-white border border-zinc-200 rounded-3xl p-6">
-                  <div className="mb-3">
-                    <div className="font-semibold text-zinc-900">Gutters</div>
-                    <div className="text-xs text-amber-700/80 mt-0.5">
-                      Detach &amp; reset or remove &amp; replace
-                    </div>
-                  </div>
+                <div className="border-b border-zinc-200">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpandedAdder((cur) =>
+                        cur === 'gutters' ? null : 'gutters'
+                      )
+                    }
+                    aria-expanded={expandedAdder === 'gutters'}
+                    className="w-full flex items-center justify-between gap-3 min-h-11 py-3 text-left"
+                  >
+                    <span className="font-semibold text-zinc-900">Gutters</span>
+                    <span className="text-sm text-zinc-500 tabular-nums truncate">
+                      {gutterMode !== 'none'
+                        ? `${gutterMode === 'rr' ? 'R&R' : 'D&R'}${
+                            gutterLF ? ` · ${gutterLF} LF` : ''
+                          }`
+                        : 'Off'}
+                    </span>
+                  </button>
+                  {expandedAdder === 'gutters' && (
+                  <div className="pb-4 space-y-3">
                   <div className="flex gap-2 mb-3">
                     <button
                       type="button"
@@ -27050,7 +27677,7 @@ export default function SummitApp() {
                         setGutterMode(gutterMode === 'dr' ? 'none' : 'dr');
                         setHasUnsavedChanges(true);
                       }}
-                      className={`flex-1 py-2 rounded-2xl text-sm font-medium border transition-all ${
+                      className={`flex-1 min-h-11 py-2.5 rounded-xl text-sm font-medium border transition-colors ${
                         gutterMode === 'dr'
                           ? 'border-zinc-900 bg-zinc-900 text-white'
                           : 'border-zinc-300'
@@ -27064,7 +27691,7 @@ export default function SummitApp() {
                         setGutterMode(gutterMode === 'rr' ? 'none' : 'rr');
                         setHasUnsavedChanges(true);
                       }}
-                      className={`flex-1 py-2 rounded-2xl text-sm font-medium border transition-all ${
+                      className={`flex-1 min-h-11 py-2.5 rounded-xl text-sm font-medium border transition-colors ${
                         gutterMode === 'rr'
                           ? 'border-zinc-900 bg-zinc-900 text-white'
                           : 'border-zinc-300'
@@ -27089,8 +27716,8 @@ export default function SummitApp() {
                       />
                       {parseFloat(gutterLF || '0') > 0 && (
                         <div className="text-sm flex justify-between items-center">
-                          <div className="text-amber-700">Cost</div>
-                          <div className="font-semibold text-emerald-700">
+                          <div className="text-zinc-500">Cost</div>
+                          <div className="font-semibold text-[var(--accent-green)]">
                             + $
                             {(
                               parseFloat(gutterLF || '0') *
@@ -27110,143 +27737,196 @@ export default function SummitApp() {
                       )}
                     </div>
                   ) : null}
+                  </div>
+                  )}
+                </div>
+
+                <div className="border-b border-zinc-200">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpandedAdder((cur) => (cur === 'solar' ? null : 'solar'))
+                    }
+                    aria-expanded={expandedAdder === 'solar'}
+                    className="w-full flex items-center justify-between gap-3 min-h-11 py-3 text-left"
+                  >
+                    <span className="font-semibold text-zinc-900">Solar</span>
+                    <span className="text-sm text-zinc-500 tabular-nums">
+                      {parseFloat(solarPanels || '0') > 0
+                        ? `${solarPanels} panels`
+                        : 'Off'}
+                    </span>
+                  </button>
+                  {expandedAdder === 'solar' && (
+                    <div className="pb-4 space-y-2">
+                      <input
+                        type="number"
+                        value={solarPanels}
+                        onChange={(e) => setSolarPanels(e.target.value)}
+                        placeholder="Panels"
+                        className="w-full min-h-11 border border-zinc-200 rounded-xl px-3 text-sm text-zinc-900"
+                      />
+                      {parseFloat(solarPanels || '0') > 0 && (
+                        <div className="text-sm text-[var(--accent-green)]">
+                          + ${(parseFloat(solarPanels) * 250).toLocaleString()}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-b border-zinc-200">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpandedAdder((cur) => (cur === 'hvac' ? null : 'hvac'))
+                    }
+                    aria-expanded={expandedAdder === 'hvac'}
+                    className="w-full flex items-center justify-between gap-3 min-h-11 py-3 text-left"
+                  >
+                    <span className="font-semibold text-zinc-900">HVAC</span>
+                    <span className="text-sm text-zinc-500 tabular-nums">
+                      {parseFloat(hvacUnits || '0') > 0
+                        ? `${hvacUnits} units`
+                        : 'Off'}
+                    </span>
+                  </button>
+                  {expandedAdder === 'hvac' && (
+                    <div className="pb-4 space-y-2">
+                      <p className="text-xs text-zinc-500">Detach and reset</p>
+                      <input
+                        type="number"
+                        value={hvacUnits}
+                        onChange={(e) => setHvacUnits(e.target.value)}
+                        placeholder="Units"
+                        className="w-full min-h-11 border border-zinc-200 rounded-xl px-3 text-sm text-zinc-900"
+                      />
+                      {parseFloat(hvacUnits || '0') > 0 && (
+                        <div className="text-sm text-[var(--accent-green)]">
+                          + $
+                          {(
+                            parseFloat(hvacUnits) *
+                            getHvacSellPrice(
+                              activePricingRegion === 'central' ? 1350 : 1600
+                            )
+                          ).toLocaleString()}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-b border-zinc-200">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpandedAdder((cur) =>
+                        cur === 'skylights' ? null : 'skylights'
+                      )
+                    }
+                    aria-expanded={expandedAdder === 'skylights'}
+                    className="w-full flex items-center justify-between gap-3 min-h-11 py-3 text-left"
+                  >
+                    <span className="font-semibold text-zinc-900">Skylights</span>
+                    <span className="text-sm text-zinc-500 tabular-nums">
+                      {parseFloat(skylights || '0') > 0 ? skylights : 'Off'}
+                    </span>
+                  </button>
+                  {expandedAdder === 'skylights' && (
+                    <div className="pb-4 space-y-2">
+                      <p className="text-xs text-zinc-500">Detach and reset</p>
+                      <input
+                        type="number"
+                        value={skylights}
+                        onChange={(e) => setSkylights(e.target.value)}
+                        placeholder="Count"
+                        className="w-full min-h-11 border border-zinc-200 rounded-xl px-3 text-sm text-zinc-900"
+                      />
+                      {parseFloat(skylights || '0') > 0 && (
+                        <div className="text-sm text-[var(--accent-green)]">
+                          + $
+                          {(
+                            parseFloat(skylights) *
+                            getSellPrice(
+                              'skylight',
+                              activePricingRegion === 'central' ? 525 : 550
+                            )
+                          ).toLocaleString()}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-b border-zinc-200">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpandedAdder((cur) => (cur === 'ridge' ? null : 'ridge'))
+                    }
+                    aria-expanded={expandedAdder === 'ridge'}
+                    className="w-full flex items-center justify-between gap-3 min-h-11 py-3 text-left"
+                  >
+                    <span className="font-semibold text-zinc-900">Ridge vent</span>
+                    <span className="text-sm text-zinc-500 tabular-nums">
+                      {parseFloat(ridgeVentLF || '0') > 0
+                        ? `${ridgeVentLF} LF`
+                        : 'Off'}
+                    </span>
+                  </button>
+                  {expandedAdder === 'ridge' && (
+                    <div className="pb-4 space-y-2">
+                      <input
+                        type="number"
+                        value={ridgeVentLF}
+                        onChange={(e) => setRidgeVentLF(e.target.value)}
+                        placeholder="Linear feet"
+                        className="w-full min-h-11 border border-zinc-200 rounded-xl px-3 text-sm text-zinc-900"
+                      />
+                      {parseFloat(ridgeVentLF || '0') > 0 && (
+                        <div className="text-sm text-[var(--accent-green)]">
+                          + $
+                          {(
+                            parseFloat(ridgeVentLF) *
+                            getSellPrice('ridge_vent', 13)
+                          ).toFixed(0)}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
-
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {/* Solar Panels */}
-                <div className="bg-white border border-zinc-200 rounded-3xl p-5">
-                  <div className="mb-3">
-                    <div className="font-semibold text-zinc-900">Solar Panels</div>
-                    <div className="text-xs text-amber-700/80 mt-0.5">
-                      Total solar panels
-                    </div>
-                  </div>
-                  <input
-                    type="number"
-                    value={solarPanels}
-                    onChange={(e) => setSolarPanels(e.target.value)}
-                    placeholder="# of Panels"
-                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
-                  />
-                  {parseFloat(solarPanels || '0') > 0 && (
-                    <div className="text-xs text-emerald-700 mt-2">
-                      + ${(parseFloat(solarPanels) * 250).toLocaleString()}
-                    </div>
-                  )}
-                </div>
-
-                {/* HVAC */}
-                <div className="bg-white border border-zinc-200 rounded-3xl p-5">
-                  <div className="mb-3">
-                    <div className="font-semibold text-zinc-900">HVAC</div>
-                    <div className="text-xs text-amber-700/80 mt-0.5">
-                      Detach and reset
-                    </div>
-                  </div>
-                  <input
-                    type="number"
-                    value={hvacUnits}
-                    onChange={(e) => setHvacUnits(e.target.value)}
-                    placeholder="# of Units"
-                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
-                  />
-                  {parseFloat(hvacUnits || '0') > 0 && (
-                    <div className="text-xs text-emerald-700 mt-2">
-                      + $
-                      {(
-                        parseFloat(hvacUnits) *
-                        getHvacSellPrice(
-                          activePricingRegion === 'central' ? 1350 : 1600
-                        )
-                      ).toLocaleString()}
-                    </div>
-                  )}
-                </div>
-
-                {/* Skylights */}
-                <div className="bg-white border border-zinc-200 rounded-3xl p-5">
-                  <div className="mb-3">
-                    <div className="font-semibold text-zinc-900">Skylights</div>
-                    <div className="text-xs text-amber-700/80 mt-0.5">
-                      Detach and reset
-                    </div>
-                  </div>
-                  <input
-                    type="number"
-                    value={skylights}
-                    onChange={(e) => setSkylights(e.target.value)}
-                    placeholder="# of Skylights"
-                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
-                  />
-                  {parseFloat(skylights || '0') > 0 && (
-                    <div className="text-xs text-emerald-700 mt-2">
-                      + $
-                      {(
-                        parseFloat(skylights) *
-                        getSellPrice(
-                          'skylight',
-                          activePricingRegion === 'central' ? 525 : 550
-                        )
-                      ).toLocaleString()}
-                    </div>
-                  )}
-                </div>
-
-                {/* Ridge Vent */}
-                <div className="bg-white border border-zinc-200 rounded-3xl p-5">
-                  <div className="mb-3">
-                    <div className="font-semibold text-zinc-900">Ridge Vent</div>
-                    <div className="text-xs text-amber-700/80 mt-0.5">
-                      Total LF of ridge vent
-                    </div>
-                  </div>
-                  <input
-                    type="number"
-                    value={ridgeVentLF}
-                    onChange={(e) => setRidgeVentLF(e.target.value)}
-                    placeholder="Linear Feet"
-                    className="w-full border border-zinc-200 rounded-2xl px-4 py-3 text-sm text-zinc-900"
-                  />
-                  {parseFloat(ridgeVentLF || '0') > 0 && (
-                    <div className="text-xs text-emerald-700 mt-2">
-                      + $
-                      {(
-                        parseFloat(ridgeVentLF) * getSellPrice('ridge_vent', 13)
-                      ).toFixed(0)}
-                    </div>
-                  )}
-                </div>
-              </div>
-
             </div>
-            <div className="mb-8">
-              <div className="text-sm font-semibold text-zinc-600 mb-4">ADDITIONAL NOTES</div>
-              <div className="bg-white rounded-3xl p-5 border border-zinc-200">
-                <textarea
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Anything extra to include on the estimate / PDF..."
-                  rows={3}
-                  className="w-full text-sm text-zinc-900 bg-transparent border-0 focus:outline-none resize-y min-h-[80px]"
-                />
-              </div>
+            <div className="mb-24">
+              <label
+                htmlFor="estimator-notes"
+                className="block text-base font-semibold text-zinc-900 mb-2"
+              >
+                Notes
+              </label>
+              <textarea
+                id="estimator-notes"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Anything extra on the estimate / PDF…"
+                rows={3}
+                className="w-full min-h-[80px] text-sm text-zinc-900 border border-zinc-200 rounded-xl px-3 py-2.5 resize-y bg-white"
+              />
             </div>
-            <div className="safe-bottom sticky bottom-0 bg-white/95 backdrop-blur border-t border-zinc-200 py-4 z-40 -mx-[var(--page-pad-x)] px-[var(--page-pad-x)]">
-              <div className="w-full max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="safe-bottom sticky bottom-0 z-40 -mx-[var(--page-pad-x)] px-[var(--page-pad-x)] py-3 bg-[var(--surface)]/95 backdrop-blur border-t border-zinc-200">
+              <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="text-xs text-zinc-500">TOTAL PRICE</div>
                   {selectedShingle === '' ? (
-                    <div className="text-2xl font-semibold text-zinc-400">
-                      Select a product to view pricing
+                    <div className="text-sm font-medium text-zinc-500">
+                      Select a product
                     </div>
                   ) : (
                     <>
-                      <div className="text-5xl font-semibold text-emerald-700 tabular-nums">
+                      <div className="text-3xl font-semibold text-[var(--accent-green)] tabular-nums">
                         ${estimatorTotalPrice.toLocaleString()}
                       </div>
                       {bufferUsed > 0 && (
-                        <div className="text-xs text-amber-700 mt-0.5">
+                        <div className="text-xs text-zinc-500 mt-0.5">
                           List $
                           {originalTotalForBuffer.toLocaleString()} · discount $
                           {bufferUsed.toLocaleString()}
@@ -27258,9 +27938,9 @@ export default function SummitApp() {
                 <button
                   type="button"
                   onClick={() => setShowProfessionalEstimate(true)}
-                  className="btn-primary px-8 py-4 rounded-3xl font-semibold w-full sm:w-auto sm:shrink-0"
+                  className="btn-primary min-h-11 px-5 rounded-2xl font-semibold shrink-0"
                 >
-                  See Estimate
+                  See estimate
                 </button>
               </div>
             </div>
@@ -27274,8 +27954,8 @@ export default function SummitApp() {
               const profileNotes = profileLead?.notes || [];
               const profileEstimates = profileLead?.estimates || [];
               const profilePhotos = profileLead?.photos || [];
-              const profileDocuments = (profileLead?.documents || []).filter(
-                (d) => !isEstimatePdfDocument(d)
+              const profileDocuments = sortLeadDocumentsNewestFirst(
+                (profileLead?.documents || []).map((d) => stampLeadDocument(d))
               );
               const profileMeasurements = profileLead?.measurements || [];
               // Combined session report: draft sections + current outline
@@ -28221,7 +28901,7 @@ export default function SummitApp() {
 
                               {/* After commit: clear pitched-or-finish / flat-or-finish choice */}
                               {waitingForNextSection && nextStepTitle && (
-                                <div className="rounded-2xl border border-emerald-200/70 bg-emerald-50/50 px-4 py-4 space-y-3">
+                                <div className="rounded-2xl border border-[var(--accent-green)] bg-[var(--accent-green-soft)] px-4 py-4 space-y-3">
                                   <div className="text-center">
                                     <p className="text-sm font-semibold text-zinc-900">
                                       {nextStepTitle}
@@ -28236,7 +28916,7 @@ export default function SummitApp() {
                                         <button
                                           type="button"
                                           onClick={() => prepareSectionKind('pitched')}
-                                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-white border border-emerald-200 text-emerald-900 hover:bg-emerald-50 transition-colors"
+                                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-white border border-[var(--accent-green)] text-[var(--accent-green-ink)] hover:bg-[var(--accent-green-soft)] transition-colors"
                                         >
                                           Add pitched section
                                         </button>
@@ -28253,7 +28933,7 @@ export default function SummitApp() {
                                         <button
                                           type="button"
                                           onClick={() => prepareSectionKind('flat')}
-                                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-white border border-emerald-200 text-emerald-900 hover:bg-emerald-50 transition-colors"
+                                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-white border border-[var(--accent-green)] text-[var(--accent-green-ink)] hover:bg-[var(--accent-green-soft)] transition-colors"
                                         >
                                           Add flat section
                                         </button>
@@ -28270,14 +28950,14 @@ export default function SummitApp() {
                                         <button
                                           type="button"
                                           onClick={() => prepareSectionKind('pitched')}
-                                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-white border border-emerald-200 text-emerald-900 hover:bg-emerald-50 transition-colors"
+                                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-white border border-[var(--accent-green)] text-[var(--accent-green-ink)] hover:bg-[var(--accent-green-soft)] transition-colors"
                                         >
                                           More pitched
                                         </button>
                                         <button
                                           type="button"
                                           onClick={() => prepareSectionKind('flat')}
-                                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-white border border-emerald-200 text-emerald-900 hover:bg-emerald-50 transition-colors"
+                                          className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-white border border-[var(--accent-green)] text-[var(--accent-green-ink)] hover:bg-[var(--accent-green-soft)] transition-colors"
                                         >
                                           More flat
                                         </button>
@@ -28457,7 +29137,7 @@ export default function SummitApp() {
                                             className={`text-[10px] uppercase font-semibold ${
                                               s.kind === 'flat'
                                                 ? 'text-steel'
-                                                : 'text-emerald-700'
+                                                : 'text-[var(--accent-green)]'
                                             }`}
                                           >
                                             {s.kind}
@@ -28901,7 +29581,7 @@ export default function SummitApp() {
                                   <span className="font-semibold text-zinc-800">
                                     Grand total
                                   </span>
-                                  <span className="font-semibold text-emerald-700 tabular-nums">
+                                  <span className="font-semibold text-[var(--accent-green)] tabular-nums">
                                     $
                                     {jobSectionsTotal(
                                       financialWorksheet.sections
@@ -28914,11 +29594,11 @@ export default function SummitApp() {
                               )}
                             </div>
                             <div className="space-y-3">
-                              <div className="rounded-2xl border-2 border-emerald-500 bg-white p-4">
+                              <div className="rounded-2xl border-2 border-[var(--accent-green)] bg-white p-4">
                                 <div className="text-[10px] uppercase tracking-wide text-zinc-500 mb-1">
                                   Approved job value
                                 </div>
-                                <div className="text-xl font-semibold text-emerald-700 tabular-nums">
+                                <div className="text-xl font-semibold text-[var(--accent-green)] tabular-nums">
                                   $
                                   {(
                                     financialWorksheet.approvedJobValue || 0
@@ -29218,7 +29898,7 @@ export default function SummitApp() {
                                       </div>
                                     </button>
                                     <div className="flex items-center gap-2 shrink-0">
-                                      <div className="text-xl font-semibold text-emerald-700">
+                                      <div className="text-xl font-semibold text-[var(--accent-green)]">
                                         $
                                         {(
                                           est.negotiatedPrice ||
@@ -29269,6 +29949,8 @@ export default function SummitApp() {
                           setCoverageInputs: setProfileOrderCoverageInputs,
                           step: profileOrdersStep,
                           setStep: setProfileOrdersStep,
+                          filledFrom: profileOrderFilledFrom,
+                          setFilledFrom: setProfileOrderFilledFrom,
                           fixedLead: profileLead,
                           embedded: true,
                         })}
@@ -29446,7 +30128,7 @@ export default function SummitApp() {
                       )}
 
                       {profileTab === 'documents' && (
-                        <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
+                        <section>
                           <input
                             ref={docInputRef}
                             type="file"
@@ -29455,169 +30137,229 @@ export default function SummitApp() {
                             className="hidden"
                             onChange={(e) => {
                               if (e.target.files?.length) {
-                                void handleDocFiles(e.target.files);
+                                const folder =
+                                  pendingDocFolderRef.current ||
+                                  docUploadFolder;
+                                pendingDocFolderRef.current = null;
+                                void handleDocFiles(e.target.files, folder);
                                 e.target.value = '';
                               }
                             }}
                           />
 
-                          <div className="flex items-center justify-between gap-3 mb-3">
-                            <h2 className="text-lg font-semibold text-zinc-900 mb-4">
-                                Documents
+                          <div className="flex items-center justify-between gap-3 mb-4">
+                            <div className="min-w-0">
+                              {docFolderView ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setDocFolderView(null)}
+                                  className="text-sm text-zinc-500 hover:text-zinc-800 mb-1 inline-flex items-center gap-1"
+                                >
+                                  ← Folders
+                                </button>
+                              ) : null}
+                              <h2 className="text-lg font-semibold text-zinc-900">
+                                {docFolderView
+                                  ? LEAD_DOC_FOLDERS.find(
+                                      (f) => f.id === docFolderView
+                                    )?.label || 'Documents'
+                                  : 'Documents'}
                               </h2>
-                            <div className="relative shrink-0">
-                              <button
-                                type="button"
-                                disabled={docsUploading}
-                                onClick={() => setDocAddMenuOpen((o) => !o)}
-                                className="inline-flex items-center justify-center btn-primary px-8 py-3 rounded-full text-sm font-semibold disabled:opacity-50"
-                              >
-                                {docsUploading ? 'Uploading…' : '+ Add'}
-                              </button>
-                              
-      
-      
-      
-      
-      
-      {docAddMenuOpen && (
-        <div
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setDocAddMenuOpen(false)}
-        >
-          <div
-            className="w-full max-w-sm rounded-2xl bg-white border border-zinc-200 shadow-xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100">
-              <div className="text-base font-semibold text-zinc-900">Add document</div>
-              <button
-                type="button"
-                className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
-                onClick={() => setDocAddMenuOpen(false)}
-              >
-                Close
-              </button>
-            </div>
-            <div className="p-2">
-              <button
-                type="button"
-                className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
-                onClick={() => {
-                  setDocAddMenuOpen(false);
-                  docInputRef.current?.click();
-                }}
-              >
-                Upload file
-              </button>
-              <button
-                type="button"
-                className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
-                onClick={() => {
-                  setDocAddMenuOpen(false);
-                  openMitigationWorkspace('personal');
-                }}
-              >
-                Mitigation invoice
-              </button>
-              <button
-                type="button"
-                className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
-                onClick={() => {
-                  setDocAddMenuOpen(false);
-                  openEmergencyAgreement(currentLeadId);
-                }}
-              >
-                Mitigation Service Agreement
-              </button>
-              <button
-                type="button"
-                className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
-                onClick={() => {
-                  openSystemDoc('takeoff');
-                }}
-              >
-                Take off sheet
-              </button>
-              <button
-                type="button"
-                className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
-                onClick={() => {
-                  openSystemDoc('pricing');
-                }}
-              >
-                Company pricing
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-
-
-
-
-
                             </div>
+                            <button
+                              type="button"
+                              disabled={docsUploading}
+                              onClick={() => {
+                                if (docFolderView) {
+                                  pendingDocFolderRef.current = docFolderView;
+                                  setDocUploadFolder(docFolderView);
+                                  docInputRef.current?.click();
+                                } else {
+                                  setDocAddMenuOpen(true);
+                                }
+                              }}
+                              className="inline-flex items-center justify-center btn-primary px-8 py-3 rounded-full text-sm font-semibold disabled:opacity-50 shrink-0"
+                            >
+                              {docsUploading ? 'Uploading…' : '+ Add'}
+                            </button>
                           </div>
 
-                          {profileDocuments.length === 0 ? (
-                            <div className="rounded-2xl border border-dashed border-zinc-200 px-6 py-12 text-center">
-                              <p className="text-sm font-medium text-zinc-800">
-                                No documents yet
-                              </p>
-                              <p className="text-sm text-zinc-500 mt-2">
-                                Use + Add to upload a file or pick a company document.
-                              </p>
-                            </div>
-                          ) : (
-                            <ul className="space-y-2">
-                              {profileDocuments.map((doc) => (
-                                <li
-                                  key={doc.id}
-                                  className="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-white px-3 py-2.5"
-                                >
-                                  <div className="min-w-0">
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        const isPdf =
-                                          doc.mimeType === 'application/pdf' ||
-                                          /\.pdf$/i.test(doc.name);
-                                        if (isPdf) {
-                                          setMeasurementPdfUrl(doc.url);
-                                          setMeasurementPdfName(doc.name);
-                                        } else {
-                                          window.open(doc.url, '_blank', 'noopener,noreferrer');
-                                        }
-                                      }}
-                                      className="text-sm font-medium hover:underline truncate block text-left w-full text-zinc-800 hover:text-graphite-hover transition-colors"
-                                    >
-                                      {doc.name}
-                                    </button>
-                                    <div className="text-xs text-zinc-400 mt-0.5">
-                                      {doc.createdAt}
-                                      {doc.size != null
-                                        ? ` · ${
-                                            doc.size < 1024 * 1024
-                                              ? `${Math.max(1, Math.round(doc.size / 1024))} KB`
-                                              : `${(doc.size / (1024 * 1024)).toFixed(1)} MB`
-                                          }`
-                                        : ''}
-                                    </div>
+                          {docAddMenuOpen && (
+                            <div
+                              className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4"
+                              onClick={() => setDocAddMenuOpen(false)}
+                            >
+                              <div
+                                className="w-full max-w-sm rounded-2xl bg-white border border-zinc-200 shadow-xl overflow-hidden"
+                                onClick={(e) => e.stopPropagation()}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Escape') {
+                                    e.stopPropagation();
+                                    setDocAddMenuOpen(false);
+                                  }
+                                }}
+                              >
+                                <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100">
+                                  <div className="text-base font-semibold text-zinc-900">
+                                    Select folder
                                   </div>
                                   <button
                                     type="button"
-                                    onClick={() => removeLeadDocument(doc.id)}
-                                    className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
+                                    className="text-xs text-zinc-500 hover:text-zinc-800 shrink-0 px-2 py-1"
+                                    onClick={() => setDocAddMenuOpen(false)}
                                   >
-                                    Delete
+                                    Close
                                   </button>
-                                </li>
-                              ))}
-                            </ul>
+                                </div>
+                                <div className="p-2">
+                                  {LEAD_DOC_FOLDERS.map((folder) => (
+                                    <button
+                                      key={folder.id}
+                                      type="button"
+                                      className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
+                                      onClick={() => {
+                                        pendingDocFolderRef.current = folder.id;
+                                        setDocUploadFolder(folder.id);
+                                        setDocAddMenuOpen(false);
+                                        window.setTimeout(
+                                          () => docInputRef.current?.click(),
+                                          50
+                                        );
+                                      }}
+                                    >
+                                      {folder.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
                           )}
 
+                          {!docFolderView ? (
+                            (() => {
+                              const occupied = LEAD_DOC_FOLDERS.filter(
+                                (folder) =>
+                                  profileDocuments.some(
+                                    (d) => inferLeadDocFolder(d) === folder.id
+                                  )
+                              );
+                              if (occupied.length === 0) return null;
+                              return (
+                                <div>
+                                  {occupied.map((folder) => {
+                                    const count = profileDocuments.filter(
+                                      (d) =>
+                                        inferLeadDocFolder(d) === folder.id
+                                    ).length;
+                                    return (
+                                      <button
+                                        key={folder.id}
+                                        type="button"
+                                        onClick={() =>
+                                          setDocFolderView(folder.id)
+                                        }
+                                        className="list-row flex items-center justify-between gap-3"
+                                      >
+                                        <span className="font-semibold text-zinc-900">
+                                          {folder.label}
+                                        </span>
+                                        <span className="text-sm tabular-nums text-zinc-500">
+                                          {count}
+                                        </span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            })()
+                          ) : (
+                            (() => {
+                              const folderDocs = profileDocuments.filter(
+                                (d) => inferLeadDocFolder(d) === docFolderView
+                              );
+                              return folderDocs.length === 0 ? (
+                                <button
+                                  type="button"
+                                  disabled={docsUploading}
+                                  onClick={() => {
+                                    if (!docFolderView) return;
+                                    pendingDocFolderRef.current = docFolderView;
+                                    setDocUploadFolder(docFolderView);
+                                    docInputRef.current?.click();
+                                  }}
+                                  onDragOver={(e) => {
+                                    e.preventDefault();
+                                  }}
+                                  onDrop={(e) => {
+                                    e.preventDefault();
+                                    if (!docFolderView) return;
+                                    const files = e.dataTransfer.files;
+                                    if (files?.length) {
+                                      void handleDocFiles(files, docFolderView);
+                                    }
+                                  }}
+                                  className="w-full rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/60 px-6 py-14 text-center hover:border-zinc-400 hover:bg-zinc-50 disabled:opacity-50"
+                                >
+                                  <span className="text-sm font-semibold text-zinc-900">
+                                    {docsUploading ? 'Uploading…' : 'Add a file'}
+                                  </span>
+                                </button>
+                              ) : (
+                                <ul className="space-y-2">
+                                  {folderDocs.map((doc) => (
+                                    <li
+                                      key={doc.id}
+                                      className="list-row flex items-center justify-between gap-3"
+                                    >
+                                      <div className="min-w-0">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const isPdf =
+                                              doc.mimeType ===
+                                                'application/pdf' ||
+                                              /\.pdf$/i.test(doc.name);
+                                            if (isPdf) {
+                                              setMeasurementPdfUrl(doc.url);
+                                              setMeasurementPdfName(doc.name);
+                                            } else {
+                                              window.open(
+                                                doc.url,
+                                                '_blank',
+                                                'noopener,noreferrer'
+                                              );
+                                            }
+                                          }}
+                                          className="text-sm font-medium hover:underline truncate block text-left w-full text-zinc-800 hover:text-graphite-hover transition-colors"
+                                        >
+                                          {doc.name}
+                                        </button>
+                                        <div className="text-xs text-zinc-400 mt-0.5">
+                                          {doc.createdAt}
+                                          {doc.size != null
+                                            ? ` · ${
+                                                doc.size < 1024 * 1024
+                                                  ? `${Math.max(1, Math.round(doc.size / 1024))} KB`
+                                                  : `${(doc.size / (1024 * 1024)).toFixed(1)} MB`
+                                              }`
+                                            : ''}
+                                        </div>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          removeLeadDocument(doc.id)
+                                        }
+                                        className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
+                                      >
+                                        Delete
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              );
+                            })()
+                          )}
                         </section>
                       )}
 

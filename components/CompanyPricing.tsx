@@ -43,9 +43,7 @@ export default function CompanyPricing({
             ← Back
           </button>
           <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
-            <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">
-              Company pricing
-            </h1>
+            <h1 className="page-title">Company pricing</h1>
             <div className="inline-flex rounded-2xl border border-zinc-200 bg-white p-1 shadow-sm">
               {(
                 [
@@ -108,13 +106,7 @@ export default function CompanyPricing({
                   </div>
                   {(section.supplier === 'Miller' ||
                     section.supplier === 'SRS') && (
-                    <span
-                      className={`text-[11px] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-full shrink-0 ${
-                        section.supplier === 'Miller'
-                          ? 'bg-amber-50 text-amber-800 ring-1 ring-amber-100'
-                          : 'bg-[var(--chrome-soft)] text-[var(--graphite)] ring-1 ring-[var(--chrome-line)]'
-                      }`}
-                    >
+                    <span className="text-[11px] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-full shrink-0 bg-[var(--chrome-soft)] text-[var(--graphite)] ring-1 ring-[var(--chrome-line)]">
                       {section.supplier}
                     </span>
                   )}
