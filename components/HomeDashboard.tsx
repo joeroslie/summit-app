@@ -744,7 +744,7 @@ export default function HomeDashboard({
   }, []);
 
   const latestReport = useMemo(() => {
-    if (stormReports.length === 0) return null;
+    if (stormReports.length === 0) return undefined;
     return stormReports.reduce((newest, r) =>
       r.validTime > newest.validTime ? r : newest
     );
