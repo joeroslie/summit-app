@@ -3,7 +3,8 @@
     "ignoreRules": [],
     "ignoreFiles": [
       "docs/pricing/Full_Price_Book_Print.html",
-      "docs/pricing/print.html"
+      "docs/pricing/print.html",
+      "public/phone-preview.html"
     ],
     "ignoreValues": [
       {
@@ -29,6 +30,15 @@
         ],
         "createdAt": "2026-08-12T19:29:33.687Z",
         "reason": "Pre-existing Trash toggle button: text-zinc-500 default, hover:text-amber-800 + hover:bg-amber-50 change together (not gray on a colored bg at rest); incidental flag from unrelated edit in same file"
+      },
+      {
+        "rule": "design-system-font-size",
+        "value": "*",
+        "files": [
+          "app/page.tsx"
+        ],
+        "createdAt": "2026-08-15T17:12:57.285Z",
+        "reason": "Pre-existing type sizes in the page.tsx monolith (10px chips, 15px chrome) flagged incidentally while centering the invoices empty state; not a retune of this file"
       }
     ]
   }

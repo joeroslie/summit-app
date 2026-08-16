@@ -17,6 +17,18 @@ export const PIPELINE_STAGES: PipelineStage[] = [
   'Closed',
 ];
 
+/** Stages that count in Pipeline value (Home + Pipeline). Lead and Closed do not. */
+export const PIPELINE_VALUE_STAGES: PipelineStage[] = [
+  'Prospect',
+  'Approved',
+  'Completed',
+  'Invoiced',
+];
+
+export function countsTowardPipelineValue(stage: PipelineStage): boolean {
+  return PIPELINE_VALUE_STAGES.includes(stage);
+}
+
 /**
  * Home + Pipeline: stage color lives in CSS tokens (--stage-*).
  * Lead #F5D36B → Prospect #FFB07A → Approved #7BC9A6 →

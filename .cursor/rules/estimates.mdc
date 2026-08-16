@@ -7,12 +7,12 @@ alwaysApply: false
 # Estimates
 
 **Chat name:** `Estimates`  
-**Sidebar label:** Estimates (+ lead-profile Estimator tab)  
+**Sidebar label:** none — lives on the lead (Estimates / Estimator tabs)  
 **Agent starter:** `.cursor/agents/estimates.md`
 
 ## Files
 
-- `app/page.tsx` — `activeTab === 'estimates'` (~L22344); estimator workspace, measure flow, PDF export
+- `app/page.tsx` — lead-profile Estimates tab + estimator workspace, measure flow, PDF export
 - `components/RoofTracer.tsx`
 - `components/AddressAutocomplete.tsx` — shared
 - `lib/pricingGuide.ts` — consume only; price locks live in Company Pricing

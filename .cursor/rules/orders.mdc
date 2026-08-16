@@ -7,12 +7,12 @@ alwaysApply: false
 # Orders
 
 **Chat name:** `Orders`  
-**Sidebar label:** Orders (Labor = second step inside Orders, not a top-level tab)  
+**Sidebar label:** none — lives on the lead (Orders tab; Labor = second step inside Orders)  
 **Agent starter:** `.cursor/agents/orders.md`
 
 ## Files
 
-- `app/page.tsx` — `activeTab === 'orders'` (~L24185); `ordersStep` material | labor; `renderOrdersFlow`
+- `app/page.tsx` — lead-profile Orders tab; `profileOrdersStep` material | labor; `renderOrdersFlow`
 - `lib/pricingGuide.ts` — shared; material/labor cost lookups
 - `lib/instant-roofer-orders.ts` — shared; human measure orders
 - `supabase/material_orders.sql`

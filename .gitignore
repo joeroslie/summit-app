@@ -53,3 +53,6 @@ next-env.d.ts
 .impeccable/*
 !.impeccable/config.json
 .impeccable/config.local.json
+
+# Local phone mock — must not ship as a public URL
+public/phone-preview.html

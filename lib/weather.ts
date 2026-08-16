@@ -69,6 +69,12 @@ export type StormReportsResponse = {
   day: string | null;
   count: number;
   source: 'noaa-lsr' | 'iem-lsr';
+  /**
+   * Newest hail/wind/tornado in the requested radius. Present when the
+   * client sent `latest=1`. Looks past the requested window (up to 2 years)
+   * so Home can always name the last nearby storm.
+   */
+  latest?: StormReport | null;
 };
 
 export type StormWindow = '24h' | '48h' | '72h' | '3m' | '6m' | '9m' | '1y' | '2y' | 'day';
@@ -100,6 +106,17 @@ export const STORM_WINDOWS: StormWindowMeta[] = [
   { id: '1y', label: '1 year', hours: 24 * 365, layerId: null },
   { id: '2y', label: '2 years', hours: 24 * 730, layerId: null },
 ];
+
+/**
+ * Home's "last nearby storm" lookback after the live 24h window is empty.
+ * 3 months covers a typical monsoon gap; 2 years is the archive ceiling.
+ */
+export const STORM_LATEST_FALLBACK_WINDOWS: StormWindow[] = ['3m', '2y'];
+
+export function newestStormReport(reports: StormReport[]): StormReport | undefined {
+  if (reports.length === 0) return undefined;
+  return reports.reduce((newest, r) => (r.validTime > newest.validTime ? r : newest));
+}
 
 export const DEFAULT_NEAR_RADIUS_MILES = 75;
 export const MIN_NEAR_RADIUS_MILES = 10;

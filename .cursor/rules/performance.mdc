@@ -6,9 +6,9 @@ alwaysApply: false
 # Performance
 
 **Chat name:** `Performance`  
-**Sidebar label:** Performance  
+**Sidebar label:** none — lives on Pipeline (stats + stage chips above the jobs board)  
 **Agent starter:** `.cursor/agents/performance.md`
 
 ## Files
 
-- `app/page.tsx` — `activeTab === 'performance'` (~L24067); pipeline value, stage counts, avg estimate
+- `app/page.tsx` — `activeTab === 'leads'` rollup passed into `PipelineBoard` (active jobs, estimates, pipeline value, avg estimate above stage chips)

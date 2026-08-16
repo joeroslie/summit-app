@@ -23,7 +23,7 @@ Paste starters from `.cursor/agents/`.
 | `Documents` | Docs / camera / PDFs | **Sonnet 5** |
 | `Calendar` | Calendar | **Grok 4.5** or Sonnet |
 | `Tasks` | Tasks | **Grok 4.5** or Sonnet |
-| `Performance` | Performance | **Grok 4.5** or Sonnet |
+| `Performance` | Performance (on Pipeline) | **Grok 4.5** or Sonnet |
 | `Weather` | Weather tool | **Sonnet 5** |
 | `Canvassing` | Canvassing | **Sonnet 5** |
 | `Company Pricing` | Pricing locks | **Sonnet 5** (Opus to audit) |

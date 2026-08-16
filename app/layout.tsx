@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Plus_Jakarta_Sans } from "next/font/google";
-import Script from "next/script";
+import ThemeInit from "@/components/ThemeInit";
 import "./globals.css";
 
 const plusJakartaSans = Plus_Jakarta_Sans({
@@ -45,30 +45,6 @@ export const viewport: Viewport = {
   ],
 };
 
-/** Apply day/night before paint to avoid theme flash / hydration mismatch noise. */
-const themeInitScript = `
-(function () {
-  try {
-    var pref = localStorage.getItem('summitThemePref') || 'auto';
-    if (pref !== 'day' && pref !== 'night' && pref !== 'auto') pref = 'auto';
-    var hour = new Date().getHours();
-    var mode =
-      pref === 'day'
-        ? 'day'
-        : pref === 'night'
-          ? 'night'
-          : hour >= 19 || hour < 7
-            ? 'night'
-            : 'day';
-    document.documentElement.setAttribute('data-theme', mode);
-    document.documentElement.style.colorScheme = mode === 'night' ? 'dark' : 'light';
-  } catch (e) {
-    document.documentElement.setAttribute('data-theme', 'day');
-    document.documentElement.style.colorScheme = 'light';
-  }
-})();
-`;
-
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -82,11 +58,7 @@ export default function RootLayout({
       className={`${plusJakartaSans.variable} h-full antialiased`}
     >
       <body className={`${plusJakartaSans.className} min-h-full flex flex-col`} suppressHydrationWarning>
-        <Script
-          id="summit-theme-init"
-          strategy="beforeInteractive"
-          dangerouslySetInnerHTML={{ __html: themeInitScript }}
-        />
+        <ThemeInit />
         {children}
       </body>
     </html>

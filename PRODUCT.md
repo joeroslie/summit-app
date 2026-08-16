@@ -31,7 +31,7 @@ The job runs through Home, Pipeline (jobs board), Estimates (measure and price),
 - Login for Joe is live. Extra-company signup, Apple login, billing, and invite screens are not built yet.
 - Never invent prices or coverage numbers. Leave blanks until Joe confirms.
 - Cash/insurance contracts, the sales pitch deck, and canvassing phone lookup are planned, not built.
-- [Inferred from the app, not restated by Joe:] the estimator hangs off a lead; Tools holds Canvassing and Weather rather than the main sidebar.
+- the estimator, invoices, and orders hang off a lead; Performance sits on Pipeline; Tools holds Canvassing and Weather rather than the main sidebar.
 
 ## Brand Commitments
 

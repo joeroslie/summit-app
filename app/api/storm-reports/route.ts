@@ -10,8 +10,10 @@ import {
   isStormWindow,
   layerIdForWindow,
   mergeStormReports,
+  newestStormReport,
   parseStormDayFormat,
   STORM_DAY_LOOKBACK_YEARS,
+  STORM_LATEST_FALLBACK_WINDOWS,
   stormDayUtcBounds,
   stormWindowMeta,
   type StormReport,
@@ -42,6 +44,9 @@ export const maxDuration = 30;
  *
  * Optional `day=YYYY-MM-DD` (with `tzOffset` minutes from the client) fetches
  * that local calendar day from IEM instead of a rolling window.
+ *
+ * `latest=1` (Home storm card): also return the newest nearby report, looking
+ * past the requested window up to 2 years when the live window is empty.
  */
 
 const NOAA_BASE =
@@ -401,6 +406,92 @@ function dayIsWithinArchive(day: string): boolean {
   return t <= now + 2 * 24 * 60 * 60 * 1000 && t >= now - twoYears;
 }
 
+function sortReportsNewestFirst(reports: StormReport[]): StormReport[] {
+  return [...reports].sort(
+    (a, b) => new Date(b.validTime).getTime() - new Date(a.validTime).getTime()
+  );
+}
+
+/** Scan every feature so a 2y archive cap cannot hide the newest nearby storm. */
+function newestFromCollection(
+  data: GeoJsonCollection | null,
+  mapper: (feature: GeoJsonFeature, stormWindow: StormWindow, index: number) => StormReport | null,
+  opts: {
+    stormWindow: StormWindow;
+    origin: { lat: number; lng: number };
+    radiusMiles: number;
+    minTimeMs?: number;
+  }
+): StormReport | null {
+  if (!data) return null;
+  let newest: StormReport | null = null;
+  let newestMs = -Infinity;
+  for (let i = 0; i < data.features.length; i += 1) {
+    const mapped = mapper(data.features[i], opts.stormWindow, i);
+    if (!mapped) continue;
+    if (haversineMiles(opts.origin, mapped) > opts.radiusMiles) continue;
+    const t = new Date(mapped.validTime).getTime();
+    if (!Number.isFinite(t)) continue;
+    if (opts.minTimeMs != null && t < opts.minTimeMs) continue;
+    if (t > newestMs) {
+      newest = mapped;
+      newestMs = t;
+    }
+  }
+  return newest;
+}
+
+async function newestInWindow(opts: {
+  stormWindow: StormWindow;
+  state: string | null;
+  origin: { lat: number; lng: number };
+  radiusMiles: number;
+}): Promise<StormReport | null> {
+  const scanOpts = {
+    stormWindow: opts.stormWindow,
+    origin: opts.origin,
+    radiusMiles: opts.radiusMiles,
+  };
+  if (isLiveStormWindow(opts.stormWindow)) {
+    const [noaa, iem] = await Promise.all([
+      fetchNoaaLive(opts),
+      fetchIemHistorical(opts),
+    ]);
+    const minTimeMs = Date.now() - stormWindowMeta(opts.stormWindow).hours * 3_600_000;
+    const candidates = [
+      newestFromCollection(iem, mapIemFeature, { ...scanOpts, minTimeMs }),
+      newestFromCollection(noaa, mapNoaaFeature, { ...scanOpts, minTimeMs }),
+    ].filter((r): r is StormReport => r != null);
+    return newestStormReport(candidates) ?? null;
+  }
+  const data = await fetchIemHistorical(opts);
+  return newestFromCollection(data, mapIemFeature, scanOpts);
+}
+
+/**
+ * Newest report in radius, searching longer lookbacks until one hits.
+ * Only used when the requested window was empty and `latest=1`.
+ */
+async function fetchLatestBeyondWindow(opts: {
+  afterWindow: StormWindow;
+  state: string | null;
+  origin: { lat: number; lng: number };
+  radiusMiles: number;
+}): Promise<StormReport | null> {
+  const currentHours = stormWindowMeta(opts.afterWindow).hours;
+  for (const w of STORM_LATEST_FALLBACK_WINDOWS) {
+    if (stormWindowMeta(w).hours <= currentHours) continue;
+    const found = await newestInWindow({
+      stormWindow: w,
+      state: opts.state,
+      origin: opts.origin,
+      radiusMiles: opts.radiusMiles,
+    });
+    if (found) return found;
+  }
+  return null;
+}
+
 function collectReports(
   data: GeoJsonCollection | null,
   mapper: (feature: GeoJsonFeature, stormWindow: StormWindow, index: number) => StormReport | null,
@@ -510,8 +601,22 @@ export async function GET(req: NextRequest) {
     source = 'iem-lsr';
   }
 
-  reports.sort((a, b) => new Date(b.validTime).getTime() - new Date(a.validTime).getTime());
+  reports = sortReportsNewestFirst(reports);
   if (reports.length > MAX_REPORTS) reports = reports.slice(0, MAX_REPORTS);
+
+  const wantLatest = searchParams.get('latest') === '1';
+  let latest: StormReport | null | undefined;
+  if (wantLatest) {
+    latest = reports[0] ?? null;
+    if (!latest && origin && !day) {
+      latest = await fetchLatestBeyondWindow({
+        afterWindow: stormWindow,
+        state: stateParam,
+        origin,
+        radiusMiles,
+      });
+    }
+  }
 
   const body: StormReportsResponse = {
     reports,
@@ -521,6 +626,7 @@ export async function GET(req: NextRequest) {
     day,
     count: reports.length,
     source,
+    ...(wantLatest ? { latest } : {}),
   };
 
   return NextResponse.json(body);

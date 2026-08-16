@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, type CSSProperties } from 'react';
 import dynamic from 'next/dynamic';
 import jsPDF from 'jspdf';
 import {
@@ -128,6 +128,7 @@ import PasswordField from '@/components/PasswordField';
 import AddressAutocomplete from '@/components/AddressAutocomplete';
 import CompanyPricing from '@/components/CompanyPricing';
 import HomeDashboard from '@/components/HomeDashboard';
+import '@/components/stage-funnel.css';
 import PipelineBoard from '@/components/PipelineBoard';
 import RoofSystemPicker, {
   roofSystemLabel,
@@ -135,6 +136,7 @@ import RoofSystemPicker, {
 import {
   PIPELINE_STAGES,
   PIPELINE_STAGE_STYLES,
+  countsTowardPipelineValue,
   normalizePipelineStage,
   type PipelineStage,
 } from '@/lib/pipeline';
@@ -179,19 +181,15 @@ interface BeforeInstallPromptEvent extends Event {
 
 type AppTab =
   | 'home'
-  | 'leads' // Jobs board
-  | 'estimates'
-  | 'invoices'
+  | 'leads' // Jobs board (rollup + stage chips sit above the columns)
   | 'calendar'
   | 'tasks'
-  | 'performance'
-  | 'orders'
   | 'tools'
   | 'canvassing' // Tools → Canvassing (door-knocking pin tracker), not in sidebar
   | 'weather' // Tools → Weather (storm tracker + optional radar overlay), not in sidebar
   | 'documents'
   | 'settings';
-/** Material Order → Labor crew/job packet (inside Orders workspace). */
+/** Material Order → Labor crew/job packet (inside lead-profile Orders). */
 type OrdersStep = 'material' | 'labor';
 /** Customer estimate form vs internal financials (inside lead profile). */
 type EstimateWorkspace = 'estimate' | 'internal';
@@ -206,16 +204,12 @@ type EstimatorAdderId =
 /** Mitigation invoice form vs internal margin calc (no buffer). */
 type MitigationWorkspace = 'invoice' | 'internal';
 
-/** Primary app destinations (sidebar). Estimator stays lead-profile only. */
+/** Restorable destinations. Estimator, invoices, and orders stay on the lead. */
 const APP_TABS: AppTab[] = [
   'home',
   'leads',
-  'estimates',
-  'invoices',
   'calendar',
   'tasks',
-  'performance',
-  'orders',
   'tools',
   'canvassing',
   'weather',
@@ -418,8 +412,16 @@ function readStoredTab(): AppTab {
   if (typeof window === 'undefined') return 'home';
   try {
     const t = localStorage.getItem('summitActiveTab');
-    // Labor is no longer a top-level tab — open Orders instead
-    if (t === 'labor') return 'orders';
+    // Performance lives on Pipeline, not as its own tab
+    if (t === 'performance') return 'leads';
+    // Estimates / invoices / orders hang off the lead — not sidebar destinations
+    if (
+      t === 'estimates' ||
+      t === 'invoices' ||
+      t === 'orders' ||
+      t === 'labor'
+    )
+      return 'home';
     if (t && (APP_TABS as string[]).includes(t)) return t as AppTab;
   } catch {
     /* ignore */
@@ -1217,11 +1219,11 @@ const COST_KEY_ALIASES: Record<string, string[]> = {
   shingle_mold_labor: ['fascia_mold_labor'],
 };
 
-/** Company library on the Documents tab — blank copies + pricing to refer to. */
+/** Company library — blank copies + pricing to refer to. */
 const SYSTEM_DOCUMENTS = [
   {
     id: 'takeoff',
-    name: 'Take off sheet',
+    name: 'Takeoff sheet',
   },
   {
     id: 'pricing',
@@ -1236,6 +1238,11 @@ const SYSTEM_DOCUMENTS = [
     name: 'Mitigation Service Agreement',
   },
 ] as const;
+
+/** Pre-existing docs that can be uploaded onto a lead (not live tools). */
+const COMPANY_LEAD_DOCUMENTS = SYSTEM_DOCUMENTS.filter(
+  (d) => d.id !== 'pricing'
+);
 
 /** Company / billing entity — filled in Settings (empty until configured). */
 type CompanySettings = {
@@ -1504,7 +1511,7 @@ function takeoffRoofTypeLabel(value: string): string {
   return TAKEOFF_ROOF_TYPE_OPTIONS.find((o) => o.value === value)?.label || '';
 }
 
-/** Orders tab — order type twin of estimate roof system. */
+/** Lead-profile Orders — order type twin of estimate roof system. */
 type MaterialOrderType = 'shingle' | 'tile' | 'flat';
 
 type MaterialOrderSku = {
@@ -1711,7 +1718,7 @@ const MATERIAL_ORDER_PIPE_JACKS: MaterialOrderSku[] = PIPE_JACK_CATALOG.map(
   })
 );
 
-/** Material Order — sectioned catalog (Orders tab; not on estimate). */
+/** Material Order — sectioned catalog (lead-profile Orders; not on estimate). */
 const MATERIAL_ORDER_SECTIONS: MaterialOrderSection[] = [
   {
     key: 'ice_water',
@@ -2676,7 +2683,7 @@ type LeadDocFolder =
   | 'estimates'
   | 'photo_reports'
   | 'takeoff'
-  | 'sheets'
+  | 'invoices'
   | 'company'
   | 'documents'
   | 'contracts';
@@ -2685,11 +2692,14 @@ const LEAD_DOC_FOLDERS: { id: LeadDocFolder; label: string }[] = [
   { id: 'estimates', label: 'Estimates' },
   { id: 'photo_reports', label: 'Photo reports' },
   { id: 'takeoff', label: 'Takeoff' },
-  { id: 'sheets', label: 'Sheets' },
+  { id: 'invoices', label: 'Invoices' },
   { id: 'company', label: 'Company' },
   { id: 'documents', label: 'Other' },
   { id: 'contracts', label: 'Contracts' },
 ];
+
+type CompanyLeadDocId = (typeof COMPANY_LEAD_DOCUMENTS)[number]['id'];
+type LeadDocAddKind = 'computer' | CompanyLeadDocId;
 
 type LeadDocument = {
   id: string;
@@ -2710,7 +2720,9 @@ function isLeadDocFolder(value: unknown): value is LeadDocFolder {
 }
 
 function inferLeadDocFolder(doc: Pick<LeadDocument, 'id' | 'name' | 'url' | 'folder'>): LeadDocFolder {
-  if (isLeadDocFolder(doc.folder)) return doc.folder;
+  const storedFolder = doc.folder as string | undefined;
+  if (storedFolder === 'sheets') return 'invoices';
+  if (isLeadDocFolder(storedFolder)) return storedFolder;
   if (isEstimatePdfDocument(doc as LeadDocument)) return 'estimates';
   const name = doc.name || '';
   const url = doc.url || '';
@@ -2719,7 +2731,7 @@ function inferLeadDocFolder(doc: Pick<LeadDocument, 'id' | 'name' | 'url' | 'fol
   if (/agreement/i.test(name) || /\/agreements\//i.test(url) || /^esa-/i.test(doc.id))
     return 'contracts';
   if (/pricing/i.test(name) || /company.?pricing/i.test(name)) return 'company';
-  if (/invoice/i.test(name) || /mitigation/i.test(name)) return 'sheets';
+  if (/invoice/i.test(name) || /mitigation/i.test(name)) return 'invoices';
   return 'documents';
 }
 
@@ -3898,6 +3910,25 @@ function leadEstimateValue(lead: {
   return v > 0 ? v : 0;
 }
 
+/** Total + avg denominator: Prospect, Approved, Completed, Invoiced only. */
+function pipelineValueRollup(
+  list: Array<{
+    category?: unknown;
+    financialWorksheet?: { approvedJobValue?: number; jobValue?: number };
+    approvedJobValue?: number;
+  }>
+): { pipelineValue: number; valuedCount: number } {
+  let pipelineValue = 0;
+  let valuedCount = 0;
+  for (const l of list) {
+    if (!countsTowardPipelineValue(normalizePipelineStage(l.category))) continue;
+    const v = leadEstimateValue(l);
+    pipelineValue += v;
+    if (v > 0) valuedCount += 1;
+  }
+  return { pipelineValue, valuedCount };
+}
+
 /** Normalize legacy localStorage leads (e.g. clientJobNumber → jobNumber). */
 function normalizeLead(raw: Partial<Lead> & { clientJobNumber?: string }): Lead {
   return {
@@ -4780,6 +4811,9 @@ export default function SummitApp() {
 
   /** False until localStorage is read — keeps SSR and first client paint identical */
   const [sessionReady, setSessionReady] = useState(false);
+  useLayoutEffect(() => {
+    setSessionReady(true);
+  }, []);
   const [activeTab, setActiveTab] = useState<AppTab>('home');
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const skipUnsavedMarkRef = useRef(false);
@@ -4875,21 +4909,10 @@ export default function SummitApp() {
     null
   );
   const [takeoffForm, setTakeoffForm] = useState<TakeoffSheet>(emptyTakeoff());
-  /** Material Order — type chooser + dropdown lines by section (Orders tab) */
-  const [materialOrderType, setMaterialOrderType] =
-    useState<MaterialOrderType | null>(null);
-  const [materialOrderLines, setMaterialOrderLines] = useState<
-    Record<string, TakeoffSkuLine[]>
-  >({});
-  /** Coverage calculator (sq/LF → qty) — open panel + entered value, by line id */
-  const [materialOrderCoverageInputs, setMaterialOrderCoverageInputs] =
-    useState<Record<string, string>>({});
-  /** Orders workspace: Material Order → Labor (crew + job packet) */
-  const [ordersStep, setOrdersStep] = useState<OrdersStep>('material');
-  /** Labor step — job packet lead (seeded from currentLeadId when step opens) */
+  /** Labor step — job packet lead (used if Orders is opened without a fixed lead) */
   const [laborLeadId, setLaborLeadId] = useState<number | null>(null);
   const [laborLeadSearch, setLaborLeadSearch] = useState('');
-  /** Lead profile → Orders tab: same flow as global Orders, job fixed to this lead */
+  /** Lead profile → Orders: Material Order → Labor (crew + job packet) */
   const [profileOrderType, setProfileOrderType] =
     useState<MaterialOrderType | null>(null);
   const [profileOrderLines, setProfileOrderLines] = useState<
@@ -4899,7 +4922,6 @@ export default function SummitApp() {
     useState<Record<string, string>>({});
   const [profileOrdersStep, setProfileOrdersStep] =
     useState<OrdersStep>('material');
-  const [orderFilledFrom, setOrderFilledFrom] = useState<string | null>(null);
   const [profileOrderFilledFrom, setProfileOrderFilledFrom] = useState<
     string | null
   >(null);
@@ -4923,6 +4945,8 @@ export default function SummitApp() {
   const [photosUploading, setPhotosUploading] = useState(false);
   const [docsUploading, setDocsUploading] = useState(false);
   const [docAddMenuOpen, setDocAddMenuOpen] = useState(false);
+  const [docAddStep, setDocAddStep] = useState<'type' | 'folder'>('type');
+  const [docAddKind, setDocAddKind] = useState<LeadDocAddKind | null>(null);
   const [, setSystemDocPreview] = useState<string | null>(null);
   /** Hub = Documents tab library; lead = opened from a job. */
   const [systemDocOrigin, setSystemDocOrigin] = useState<'hub' | 'lead'>(
@@ -4955,6 +4979,8 @@ export default function SummitApp() {
   const [docUploadFolder, setDocUploadFolder] =
     useState<LeadDocFolder>('documents');
   const pendingDocFolderRef = useRef<LeadDocFolder | null>(null);
+  const docAddSaveFolderRef = useRef<LeadDocFolder | null>(null);
+  const [mitigationAgreementPair, setMitigationAgreementPair] = useState(false);
   const [takeoffAssignOpen, setTakeoffAssignOpen] = useState(false);
   const [takeoffAssignSearch, setTakeoffAssignSearch] = useState('');
   const [lightboxPhoto, setLightboxPhoto] = useState<LeadPhoto | null>(null);
@@ -5317,8 +5343,10 @@ export default function SummitApp() {
   const [tasksTrashOpen, setTasksTrashOpen] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  /** Laptop (1024+): icon rail vs full labels. Phone uses drawer; iPad is always rail. */
+  /** Laptop (1024+): icon rail vs full labels. Phone uses bottom tabs; iPad is always rail. */
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const phoneBackRef = useRef<() => boolean>(() => false);
+  const phoneTabSwipeRef = useRef({ y: 0, swiped: false });
   const [isLaptopNav, setIsLaptopNav] = useState(false);
   const sidebarDocPrevCollapsed = useRef<boolean | null>(null);
   /** True once launched from the home-screen icon (standalone display mode). */
@@ -5492,54 +5520,6 @@ export default function SummitApp() {
     safeTaskLists.find((l) => l.id === activeTaskListId) || safeTaskLists[0];
   const googleListIdFor = (list: SummitTaskList | undefined) =>
     list?.googleListId || (list?.id === DEFAULT_TASK_LIST_ID ? '@default' : '');
-
-  /** Remove invoice from Invoices index (+ matching lead doc / Storage when possible). */
-  const removeAppInvoice = (invoiceId: string) => {
-    const inv = appInvoices.find((i) => i.id === invoiceId);
-    if (!inv) return;
-    if (
-      !confirm(
-        `Remove invoice for “${inv.leadLabel || 'lead'}” from Invoices?`
-      )
-    ) {
-      return;
-    }
-
-    persistAppInvoices(appInvoices.filter((i) => i.id !== invoiceId));
-
-    // Drop matching document on the lead (if lead still exists)
-    if (inv.leadId != null) {
-      const updated = leads.map((l) => {
-        if (l.id !== inv.leadId) return l;
-        const docs = l.documents || [];
-        const nextDocs = docs.filter(
-          (d) => d.id !== inv.id && d.url !== inv.url
-        );
-        if (nextDocs.length === docs.length) return l;
-        return { ...l, documents: nextDocs };
-      });
-      const changed = updated.some((l, i) => l !== leads[i]);
-      if (changed) persistLeads(updated);
-    }
-
-    // Purge Storage object for durable PDFs
-    if (supabaseEnabled && supabase && inv.url) {
-      try {
-        const marker = '/lead-docs/';
-        const idx = inv.url.indexOf(marker);
-        if (idx >= 0) {
-          const objectPath = decodeURIComponent(
-            inv.url.slice(idx + marker.length).split('?')[0]
-          );
-          void supabase.storage.from('lead-docs').remove([objectPath]);
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-
-    showToast('Invoice removed');
-  };
 
   const mitigationPersonalBrand = () => userCompany.trim() || '';
 
@@ -5903,24 +5883,6 @@ export default function SummitApp() {
     }
   };
 
-  /**
-   * New invoice: always tied to a lead (same idea as estimates).
-   * Only skip the picker when the lead profile is currently open.
-   */
-  const startNewInvoice = () => {
-    setDocAddMenuOpen(false);
-    setShowProfessionalEstimate(false);
-    setShowMeasureAddressModal(false);
-    if (isEditingLead && currentLeadId != null) {
-      openMitigationWorkspace('personal', currentLeadId);
-      return;
-    }
-    // No open lead profile → force lead picker (never open blank invoice)
-    setInvoicePickerMode(true);
-    setEstimatePickerQuery('');
-    setShowEstimatePicker(true);
-  };
-
   // Flatten stored company logo onto white for PDF drawing (fixes PNG alpha → black).
   useEffect(() => {
     const src = (companySettings.logoDataUrl || '').trim();
@@ -6030,7 +5992,8 @@ export default function SummitApp() {
 
   const openSystemDoc = (
     id: 'takeoff' | 'pricing',
-    origin: 'hub' | 'lead' = 'lead'
+    origin: 'hub' | 'lead' = 'lead',
+    opts?: { blank?: boolean }
   ) => {
     setDocAddMenuOpen(false);
     try {
@@ -6052,7 +6015,7 @@ export default function SummitApp() {
       }
     }
     if (id === 'takeoff') {
-      if (origin === 'hub') {
+      if (origin === 'hub' || opts?.blank) {
         setTakeoffForm(emptyTakeoff());
       } else {
         const lead =
@@ -6080,6 +6043,7 @@ export default function SummitApp() {
       raw === 'estimator' ? 'documents' : raw;
     setSystemDocOrigin('lead');
     setSystemDocWorkspace(null);
+    docAddSaveFolderRef.current = null;
     setTakeoffAssignOpen(false);
     setShowMitigationInvoice(false);
     setShowMitigationPreview(false);
@@ -6089,6 +6053,7 @@ export default function SummitApp() {
     setActiveTarpGroupId(null);
     setEmergencyDraft(null);
     setEmergencyPreview(false);
+    setMitigationAgreementPair(false);
     try {
       sessionStorage.removeItem('summitMitigationWorkspace');
     } catch {
@@ -6175,6 +6140,7 @@ export default function SummitApp() {
     setDocAddMenuOpen(false);
     setInvoicePickerMode(false);
     setShowEstimatePicker(false);
+    setMitigationAgreementPair(false);
   };
 
   const openEmergencyAgreement = (fromLeadId?: number | null) => {
@@ -6379,18 +6345,23 @@ export default function SummitApp() {
   const generateEmergencyAgreementPdf = async (opts?: {
     download?: boolean;
     save?: boolean;
-  }) => {
-    if (!emergencyDraft) {
+    asFile?: boolean;
+    draft?: EmergencyAgreementDraft;
+  }): Promise<File | void> => {
+    const d = opts?.draft || emergencyDraft;
+    if (!d) {
       showToast('Open the agreement first');
       return;
     }
-    const d = emergencyDraft;
     const entity: MitigationEntity = d.entity || 'roslie';
-    const wantDownload = opts?.download !== false && opts?.save !== true
-      ? true
-      : opts?.download === true;
-    const wantSave = opts?.save === true;
-    const doDownload = opts == null ? true : wantDownload;
+    const asFile = opts?.asFile === true;
+    const wantDownload =
+      !asFile &&
+      (opts?.download !== false && opts?.save !== true
+        ? true
+        : opts?.download === true);
+    const wantSave = !asFile && opts?.save === true;
+    const doDownload = !asFile && (opts == null ? true : wantDownload);
 
     // Twin of generateMitigationPdf: letter, same margins / header / footer pattern
     const doc = new jsPDF({ unit: 'mm', format: 'letter' });
@@ -6728,6 +6699,10 @@ export default function SummitApp() {
     const fileName = `Mitigation_Service_Agreement_${safeName}.pdf`;
     const blob = doc.output('blob');
 
+    if (asFile) {
+      return new File([blob], fileName, { type: 'application/pdf' });
+    }
+
     if (doDownload) {
       doc.save(fileName);
       if (!wantSave) showToast('Mitigation Service Agreement PDF downloaded');
@@ -6753,6 +6728,90 @@ export default function SummitApp() {
         return;
       }
       const folderKey = lead.supabaseId?.trim() || String(leadIdAtSave);
+      const stamp = new Date().toISOString();
+      const pairInvoice = mitigationAgreementPair;
+      const agreementFolder = pairInvoice
+        ? 'contracts'
+        : docAddSaveFolderRef.current || 'contracts';
+
+      let nextDocs = lead.documents || [];
+      let invoiceIndex: AppInvoice | null = null;
+
+      if (pairInvoice && mitigationDraft) {
+        const invoiceFile = generateMitigationPdf({
+          download: false,
+          asFile: true,
+        });
+        if (invoiceFile) {
+          const invId = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+          const invPath = `${folderKey}/invoices/${invId}-${invoiceFile.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+          const { error: invErr } = await supabase.storage
+            .from('lead-docs')
+            .upload(invPath, invoiceFile, {
+              cacheControl: '3600',
+              upsert: false,
+              contentType: 'application/pdf',
+            });
+          if (invErr) {
+            console.error(invErr);
+            showToast('Invoice cloud save failed — downloading instead');
+            invoiceFile.arrayBuffer().then((buf) => {
+              const fallback = new File([buf], invoiceFile.name, {
+                type: 'application/pdf',
+              });
+              const url = URL.createObjectURL(fallback);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = invoiceFile.name;
+              a.click();
+            });
+          } else {
+            const { data: invPub } = supabase.storage
+              .from('lead-docs')
+              .getPublicUrl(invPath);
+            const invoiceDoc: LeadDocument = {
+              id: invId,
+              name: invoiceFile.name,
+              url: invPub.publicUrl,
+              size: invoiceFile.size,
+              mimeType: 'application/pdf',
+              createdAt: stamp,
+              createdAtMs: Date.now(),
+              folder: 'invoices',
+            };
+            nextDocs = prependLeadDocuments(nextDocs, [invoiceDoc], 'invoices');
+            const listSell = (mitigationDraft.lines || []).reduce(
+              (s, ln) => s + (Number(ln.amount) || 0),
+              0
+            );
+            const negotiated =
+              mitigationDraft.negotiatedTotal != null &&
+              Number.isFinite(Number(mitigationDraft.negotiatedTotal))
+                ? Number(mitigationDraft.negotiatedTotal)
+                : listSell;
+            invoiceIndex = {
+              id: invId,
+              createdAt: stamp,
+              title: mitigationInvoiceTitle(mitigationDraft.entity),
+              entity: mitigationDraft.entity,
+              rateMode: mitigationDraft.rateMode || 'insurance',
+              leadId: leadIdAtSave,
+              leadLabel:
+                [lead.clientFirstName, lead.clientLastName]
+                  .filter(Boolean)
+                  .join(' ') ||
+                lead.jobNumber ||
+                'Lead',
+              job: mitigationDraft.job || '',
+              claimNumber: mitigationDraft.claimNumber || '',
+              total: Math.min(listSell, Math.max(0, negotiated)),
+              fileName: invoiceFile.name,
+              url: invPub.publicUrl,
+            };
+          }
+        }
+      }
+
       const id = `esa-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
       const storagePath = `${folderKey}/agreements/${id}-${fileName}`;
       const { error: upErr } = await supabase.storage
@@ -6771,7 +6830,6 @@ export default function SummitApp() {
       const { data: pub } = supabase.storage
         .from('lead-docs')
         .getPublicUrl(storagePath);
-      const stamp = new Date().toISOString();
       const docEntry: LeadDocument = {
         id,
         name: fileName,
@@ -6780,22 +6838,23 @@ export default function SummitApp() {
         mimeType: 'application/pdf',
         createdAt: stamp,
         createdAtMs: Date.now(),
-        folder: 'contracts',
+        folder: agreementFolder,
       };
+      nextDocs = prependLeadDocuments(nextDocs, [docEntry], agreementFolder);
       const updated = leads.map((l) =>
-        l.id === leadIdAtSave
-          ? {
-              ...l,
-              documents: prependLeadDocuments(
-                l.documents,
-                [docEntry],
-                'contracts'
-              ),
-            }
-          : l
+        l.id === leadIdAtSave ? { ...l, documents: nextDocs } : l
       );
       persistLeads(updated);
-      showToast('Mitigation Service Agreement saved to lead Documents');
+      if (invoiceIndex) persistAppInvoices([invoiceIndex, ...appInvoices]);
+      if (leadIdAtSave === currentLeadId) {
+        setDocFolderView(agreementFolder);
+      }
+      docAddSaveFolderRef.current = null;
+      showToast(
+        pairInvoice
+          ? 'Invoice saved to Invoices · Agreement saved to Contracts'
+          : 'Mitigation Service Agreement saved to lead Documents'
+      );
       exitLeadDocumentWorkspace({ returnTab: 'documents' });
     } catch (err) {
       console.error(err);
@@ -7161,17 +7220,23 @@ export default function SummitApp() {
     download?: boolean;
     /** Append PDF to lead Documents + Invoices index */
     save?: boolean;
-  }) => {
+    asFile?: boolean;
+  }): File | void => {
     const entity: MitigationEntity =
       opts?.entity || mitigationDraft?.entity || 'roslie';
     const d = mitigationDraft;
     const blank = opts?.blank === true;
+    const asFile = opts?.asFile === true;
     // Explicit flags from UI; blank template = download only
     // Legacy no-opts call: both download + save
     const legacyBoth =
-      !blank && opts?.download === undefined && opts?.save === undefined;
-    const wantDownload = blank || opts?.download === true || legacyBoth;
-    const wantSave = !blank && (opts?.save === true || legacyBoth);
+      !blank &&
+      !asFile &&
+      opts?.download === undefined &&
+      opts?.save === undefined;
+    const wantDownload =
+      !asFile && (blank || opts?.download === true || legacyBoth);
+    const wantSave = !asFile && !blank && (opts?.save === true || legacyBoth);
     const doc = new jsPDF({ unit: 'mm', format: 'letter' });
     const pageW = doc.internal.pageSize.getWidth();
     const pageH = doc.internal.pageSize.getHeight();
@@ -7483,6 +7548,10 @@ export default function SummitApp() {
     }.pdf`;
     const blob = doc.output('blob');
 
+    if (asFile) {
+      return new File([blob], fileName, { type: 'application/pdf' });
+    }
+
     if (wantDownload) {
       doc.save(fileName);
     }
@@ -7523,6 +7592,7 @@ export default function SummitApp() {
 
           const folderKey = lead.supabaseId?.trim() || String(leadIdAtSave);
           const id = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+          const saveFolder = docAddSaveFolderRef.current || 'invoices';
           const storagePath = `${folderKey}/invoices/${id}-${fileName}`;
           const { error: upErr } = await supabase.storage
             .from('lead-docs')
@@ -7552,7 +7622,7 @@ export default function SummitApp() {
             mimeType: 'application/pdf',
             createdAt: stamp,
             createdAtMs: Date.now(),
-            folder: 'sheets',
+            folder: saveFolder,
           };
           const updated = leads.map((l) =>
             l.id === leadIdAtSave
@@ -7561,12 +7631,14 @@ export default function SummitApp() {
                   documents: prependLeadDocuments(
                     l.documents,
                     [docEntry],
-                    'sheets'
+                    saveFolder
                   ),
                 }
               : l
           );
           persistLeads(updated);
+          if (leadIdAtSave === currentLeadId) setDocFolderView(saveFolder);
+          docAddSaveFolderRef.current = null;
 
           const inv: AppInvoice = {
             id: docEntry.id,
@@ -8061,6 +8133,8 @@ export default function SummitApp() {
    * the first client render (avoids header/nav hydration mismatches).
    */
   useEffect(() => {
+    setSessionReady(true);
+    const bootId = window.setTimeout(() => {
     let authReady = Promise.resolve();
     try {
       try {
@@ -9283,9 +9357,10 @@ export default function SummitApp() {
       );
     } catch {
       // ignore corrupt storage
-    } finally {
-      void authReady.finally(() => setSessionReady(true));
     }
+    void authReady;
+    }, 0);
+    return () => window.clearTimeout(bootId);
   }, [supabase, supabaseEnabled]);
 
   useEffect(() => {
@@ -9352,22 +9427,6 @@ export default function SummitApp() {
       /* ignore */
     }
   }, [activeTab, sessionReady]);
-
-  /** Seed Labor job from open lead when entering the Orders → Labor step. */
-  useEffect(() => {
-    if (activeTab !== 'orders' || ordersStep !== 'labor') return;
-    setLaborLeadId((prev) => {
-      if (prev != null) return prev;
-      if (
-        currentLeadId != null &&
-        leads.some((l) => l.id === currentLeadId)
-      ) {
-        return currentLeadId;
-      }
-      return null;
-    });
-    // Seeds once per Labor step visit; lead state is intentionally not a dep.
-  }, [activeTab, ordersStep]);
 
   useEffect(() => {
     if (!sessionReady) return;
@@ -11896,7 +11955,7 @@ export default function SummitApp() {
 
   /**
    * Open a lead and load a saved estimate into the lead estimator.
-   * Used from Estimates hub / picker so we never land in a dead shell.
+   * Used from the estimate picker so we never land in a dead shell.
    */
   const openLeadEstimate = (
     leadId: number,
@@ -11930,24 +11989,6 @@ export default function SummitApp() {
     setIsEditingLead(true);
     setActiveTab('leads');
     loadEstimate(estimate, { leadId: lead.id });
-  };
-
-  /** Open lead profile on Estimates tab (from Estimates hub “Lead” control). */
-  const openLead = (leadId: number, leadOverride?: Lead, tab?: ProfileTab) => {
-    const lead = leadOverride ?? leads.find((l) => l.id === leadId);
-    if (!lead) {
-      showToast('Lead not found');
-      return;
-    }
-    setShowEstimatePicker(false);
-    setShowProfessionalEstimate(false);
-    setShowMeasureAddressModal(false);
-    setHubReport(null);
-    setDocFolderView(null);
-    applyLeadFields(lead);
-    setProfileTab(tab ?? 'overview');
-    setIsEditingLead(true);
-    setActiveTab('leads');
   };
 
   const loadEstimate = (estimate: Estimate, opts?: { leadId?: number }) => {
@@ -12113,7 +12154,7 @@ export default function SummitApp() {
     showToast('Estimate loaded');
   };
 
-  // Close header menus / mobile drawer when clicking outside or Escape
+  // Close header menus / phone sheet when clicking outside or Escape
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
       const el = e.target as HTMLElement;
@@ -12162,7 +12203,7 @@ export default function SummitApp() {
     };
   }, []);
 
-  // Lock body scroll while mobile sidebar is open
+  // Lock body scroll while the phone nav sheet is open
   useEffect(() => {
     if (!sidebarOpen) return;
     const prev = document.body.style.overflow;
@@ -12183,7 +12224,7 @@ export default function SummitApp() {
     }
   }, []);
 
-  // iPad (768+) gets the icon rail; laptop (1024+) may expand. Close the phone drawer
+  // iPad (768+) gets the icon rail; laptop (1024+) may expand. Close the phone sheet
   // as soon as the rail is available so rotate/resize doesn't leave it stuck open.
   useLayoutEffect(() => {
     const laptop = window.matchMedia('(min-width: 1024px)');
@@ -12198,6 +12239,53 @@ export default function SummitApp() {
     return () => {
       laptop.removeEventListener('change', sync);
       tablet.removeEventListener('change', sync);
+    };
+  }, []);
+
+  // Phone: left-edge swipe is Back (same stack as the in-app Back buttons).
+  useEffect(() => {
+    const phone = window.matchMedia('(max-width: 767px)');
+    let startX = 0;
+    let startY = 0;
+    let tracking = false;
+    const onStart = (e: TouchEvent) => {
+      if (!phone.matches) return;
+      const t = e.touches[0];
+      if (!t || t.clientX > 28) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      tracking = true;
+      startX = t.clientX;
+      startY = t.clientY;
+    };
+    const onMove = (e: TouchEvent) => {
+      if (!tracking) return;
+      const t = e.touches[0];
+      if (!t) return;
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      if (dx > 12 && Math.abs(dx) > Math.abs(dy)) {
+        e.preventDefault();
+      }
+    };
+    const onEnd = (e: TouchEvent) => {
+      if (!tracking) return;
+      tracking = false;
+      const t = e.changedTouches[0];
+      if (!t) return;
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      if (dx > 64 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+        phoneBackRef.current();
+      }
+    };
+    document.addEventListener('touchstart', onStart, { passive: true });
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('touchend', onEnd, { passive: true });
+    return () => {
+      document.removeEventListener('touchstart', onStart);
+      document.removeEventListener('touchmove', onMove);
+      document.removeEventListener('touchend', onEnd);
     };
   }, []);
 
@@ -15362,6 +15450,40 @@ export default function SummitApp() {
     setPhotoReportOpen(true);
   };
 
+  const openLeadDocAdd = () => {
+    setDocAddKind(null);
+    setDocAddStep('type');
+    setDocAddMenuOpen(true);
+  };
+
+  const openCompanyDocumentEditor = (
+    id: CompanyLeadDocId,
+    folder: LeadDocFolder
+  ) => {
+    setDocAddMenuOpen(false);
+    docAddSaveFolderRef.current = folder;
+    if (id === 'takeoff') {
+      openSystemDoc('takeoff', 'lead', { blank: true });
+      return;
+    }
+    if (id === 'mitigation') {
+      openMitigationWorkspace('personal', currentLeadId);
+      return;
+    }
+    openEmergencyAgreement(currentLeadId);
+  };
+
+  const finishLeadDocAdd = (folder: LeadDocFolder) => {
+    if (docAddKind === 'computer' || docAddKind == null) {
+      pendingDocFolderRef.current = folder;
+      setDocUploadFolder(folder);
+      setDocAddMenuOpen(false);
+      window.setTimeout(() => docInputRef.current?.click(), 50);
+      return;
+    }
+    openCompanyDocumentEditor(docAddKind, folder);
+  };
+
   const togglePhotoInReport = (photoId: string) => {
     setPhotoReportSelected((prev) =>
       prev.includes(photoId) ? prev.filter((id) => id !== photoId) : [...prev, photoId]
@@ -16767,8 +16889,9 @@ export default function SummitApp() {
   const generateTakeoffPdf = (opts?: {
     download?: boolean;
     asFile?: boolean;
+    sheet?: TakeoffSheet;
   }): File | null => {
-    const snapshot = normalizeTakeoff(takeoffForm);
+    const snapshot = normalizeTakeoff(opts?.sheet ?? takeoffForm);
     const lead =
       currentLeadId != null
         ? leads.find((l) => l.id === currentLeadId)
@@ -16900,8 +17023,10 @@ export default function SummitApp() {
 
     if (alsoDocument) {
       const file = generateTakeoffPdf({ download: false, asFile: true });
+      const folder = docAddSaveFolderRef.current || 'takeoff';
+      docAddSaveFolderRef.current = null;
       if (file) {
-        void handleDocFiles([file], 'takeoff');
+        void handleDocFiles([file], folder);
       }
       showToast('Take-off saved + added to Documents');
     } else {
@@ -18273,12 +18398,8 @@ export default function SummitApp() {
     icon:
       | 'home'
       | 'jobs'
-      | 'estimates'
-      | 'invoices'
       | 'calendar'
       | 'tasks'
-      | 'performance'
-      | 'orders'
       | 'tools'
       | 'documents'
       | 'settings';
@@ -18287,20 +18408,78 @@ export default function SummitApp() {
   const sidebarPrimary: SidebarItem[] = [
     { tab: 'home', label: 'Home', icon: 'home' },
     { tab: 'leads', label: 'Pipeline', icon: 'jobs' },
-    { tab: 'estimates', label: 'Estimates', icon: 'estimates' },
-    { tab: 'invoices', label: 'Invoices', icon: 'invoices' },
     { tab: 'calendar', label: 'Calendar', icon: 'calendar' },
     { tab: 'tasks', label: 'Tasks', icon: 'tasks' },
-    { tab: 'performance', label: 'Performance', icon: 'performance' },
-    { tab: 'orders', label: 'Orders', icon: 'orders' },
     { tab: 'tools', label: 'Tools', icon: 'tools' },
+    { tab: 'documents', label: 'Documents', icon: 'documents' },
+  ];
+  const phoneTabBar: SidebarItem[] = [
+    { tab: 'home', label: 'Home', icon: 'home' },
+    { tab: 'leads', label: 'Pipeline', icon: 'jobs' },
+    { tab: 'calendar', label: 'Calendar', icon: 'calendar' },
+    { tab: 'tasks', label: 'Tasks', icon: 'tasks' },
+    { tab: 'tools', label: 'Tools', icon: 'tools' },
+  ];
+  const phoneTabSheet: SidebarItem[] = [
     { tab: 'documents', label: 'Documents', icon: 'documents' },
   ];
 
   const isSidebarTabActive = (tab: AppTab) =>
     !showProfessionalEstimate &&
     (activeTab === tab ||
-      (tab === 'leads' && isEditingLead && currentLeadId != null));
+      (tab === 'leads' && isEditingLead && currentLeadId != null) ||
+      (tab === 'tools' && (activeTab === 'canvassing' || activeTab === 'weather')));
+
+  const goPhoneBack = () => {
+    if (sidebarOpen) {
+      setSidebarOpen(false);
+      return true;
+    }
+    if (showUserMenu) {
+      setShowUserMenu(false);
+      return true;
+    }
+    if (headerSearch) {
+      setHeaderSearch('');
+      return true;
+    }
+    if (measurementPdfUrl) {
+      setMeasurementPdfUrl(null);
+      setMeasurementPdfName('');
+      return true;
+    }
+    if (lightboxPhoto) {
+      setLightboxPhoto(null);
+      return true;
+    }
+    if (showEstimatePicker) {
+      setShowEstimatePicker(false);
+      setInvoicePickerMode(false);
+      return true;
+    }
+    if (showProfessionalEstimate) {
+      setShowProfessionalEstimate(false);
+      return true;
+    }
+    if (systemDocWorkspace) {
+      exitLeadDocumentWorkspace();
+      return true;
+    }
+    if (isEditingLead && profileTab === 'estimator') {
+      leaveEstimator({ returnToLead: true });
+      return true;
+    }
+    if (isEditingLead) {
+      closeLeadProfile();
+      return true;
+    }
+    if (activeTab === 'canvassing' || activeTab === 'weather') {
+      openNavTab('tools');
+      return true;
+    }
+    return false;
+  };
+  phoneBackRef.current = goPhoneBack;
 
   const SidebarIcon = ({
     icon,
@@ -18333,20 +18512,6 @@ export default function SummitApp() {
             <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
           </svg>
         );
-      case 'estimates':
-        return (
-          <svg {...common}>
-            <path d="M8 6h11M8 12h11M8 18h7" />
-            <path d="M4 6h.01M4 12h.01M4 18h.01" />
-          </svg>
-        );
-      case 'invoices':
-        return (
-          <svg {...common}>
-            <path d="M6 3h9l3 3v15a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" />
-            <path d="M15 3v4h4M8 12h8M8 16h6M8 8h3" />
-          </svg>
-        );
       case 'calendar':
         return (
           <svg {...common}>
@@ -18359,19 +18524,6 @@ export default function SummitApp() {
           <svg {...common}>
             <path d="M9 11l2.5 2.5L16 9" />
             <rect x="3" y="4" width="18" height="16" rx="2" />
-          </svg>
-        );
-      case 'performance':
-        return (
-          <svg {...common}>
-            <path d="M4 19V5M10 19v-9M16 19V8M22 19H2" />
-          </svg>
-        );
-      case 'orders':
-        return (
-          <svg {...common}>
-            <path d="M6 7h12l-1 12H7L6 7Z" />
-            <path d="M9 7V5a3 3 0 0 1 6 0v2" />
           </svg>
         );
       case 'tools':
@@ -18434,7 +18586,7 @@ export default function SummitApp() {
   const sidebarRail = !isLaptopNav || sidebarCollapsed;
 
   /** Document workspaces sit beside the sidebar and below the app header. */
-  const documentWorkspaceClass = `fixed top-[var(--header-h)] bottom-0 right-0 z-[35] bg-zinc-50 overflow-y-auto overflow-x-hidden transition-[left] duration-200 ease-out left-0 md:left-[4.25rem] ${
+  const documentWorkspaceClass = `fixed top-[var(--header-h)] bottom-0 max-md:bottom-[calc(3.75rem+env(safe-area-inset-bottom,0px))] right-0 z-[35] bg-zinc-50 overflow-y-auto overflow-x-hidden transition-[left] duration-200 ease-out left-0 md:left-[4.25rem] ${
     sidebarRail ? 'lg:left-[4.25rem]' : 'lg:left-[15.5rem]'
   }`;
 
@@ -18516,59 +18668,131 @@ export default function SummitApp() {
           {renderSidebarNav(undefined, { collapsed: sidebarRail })}
         </div>
       </aside>
-
-      {/* Phone drawer */}
-      {sidebarOpen && (
-        <div className="md:hidden fixed inset-0 z-[60]" role="dialog" aria-modal="true">
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/40"
-            aria-label="Close menu"
-            onClick={() => {
-              setSidebarOpen(false);
-            }}
-          />
-          <aside
-            className="menu-panel safe-left app-header-safe-top absolute inset-y-0 left-0 w-[17rem] max-w-[85vw] flex flex-col rounded-none border-y-0 border-l-0 animate-[page-fade-in_0.18s_ease-out]"
-            data-app-sidebar
-          >
-            <div className="h-14 flex items-center justify-between gap-2 px-3 border-b border-zinc-200">
-              <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                {renderAppMark({ size: 'md' })}
-                <span className="font-semibold text-zinc-900 truncate">
-                  {appDisplayName()}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setSidebarOpen(false);
-                }}
-                className="shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-zinc-600 hover:bg-black/[0.05]"
-                aria-label="Close menu"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.75"
-                  viewBox="0 0 24 24"
-                  aria-hidden
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M18 6 6 18" />
-                </svg>
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              {renderSidebarNav(() => setSidebarOpen(false))}
-            </div>
-          </aside>
-        </div>
-      )}
     </>
   );
 
-  /** Top bar: menu (mobile), search, user — same on every page */
+  const renderPhoneTabBar = () => (
+    <>
+      {sidebarOpen && (
+        <div
+          className="md:hidden fixed inset-x-0 top-0 z-[60]"
+          style={{ bottom: 'calc(3.75rem + env(safe-area-inset-bottom, 0px))' }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="More"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/40"
+            aria-label="Close"
+            onClick={() => setSidebarOpen(false)}
+          />
+          <div
+            className="menu-panel absolute inset-x-0 bottom-0 rounded-t-[2rem] border-x-0 border-b-0 px-3 pt-2 pb-3"
+            onTouchStart={(e) => {
+              phoneTabSwipeRef.current = { y: e.touches[0]?.clientY ?? 0, swiped: false };
+            }}
+            onTouchEnd={(e) => {
+              const start = phoneTabSwipeRef.current.y;
+              const end = e.changedTouches[0]?.clientY ?? start;
+              if (end - start > 36) setSidebarOpen(false);
+            }}
+          >
+            <button
+              type="button"
+              className="flex justify-center w-full py-2"
+              aria-label="Close"
+              onClick={() => setSidebarOpen(false)}
+            >
+              <span className="block w-9 h-1 rounded-full bg-[var(--chrome)]" />
+            </button>
+            <div className="flex flex-col gap-0.5">
+              {phoneTabSheet.map((item) => {
+                const active = isSidebarTabActive(item.tab);
+                return (
+                  <button
+                    key={item.tab}
+                    type="button"
+                    aria-current={active ? 'page' : undefined}
+                    onClick={() => openNavTab(item.tab)}
+                    className={`flex items-center gap-3 w-full min-h-11 rounded-full px-3.5 py-2.5 text-sm font-medium transition-all ${
+                      active
+                        ? 'tint-blue'
+                        : 'text-zinc-600 hover:bg-black/[0.04] hover:text-zinc-900'
+                    }`}
+                  >
+                    <SidebarIcon
+                      icon={item.icon}
+                      className={`w-[18px] h-[18px] shrink-0 ${
+                        active ? 'opacity-100' : 'opacity-80'
+                      }`}
+                    />
+                    <span className="truncate">{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <nav
+        className="md:hidden fixed inset-x-0 bottom-0 z-[55] glass glass-strong safe-left pr-[env(safe-area-inset-right,0px)]"
+        aria-label="Main"
+        data-phone-tab-bar
+        onTouchStart={(e) => {
+          phoneTabSwipeRef.current = { y: e.touches[0]?.clientY ?? 0, swiped: false };
+        }}
+        onTouchEnd={(e) => {
+          const start = phoneTabSwipeRef.current.y;
+          const end = e.changedTouches[0]?.clientY ?? start;
+          if (start - end > 36) {
+            phoneTabSwipeRef.current.swiped = true;
+            setSidebarOpen(true);
+          }
+        }}
+      >
+        <button
+          type="button"
+          className="flex justify-center w-full pt-1.5 pb-0.5 min-h-6"
+          aria-label="More"
+          onClick={() => setSidebarOpen(true)}
+        >
+          <span className="block w-9 h-1 rounded-full bg-[var(--chrome)]" />
+        </button>
+        <div className="flex items-stretch px-1 pb-[env(safe-area-inset-bottom,0px)]">
+          {phoneTabBar.map((item) => {
+            const active = isSidebarTabActive(item.tab);
+            return (
+              <button
+                key={item.tab}
+                type="button"
+                aria-current={active ? 'page' : undefined}
+                onClick={() => {
+                  if (phoneTabSwipeRef.current.swiped) {
+                    phoneTabSwipeRef.current.swiped = false;
+                    return;
+                  }
+                  openNavTab(item.tab);
+                }}
+                className={`flex-1 min-h-11 min-w-0 flex flex-col items-center justify-center gap-0.5 px-1 py-1 text-xs font-medium transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-blue)] ${
+                  active ? 'text-zinc-900' : 'text-zinc-500'
+                }`}
+              >
+                <SidebarIcon
+                  icon={item.icon}
+                  className={`w-[18px] h-[18px] ${active ? 'opacity-100' : 'opacity-70'}`}
+                />
+                <span className="truncate max-w-full">{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+    </>
+  );
+
+  /** Top bar: logo (phone), search, user — same on every page */
   const renderAppHeader = () => (
     <header
       className="glass glass-strong app-header-safe-top sticky top-0 z-50 text-zinc-900"
@@ -18577,16 +18801,21 @@ export default function SummitApp() {
       <div className="h-14 sm:h-16 flex items-center gap-2 sm:gap-3 px-3 sm:px-5 lg:px-6">
         <button
           type="button"
-          className="md:hidden shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-zinc-700 hover:bg-black/[0.05]"
+          className="md:hidden flex items-center gap-2 shrink-0 min-w-0 min-h-11"
           onClick={() => {
-            setSidebarOpen(true);
+            openNavTab('home');
             setShowUserMenu(false);
           }}
-          aria-label="Open menu"
+          aria-label="Home"
         >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24">
-            <path strokeLinecap="round" d="M4 7h16M4 12h16M4 17h16" />
-          </svg>
+          {renderAppMark({
+            size: 'sm',
+            imgClassName:
+              'w-8 h-8 rounded-xl object-contain border border-[var(--glass-border)] bg-white/60',
+          })}
+          <span className="font-semibold text-sm text-zinc-900 truncate hidden sm:inline">
+            {appDisplayName()}
+          </span>
         </button>
 
         {/* Laptop: expand rail when collapsed (sidebar logo also expands) */}
@@ -18610,17 +18839,6 @@ export default function SummitApp() {
             </svg>
           </button>
         )}
-
-        <div className="md:hidden flex items-center gap-2 shrink-0 min-w-0">
-          {renderAppMark({
-            size: 'sm',
-            imgClassName:
-              'w-8 h-8 rounded-xl object-contain border border-[var(--glass-border)] bg-white/60',
-          })}
-          <span className="font-semibold text-sm text-zinc-900 truncate hidden sm:inline">
-            {appDisplayName()}
-          </span>
-        </div>
 
         {/* Search */}
         <div
@@ -18754,10 +18972,17 @@ export default function SummitApp() {
     </header>
   );
 
-  // Wait for client storage restore so header/nav match (no hydration mismatch)
+  // First client render matches SSR (this gate). useLayoutEffect then unlocks
+  // so login can paint even if later bootstrap work hangs.
   if (!sessionReady) {
     return (
-      <div className="min-h-screen" aria-busy="true" aria-label="Loading" />
+      <div
+        className="min-h-screen flex items-center justify-center bg-zinc-100"
+        aria-busy="true"
+        aria-label="Loading"
+      >
+        <p className="text-sm font-medium text-zinc-500">Starting</p>
+      </div>
     );
   }
 
@@ -18976,22 +19201,22 @@ export default function SummitApp() {
 
   /**
    * Orders flow — order type chooser → material sections → Next → Labor
-   * (crew + job packet) → Submit/PDF. Shared by the global Orders tab and the
-   * lead-profile Orders tab. When `fixedLead` is set, the job is locked to
-   * that lead (no manual job/lead picker) and `embedded` swaps the sticky
-   * page-level chrome for the lighter card chrome used inside a lead profile.
+   * (crew + job packet) → Submit/PDF. Used by the lead-profile Orders tab.
+   * When `fixedLead` is set, the job is locked to that lead (no manual
+   * job/lead picker) and `embedded` swaps the sticky page-level chrome for
+   * the lighter card chrome used inside a lead profile.
    */
   const renderOrdersFlow = (opts: {
     orderType: MaterialOrderType | null;
-    setOrderType: typeof setMaterialOrderType;
+    setOrderType: typeof setProfileOrderType;
     orderLines: Record<string, TakeoffSkuLine[]>;
-    setOrderLines: typeof setMaterialOrderLines;
+    setOrderLines: typeof setProfileOrderLines;
     coverageInputs: Record<string, string>;
-    setCoverageInputs: typeof setMaterialOrderCoverageInputs;
+    setCoverageInputs: typeof setProfileOrderCoverageInputs;
     step: OrdersStep;
-    setStep: typeof setOrdersStep;
+    setStep: typeof setProfileOrdersStep;
     filledFrom: string | null;
-    setFilledFrom: typeof setOrderFilledFrom;
+    setFilledFrom: typeof setProfileOrderFilledFrom;
     fixedLead?: Lead | null;
     embedded?: boolean;
   }) => {
@@ -20716,11 +20941,8 @@ export default function SummitApp() {
                   <button
                     type="button"
                     onClick={() => {
-                      // Keep mitigation draft; seed agreement from invoice lines/total
+                      setMitigationAgreementPair(true);
                       openEmergencyAgreement(currentLeadId);
-                      showToast(
-                        'Agreement prefilled from invoice — save invoice PDF and agreement as separate files'
-                      );
                     }}
                     className="w-full py-4 rounded-3xl font-semibold text-lg border-2 border-[var(--accent-blue)] text-[var(--accent-blue-ink)] bg-[var(--accent-blue-soft)] hover:bg-[var(--accent-blue-soft)]"
                   >
@@ -22082,9 +22304,10 @@ export default function SummitApp() {
         </div>
       )}
       {renderAppSidebar()}
+      {renderPhoneTabBar()}
       {/* Main column offset for fixed desktop sidebar */}
       <div
-        className={`min-h-dvh pb-8 flex flex-col min-w-0 overflow-x-clip transition-[padding] duration-200 ease-out md:pl-[4.25rem] ${
+        className={`min-h-dvh pb-8 max-md:pb-[calc(2rem+3.75rem+env(safe-area-inset-bottom,0px))] flex flex-col min-w-0 overflow-x-clip transition-[padding] duration-200 ease-out md:pl-[4.25rem] ${
           sidebarRail ? 'lg:pl-[4.25rem]' : 'lg:pl-[15.5rem]'
         }`}
       >
@@ -23664,7 +23887,7 @@ export default function SummitApp() {
                     }
                     className="btn-primary w-full py-4 rounded-3xl font-semibold text-lg"
                   >
-                    Save agreement PDF to lead
+                    Save to lead
                   </button>
                 </div>
               </div>
@@ -23695,34 +23918,39 @@ export default function SummitApp() {
               dashClass: styles.dash,
             };
           });
-          const totalPipelineValue = stageStats.reduce((sum, s) => sum + s.value, 0);
-
-          const mostRecentLead =
-            leads.length > 0 ? [...leads].sort((a, b) => b.id - a.id)[0] : null;
-          const recentLead = mostRecentLead
+          const lastOpened =
+            currentLeadId != null
+              ? leads.find((l) => l.id === currentLeadId)
+              : undefined;
+          const fallbackNewest =
+            leads.length > 0
+              ? [...leads].sort((a, b) => b.id - a.id)[0]
+              : null;
+          const resumeLead = lastOpened ?? fallbackNewest ?? null;
+          const recentLead = resumeLead
             ? {
-                id: mostRecentLead.id,
+                id: resumeLead.id,
                 name: leadDisplayFromParts(
-                  mostRecentLead.clientFirstName,
-                  mostRecentLead.clientLastName
+                  resumeLead.clientFirstName,
+                  resumeLead.clientLastName
                 ),
-                address: mostRecentLead.clientAddress || '',
-                jobNumber: mostRecentLead.jobNumber || '',
-                stageLabel: normalizePipelineStage(mostRecentLead.category),
+                address: resumeLead.clientAddress || '',
+                jobNumber: resumeLead.jobNumber || '',
+                stageLabel: normalizePipelineStage(resumeLead.category),
                 stageBadgeClass:
-                  PIPELINE_STAGE_STYLES[normalizePipelineStage(mostRecentLead.category)]
+                  PIPELINE_STAGE_STYLES[normalizePipelineStage(resumeLead.category)]
                     .badge,
               }
             : null;
+          const { pipelineValue } = pipelineValueRollup(leads);
 
           return (
             <HomeDashboard
               greeting={greeting}
               firstName={firstName}
               stageStats={stageStats}
-              totalPipelineValue={totalPipelineValue}
               totalActiveLeads={leads.length}
-              estimatesCount={allEstimates().length}
+              pipelineValue={pipelineValue}
               recentLead={recentLead}
               calendarEvents={calendarEvents}
               gcalConnected={gcalConnected}
@@ -23733,6 +23961,11 @@ export default function SummitApp() {
                 handleTabChange('leads');
               }}
               onCreateLead={() => createNewLead()}
+              onOpenPipeline={() => {
+                setPipelineFilter(null);
+                setLeadsView('active');
+                handleTabChange('leads');
+              }}
               onOpenCalendar={() => handleTabChange('calendar')}
               onOpenTasks={() => handleTabChange('tasks')}
               onOpenLead={(id) => openLeadProfile(id)}
@@ -23742,261 +23975,17 @@ export default function SummitApp() {
           );
         })()}
 
-
-
-
-
-        {activeTab === 'invoices' && (() => {
-              const activeLeadIds = new Set(leads.map((l) => l.id));
-              // Hide invoices whose lead is trashed/gone; they return when the lead is restored
-              const visibleInvoices = appInvoices.filter(
-                (inv) =>
-                  inv.leadId == null || activeLeadIds.has(inv.leadId)
-              );
-              return (
-          <div className="page-shell page-fade pb-8 w-full">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
-              <div>
-                <h1 className="page-title">
-                  Invoices
-                </h1>
-              </div>
-              <button
-                type="button"
-                onClick={() => startNewInvoice()}
-                className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold"
-              >
-                New invoice
-              </button>
-            </div>
-
-            {visibleInvoices.length === 0 ? (
-              <div className="py-12">
-                <p className="text-sm font-medium text-zinc-800">No invoices yet</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {visibleInvoices.map((inv) => (
-                  <div
-                    key={inv.id}
-                    role="button"
-                    tabIndex={0}
-                    className="list-row row-in cursor-pointer"
-                    onClick={() => {
-                      if (inv.leadId == null) return;
-                      setCurrentLeadId(inv.leadId);
-                      setIsEditingLead(true);
-                      setProfileTab('documents');
-                      setActiveTab('leads');
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key !== 'Enter' && e.key !== ' ') return;
-                      e.preventDefault();
-                      if (inv.leadId == null) return;
-                      setCurrentLeadId(inv.leadId);
-                      setIsEditingLead(true);
-                      setProfileTab('documents');
-                      setActiveTab('leads');
-                    }}
-                  >
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                      <div className="text-left min-w-0 flex-1">
-                        <div className="font-semibold text-zinc-900 truncate">
-                          {inv.leadLabel || 'Unknown lead'}
-                        </div>
-                        <div className="text-sm text-zinc-500 mt-0.5 truncate">
-                          {new Date(inv.createdAt).toLocaleDateString()}
-                          {inv.job ? ` · ${inv.job}` : ''}
-                          {inv.title ? ` · ${inv.title}` : ''}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3 shrink-0">
-                        <div className="text-xl font-semibold tabular-nums text-[var(--accent-green)]">
-                          $
-                          {Number(inv.total).toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </div>
-                        <a
-                          href={inv.url}
-                          download={inv.fileName}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="btn-primary px-3 py-1.5 text-xs font-semibold rounded-lg no-underline"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          Download
-                        </a>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            removeAppInvoice(inv.id);
-                          }}
-                          className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-              );
-            })()}
-
-        {activeTab === 'estimates' && (() => {
-          const items = allEstimates();
-          return (
-            <div className="page-shell page-fade pb-8 w-full">
-              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-8">
-                <div>
-                  <h1 className="page-title">
-                    Estimates
-                  </h1>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => openEstimatePicker('estimate')}
-                  className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold"
-                >
-                  New estimate
-                </button>
-              </div>
-
-              {items.length === 0 ? (
-                <div className="py-12">
-                  <p className="text-sm font-medium text-zinc-800">No estimates yet</p>
-                  <div className="mt-6 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => openEstimatePicker('estimate')}
-                      className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold"
-                    >
-                      New estimate
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleTabChange('leads')}
-                      className="px-5 py-2.5 rounded-2xl text-sm font-medium border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
-                    >
-                      Go to jobs
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {items.map(({ lead, estimate, leadName, estimateIndex }) => {
-                    const addr = [
-                      lead.clientAddress,
-                      lead.clientCity,
-                      lead.clientState,
-                    ]
-                      .filter(Boolean)
-                      .join(', ');
-                    const total =
-                      estimate.negotiatedPrice || estimate.total || 0;
-                    return (
-                      <div
-                        key={`${lead.id}-${estimate.supabaseId || estimate.id}-${estimateIndex}`}
-                        className="glass list-card glass-hover row-in"
-                      >
-                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                          <button
-                            type="button"
-                            className="text-left min-w-0 flex-1"
-                            onClick={() =>
-                              openLeadEstimate(lead.id, estimate, lead)
-                            }
-                          >
-                            <div className="font-semibold text-zinc-900 truncate">
-                              {leadName}
-                            </div>
-                            <div className="text-sm text-zinc-500 mt-0.5 truncate">
-                              {estimate.date}
-                              {estimate.selectedShingle
-                                ? ` · ${estimate.selectedShingle}`
-                                : ''}
-                              {estimate.squares
-                                ? ` · ${estimate.squares} sq`
-                                : ''}
-                              {addr ? ` · ${addr}` : ''}
-                            </div>
-                          </button>
-                          <div className="flex items-center gap-3 shrink-0">
-                            <div className="text-xl font-semibold tabular-nums text-[var(--accent-green)]">
-                              ${total.toLocaleString()}
-                            </div>
-                            {estimate.pdfUrl ? (
-                              <a
-                                href={estimate.pdfUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
-                              >
-                                PDF
-                              </a>
-                            ) : null}
-                            <button
-                              type="button"
-                              onClick={() =>
-                                openLeadEstimate(lead.id, estimate, lead)
-                              }
-                              className="btn-primary px-3 py-1.5 text-xs font-semibold rounded-lg"
-                            >
-                              Open
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                openLead(lead.id, lead, 'estimates')
-                              }
-                              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-zinc-200 text-zinc-700 hover:bg-zinc-50"
-                            >
-                              Lead
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })()}
-
         {activeTab === 'documents' && (
-          <div className="page-shell page-fade">
-            <h1 className="page-title mb-8">
-              Documents
-            </h1>
-            <div>
-              {SYSTEM_DOCUMENTS.map((doc) => (
-                <button
-                  key={doc.id}
-                  type="button"
-                  onClick={() => {
-                    if (doc.id === 'mitigation') {
-                      startNewInvoice();
-                      return;
-                    }
-                    if (doc.id === 'emergency') {
-                      openEmergencyAgreement(
-                        isEditingLead ? currentLeadId : null
-                      );
-                      return;
-                    }
-                    openSystemDoc(doc.id, 'hub');
-                  }}
-                  className="list-row font-semibold text-zinc-900"
-                >
-                  {doc.name}
-                </button>
-              ))}
+          <div className="page-shell page-fade pb-8 w-full flex flex-col min-h-[calc(100dvh-var(--header-h)-10rem)]">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shrink-0">
+              <h1 className="page-title">
+                Documents
+              </h1>
+            </div>
+            <div className="flex-1 flex items-center justify-center">
+              <p className="text-sm font-medium text-zinc-800 text-center">
+                No documents yet
+              </p>
             </div>
           </div>
         )}
@@ -24282,7 +24271,7 @@ export default function SummitApp() {
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div>
                   <h1 className="page-title">
-                    {appDisplayName()} Calendar
+                    Calendar
                   </h1>
                   {gcalEmail ? (
                     <p className="text-zinc-500 mt-1 text-sm">{gcalEmail}</p>
@@ -25001,7 +24990,7 @@ export default function SummitApp() {
             return (
               <div className="page-shell page-fade space-y-4">
                 <h1 className="page-title">
-                  {appDisplayName()} Calendar
+                  Calendar
                 </h1>
                 <p className="text-sm text-zinc-600">
                   Calendar hit a bad event payload and recovered. Sync again or
@@ -25527,137 +25516,51 @@ export default function SummitApp() {
           }
         })()}
 
-        {activeTab === 'performance' && (() => {
+        {activeTab === 'leads' && (() => {
           const estimates = allEstimates();
-          const pipelineValue = estimates.reduce(
-            (sum, { estimate }) =>
-              sum + (estimate.negotiatedPrice || estimate.total || 0),
-            0
-          );
+          const stageValue = Object.fromEntries(
+            PIPELINE_STAGES.map((stage) => [
+              stage,
+              leads
+                .filter((l) => normalizePipelineStage(l.category) === stage)
+                .reduce((sum, l) => sum + leadEstimateValue(l), 0),
+            ])
+          ) as Record<PipelineStage, number>;
+          const { pipelineValue, valuedCount } = pipelineValueRollup(leads);
           const avgDeal =
-            estimates.length > 0
-              ? Math.round(pipelineValue / estimates.length)
-              : 0;
+            valuedCount > 0 ? Math.round(pipelineValue / valuedCount) : 0;
           const closedCount = leads.filter(
             (l) => normalizePipelineStage(l.category) === 'Closed'
           ).length;
-          const stageCounts = PIPELINE_STAGES.map((stage) => ({
-            stage,
-            count: leads.filter(
-              (l) => normalizePipelineStage(l.category) === stage
-            ).length,
-            styles: PIPELINE_STAGE_STYLES[stage],
-          }));
-          const maxStage = Math.max(1, ...stageCounts.map((s) => s.count));
 
           return (
             <div className="page-shell page-fade">
-              <div className="mb-8">
-                <h1 className="page-title">
-                  Performance
-                </h1>
-              </div>
-
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-6 mb-10">
-                <div>
-                  <div className="text-[11px] uppercase tracking-wide text-zinc-400 font-medium">
-                    Active jobs
-                  </div>
-                  <div className="text-3xl font-semibold tabular-nums text-zinc-900 mt-1">
-                    {leads.length}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[11px] uppercase tracking-wide text-zinc-400 font-medium">
-                    Estimates
-                  </div>
-                  <div className="text-3xl font-semibold tabular-nums text-zinc-900 mt-1">
-                    {estimates.length}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[11px] uppercase tracking-wide text-zinc-400 font-medium">
-                    Pipeline value
-                  </div>
-                  <div className="text-3xl font-semibold tabular-nums text-[var(--accent-green)] mt-1">
-                    ${pipelineValue.toLocaleString()}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[11px] uppercase tracking-wide text-zinc-400 font-medium">
-                    Avg estimate
-                  </div>
-                  <div className="text-3xl font-semibold tabular-nums text-[var(--accent-green)] mt-1">
-                    ${avgDeal.toLocaleString()}
-                  </div>
-                  {closedCount > 0 && (
-                    <div className="text-xs text-zinc-500 mt-1">
-                      {closedCount} closed
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <section>
-                <h2 className="text-lg font-semibold text-zinc-900 mb-6">
-                  Pipeline by stage
-                </h2>
-                <div className="space-y-4">
-                  {stageCounts.map(({ stage, count, styles }) => (
-                    <button
-                      key={stage}
-                      type="button"
-                      onClick={() => {
-                        setPipelineFilter(stage);
-                        setLeadsView('active');
-                        handleTabChange('leads');
-                      }}
-                      className="w-full text-left group"
-                    >
-                      <div className="flex items-center justify-between gap-3 mb-1.5">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span
-                            className={`w-2.5 h-2.5 rounded-full shrink-0 ${styles.dash}`}
-                            aria-hidden
-                          />
-                          <span className="text-sm font-medium text-zinc-800 group-hover:text-zinc-950">
-                            {stage}
-                          </span>
-                        </div>
-                        <span className="text-sm font-semibold tabular-nums text-zinc-900">
-                          {count}
-                        </span>
-                      </div>
-                      <div className="h-2 rounded-full bg-zinc-100 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all ${styles.dash}`}
-                          style={{
-                            width: `${Math.max(count > 0 ? 8 : 0, (count / maxStage) * 100)}%`,
-                            opacity: count > 0 ? 0.85 : 0,
-                          }}
-                        />
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </section>
+              <PipelineBoard
+                leads={leads}
+                trash={trash}
+                leadsView={leadsView}
+                pipelineFilter={pipelineFilter}
+                rollup={{
+                  estimatesCount: estimates.length,
+                  pipelineValue,
+                  avgEstimate: avgDeal,
+                  closedCount,
+                  stageValue,
+                }}
+                setLeadsView={setLeadsView}
+                setPipelineFilter={setPipelineFilter}
+                onCreateLead={createNewLead}
+                onOpenLead={(id) => openLeadProfile(id)}
+                onMoveLeadToStage={moveLeadToStage}
+                onMoveToTrash={moveToTrash}
+                onEmptyTrash={emptyTrash}
+                onRestoreFromTrash={restoreFromTrash}
+                onPermanentlyDelete={permanentlyDelete}
+              />
             </div>
           );
         })()}
 
-        {activeTab === 'orders' &&
-          renderOrdersFlow({
-            orderType: materialOrderType,
-            setOrderType: setMaterialOrderType,
-            orderLines: materialOrderLines,
-            setOrderLines: setMaterialOrderLines,
-            coverageInputs: materialOrderCoverageInputs,
-            setCoverageInputs: setMaterialOrderCoverageInputs,
-            step: ordersStep,
-            setStep: setOrdersStep,
-            filledFrom: orderFilledFrom,
-            setFilledFrom: setOrderFilledFrom,
-          })}
         {activeTab === 'tools' && (
           <div className="page-shell page-fade">
             <div className="mb-8">
@@ -26196,23 +26099,6 @@ export default function SummitApp() {
 
 
 
-        {activeTab === 'leads' && (
-          <PipelineBoard
-            leads={leads}
-            trash={trash}
-            leadsView={leadsView}
-            pipelineFilter={pipelineFilter}
-            setLeadsView={setLeadsView}
-            setPipelineFilter={setPipelineFilter}
-            onCreateLead={createNewLead}
-            onOpenLead={(id) => openLeadProfile(id)}
-            onMoveLeadToStage={moveLeadToStage}
-            onMoveToTrash={moveToTrash}
-            onEmptyTrash={emptyTrash}
-            onRestoreFromTrash={restoreFromTrash}
-            onPermanentlyDelete={permanentlyDelete}
-          />
-        )}
         </>
         )}
 
@@ -30128,7 +30014,7 @@ export default function SummitApp() {
                       )}
 
                       {profileTab === 'documents' && (
-                        <section>
+                        <section className="flex flex-col min-h-[calc(100dvh-var(--header-h)-10rem)]">
                           <input
                             ref={docInputRef}
                             type="file"
@@ -30147,7 +30033,18 @@ export default function SummitApp() {
                             }}
                           />
 
-                          <div className="flex items-center justify-between gap-3 mb-4">
+                          <div
+                            className={`flex items-center justify-between gap-3 shrink-0 ${
+                              !docFolderView &&
+                              !profileDocuments.some((d) =>
+                                LEAD_DOC_FOLDERS.some(
+                                  (folder) => inferLeadDocFolder(d) === folder.id
+                                )
+                              )
+                                ? ''
+                                : 'mb-4'
+                            }`}
+                          >
                             <div className="min-w-0">
                               {docFolderView ? (
                                 <button
@@ -30169,15 +30066,7 @@ export default function SummitApp() {
                             <button
                               type="button"
                               disabled={docsUploading}
-                              onClick={() => {
-                                if (docFolderView) {
-                                  pendingDocFolderRef.current = docFolderView;
-                                  setDocUploadFolder(docFolderView);
-                                  docInputRef.current?.click();
-                                } else {
-                                  setDocAddMenuOpen(true);
-                                }
-                              }}
+                              onClick={() => openLeadDocAdd()}
                               className="inline-flex items-center justify-center btn-primary px-8 py-3 rounded-full text-sm font-semibold disabled:opacity-50 shrink-0"
                             >
                               {docsUploading ? 'Uploading…' : '+ Add'}
@@ -30191,6 +30080,9 @@ export default function SummitApp() {
                             >
                               <div
                                 className="w-full max-w-sm rounded-2xl bg-white border border-zinc-200 shadow-xl overflow-hidden"
+                                role="dialog"
+                                aria-modal="true"
+                                aria-labelledby="lead-doc-add-title"
                                 onClick={(e) => e.stopPropagation()}
                                 onKeyDown={(e) => {
                                   if (e.key === 'Escape') {
@@ -30200,8 +30092,24 @@ export default function SummitApp() {
                                 }}
                               >
                                 <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100">
-                                  <div className="text-base font-semibold text-zinc-900">
-                                    Select folder
+                                  <div className="min-w-0">
+                                    {docAddStep === 'folder' ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => setDocAddStep('type')}
+                                        className="text-sm text-zinc-500 hover:text-zinc-800 mb-1 inline-flex items-center gap-1"
+                                      >
+                                        ← Back
+                                      </button>
+                                    ) : null}
+                                    <div
+                                      id="lead-doc-add-title"
+                                      className="text-base font-semibold text-zinc-900"
+                                    >
+                                      {docAddStep === 'folder'
+                                        ? 'Select folder'
+                                        : 'Add'}
+                                    </div>
                                   </div>
                                   <button
                                     type="button"
@@ -30212,24 +30120,46 @@ export default function SummitApp() {
                                   </button>
                                 </div>
                                 <div className="p-2">
-                                  {LEAD_DOC_FOLDERS.map((folder) => (
-                                    <button
-                                      key={folder.id}
-                                      type="button"
-                                      className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
-                                      onClick={() => {
-                                        pendingDocFolderRef.current = folder.id;
-                                        setDocUploadFolder(folder.id);
-                                        setDocAddMenuOpen(false);
-                                        window.setTimeout(
-                                          () => docInputRef.current?.click(),
-                                          50
-                                        );
-                                      }}
-                                    >
-                                      {folder.label}
-                                    </button>
-                                  ))}
+                                  {docAddStep === 'type' ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
+                                        onClick={() => {
+                                          setDocAddKind('computer');
+                                          setDocAddStep('folder');
+                                        }}
+                                      >
+                                        Upload your own document
+                                      </button>
+                                      {COMPANY_LEAD_DOCUMENTS.map((doc) => (
+                                        <button
+                                          key={doc.id}
+                                          type="button"
+                                          className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
+                                          onClick={() => {
+                                            setDocAddKind(doc.id);
+                                            setDocAddStep('folder');
+                                          }}
+                                        >
+                                          {doc.name}
+                                        </button>
+                                      ))}
+                                    </>
+                                  ) : (
+                                    LEAD_DOC_FOLDERS.map((folder) => (
+                                      <button
+                                        key={folder.id}
+                                        type="button"
+                                        className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-zinc-900 hover:bg-zinc-50"
+                                        onClick={() =>
+                                          finishLeadDocAdd(folder.id)
+                                        }
+                                      >
+                                        {folder.label}
+                                      </button>
+                                    ))
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -30243,7 +30173,15 @@ export default function SummitApp() {
                                     (d) => inferLeadDocFolder(d) === folder.id
                                   )
                               );
-                              if (occupied.length === 0) return null;
+                              if (occupied.length === 0) {
+                                return (
+                                  <div className="flex-1 flex items-center justify-center">
+                                    <p className="text-sm font-medium text-zinc-800 text-center">
+                                      No documents yet
+                                    </p>
+                                  </div>
+                                );
+                              }
                               return (
                                 <div>
                                   {occupied.map((folder) => {
@@ -30281,12 +30219,7 @@ export default function SummitApp() {
                                 <button
                                   type="button"
                                   disabled={docsUploading}
-                                  onClick={() => {
-                                    if (!docFolderView) return;
-                                    pendingDocFolderRef.current = docFolderView;
-                                    setDocUploadFolder(docFolderView);
-                                    docInputRef.current?.click();
-                                  }}
+                                  onClick={() => openLeadDocAdd()}
                                   onDragOver={(e) => {
                                     e.preventDefault();
                                   }}

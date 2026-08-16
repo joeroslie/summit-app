@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import './stage-funnel.css';
 import {
   eventOccursOnDay,
   formatEventTimeLabel,
@@ -19,6 +20,7 @@ import {
   readStoredNearRadiusMiles,
   eventStyle,
   formatMagnitude,
+  newestStormReport,
   relativeTimeFrom,
   type StormReport,
   type StormReportsResponse,
@@ -77,15 +79,15 @@ type HomeDashboardProps = {
   greeting: string;
   firstName: string;
   stageStats: HomeStageStat[];
-  totalPipelineValue: number;
   totalActiveLeads: number;
-  estimatesCount: number;
+  pipelineValue: number;
   recentLead: HomeRecentLead | null;
   calendarEvents: SummitCalendarEvent[];
   gcalConnected: boolean;
   tasks: SummitTask[];
   onSelectStage: (stage: string) => void;
   onCreateLead: () => void;
+  onOpenPipeline: () => void;
   onOpenCalendar: () => void;
   onOpenTasks: () => void;
   onOpenLead: (id: number) => void;
@@ -151,11 +153,41 @@ function GlimpseCard({
 }
 
 /**
- * Quiet stage read-out — a single proportional bar (width = share of active
- * leads) plus a row of small pill chips. Replaces the old 6 equal-size mini
- * boxes: one shape communicates the whole pipeline distribution at a glance,
- * and the chips carry the exact counts without repeating the bar's job.
+ * Stage mix — proportional bar plus count chips.
+ * Desktop: one row; hover/focus swaps the chip for that stage's $.
+ * Phone: 3-col count grid, no prices.
  */
+function StageBar({
+  stageStats,
+  total,
+  className,
+}: {
+  stageStats: HomeStageStat[];
+  total: number;
+  className: string;
+}) {
+  return (
+    <div
+      className={`stage-funnel-fill flex w-full gap-1 rounded-full overflow-hidden bg-black/[0.05] ${className}`}
+    >
+      {stageStats.map((s, i) => (
+        <div
+          key={s.stage}
+          className={`funnel-seg ${s.dashClass} rounded-full`}
+          data-stage={s.stage}
+          style={
+            {
+              flex: `${total === 0 ? 1 : Math.max(s.count, 0.4)} 0 0%`,
+              '--funnel-i': i,
+            } as CSSProperties
+          }
+          aria-hidden
+        />
+      ))}
+    </div>
+  );
+}
+
 function StageFunnel({
   stageStats,
   onSelectStage,
@@ -168,73 +200,93 @@ function StageFunnel({
   const total = stageStats.reduce((sum, s) => sum + s.count, 0);
   return (
     <div className={embedded ? '' : 'mt-6 pt-6 border-t border-[var(--glass-border)]'}>
-      <style>{`
-        @keyframes stage-funnel-fill {
-          from { transform: scaleX(0); }
-          to { transform: scaleX(1); }
-        }
-        @media (prefers-reduced-motion: no-preference) {
-          .stage-funnel-fill .funnel-seg {
-            transform: scaleX(0);
-            transform-origin: left center;
-            animation: stage-funnel-fill 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
-            animation-delay: calc(var(--funnel-i, 0) * 0.08s);
-          }
-        }
-        .funnel-value { display: none; }
-        .stage-funnel-chips button:hover .funnel-value,
-        .stage-funnel-chips button:focus-visible .funnel-value {
-          display: inline;
-        }
-      `}</style>
-      <div
-        className={`stage-funnel-fill flex w-full gap-1 rounded-full overflow-hidden bg-black/[0.05] ${
-          embedded ? 'h-3' : 'h-2.5'
-        }`}
-      >
-        {stageStats.map((s, i) => (
-          <div
-            key={s.stage}
-            className={`funnel-seg ${s.dashClass} rounded-full`}
-            data-stage={s.stage}
-            style={
-              {
-                flex: `${total === 0 ? 1 : Math.max(s.count, 0.4)} 0 0%`,
-                '--funnel-i': i,
-              } as CSSProperties
-            }
-            aria-hidden
-          />
-        ))}
+      <div className="sm:hidden">
+        <StageBar stageStats={stageStats} total={total} className="h-1.5" />
+        <div className="grid grid-cols-3 gap-x-1 gap-y-1.5 mt-2.5">
+          {stageStats.map((s) => (
+            <button
+              key={s.stage}
+              type="button"
+              onClick={() => onSelectStage(s.stage)}
+              className={`min-h-11 py-1 px-0.5 text-center rounded-2xl ${
+                s.active ? 'bg-[var(--accent-blue-soft)]' : ''
+              }`}
+              data-stage={s.stage}
+              title={`View ${s.stage} leads`}
+            >
+              <span className="block text-2xl font-extrabold tabular-nums tracking-tight leading-none text-zinc-900">
+                {s.count}
+              </span>
+              <span className="mt-1 flex items-center justify-center gap-1 min-w-0">
+                <span
+                  className={`w-1.5 h-1.5 rounded-full shrink-0 border border-[var(--dot-ring)] ${s.dashClass}`}
+                  aria-hidden
+                />
+                <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500 leading-tight">
+                  {s.stage}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
-      <div className="stage-funnel-chips flex flex-wrap gap-2 mt-4">
-        {stageStats.map((s) => (
-          <button
-            key={s.stage}
-            type="button"
-            onClick={() => onSelectStage(s.stage)}
-            className={`inline-flex items-center gap-2 rounded-full pl-2.5 pr-3.5 py-1.5 transition-colors ${
-              s.active ? 'bg-[var(--accent-blue-soft)]' : 'hover:bg-black/[0.04]'
-            }`}
-            data-stage={s.stage}
-            data-active={s.active ? 'true' : undefined}
-            title={`View ${s.stage} leads`}
-          >
-            <span
-              className={`w-2 h-2 rounded-full shrink-0 border border-[var(--dot-ring)] ${s.dashClass}`}
-              aria-hidden
-            />
-            <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-              {s.stage}
-            </span>
-            <span className="text-xs font-semibold tabular-nums text-zinc-900">
-              {s.count}
-            </span>
-            <span className="funnel-value text-[11px] font-semibold tabular-nums text-zinc-500">
-              ${s.value.toLocaleString()}
-            </span>
-          </button>
-        ))}
+      <div className="hidden sm:block">
+        <StageBar
+          stageStats={stageStats}
+          total={total}
+          className={embedded ? 'h-4' : 'h-2.5'}
+        />
+        <div
+          className={
+            embedded
+              ? 'stage-funnel-chips is-tight flex flex-nowrap gap-0.5 mt-3'
+              : 'stage-funnel-chips flex flex-wrap gap-2 mt-4'
+          }
+        >
+          {stageStats.map((s) => (
+            <button
+              key={s.stage}
+              type="button"
+              onClick={() => onSelectStage(s.stage)}
+              className={
+                embedded
+                  ? `inline-flex flex-1 min-w-0 items-center justify-center gap-1 rounded-full px-1 py-1.5 transition-colors ${
+                      s.active ? 'bg-[var(--accent-blue-soft)]' : 'hover:bg-black/[0.04]'
+                    }`
+                  : `inline-flex items-center gap-2 rounded-full pl-2.5 pr-3.5 py-1.5 transition-colors ${
+                      s.active ? 'bg-[var(--accent-blue-soft)]' : 'hover:bg-black/[0.04]'
+                    }`
+              }
+              data-stage={s.stage}
+              data-active={s.active ? 'true' : undefined}
+              title={
+                s.value > 0
+                  ? `View ${s.stage} leads · $${s.value.toLocaleString()}`
+                  : `View ${s.stage} leads`
+              }
+            >
+              <span className="funnel-meta inline-flex min-w-0 items-center justify-center gap-1">
+                <span
+                  className={`w-2 h-2 rounded-full shrink-0 border border-[var(--dot-ring)] ${s.dashClass}`}
+                  aria-hidden
+                />
+                <span
+                  className={`text-[11px] font-medium uppercase tracking-wide text-zinc-500 ${
+                    embedded ? 'truncate' : ''
+                  }`}
+                >
+                  {s.stage}
+                </span>
+                <span className="text-xs font-semibold tabular-nums text-zinc-900 shrink-0">
+                  {s.count}
+                </span>
+              </span>
+              <span className="funnel-value text-[11px] font-semibold tabular-nums text-[var(--graphite)]">
+                ${s.value.toLocaleString()}
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -331,7 +383,7 @@ function StormLine({
     return <span className="inline-block h-5 w-48 bg-black/[0.05] rounded-full animate-pulse align-middle" />;
   }
   if (stormStatus === 'error') return 'Storm data unavailable right now';
-  if (!latestReport) return 'No hail, wind, or tornado reports on file';
+  if (!latestReport) return 'No storms in your radius';
   return (
     <>
       {eventStyle(latestReport.category).label}
@@ -395,35 +447,41 @@ function HomeLeadPeak({
   recentLead: HomeRecentLead | null;
   onOpenLead: (id: number) => void;
 }) {
+  const canOpen = Boolean(recentLead);
   return (
     <div
-      role="button"
-      tabIndex={0}
+      role={canOpen ? 'button' : undefined}
+      tabIndex={canOpen ? 0 : undefined}
       onClick={() => recentLead && onOpenLead(recentLead.id)}
       onKeyDown={(e) => {
+        if (!recentLead) return;
         if (e.key !== 'Enter' && e.key !== ' ') return;
         e.preventDefault();
-        if (recentLead) onOpenLead(recentLead.id);
+        onOpenLead(recentLead.id);
       }}
-      className="group glass glass-hover rounded-[32px] p-6 mb-4 cursor-pointer h-full"
+      className={`group glass rounded-[32px] p-5 sm:p-6 mb-4 ${
+        canOpen ? 'glass-hover cursor-pointer' : ''
+      }`}
     >
-      <div className="flex items-center justify-between mb-5">
-        <div className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">
-          Jump Back In
-        </div>
-        <span className="text-zinc-400 group-hover:text-[var(--accent-blue)] transition-colors text-lg leading-none">
-          →
-        </span>
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <div className="text-base font-semibold text-zinc-900">Jump Back In</div>
+        {canOpen && (
+          <span className="text-zinc-400 group-hover:text-[var(--accent-blue)] transition-colors text-lg leading-none shrink-0">
+            →
+          </span>
+        )}
       </div>
       {!recentLead ? (
         <p className="text-sm text-zinc-400">No leads yet</p>
       ) : (
         <div>
-          <div className="text-[1.875rem] font-extrabold tracking-tight leading-none text-zinc-900">
+          <div className="text-[1.875rem] font-extrabold tracking-tight leading-[1.15] text-zinc-900">
             {recentLead.name || recentLead.address || 'Unnamed lead'}
           </div>
-          {recentLead.address && (
-            <div className="text-base text-zinc-500 mt-3 truncate">{recentLead.address}</div>
+          {recentLead.address && recentLead.name && (
+            <div className="text-base text-zinc-500 mt-3 truncate">
+              {recentLead.address}
+            </div>
           )}
           <div className="flex items-center gap-2 mt-4">
             <span
@@ -516,22 +574,22 @@ function HomeGlimpseGrid({
           e.preventDefault();
           onOpenCanvassing();
         }}
-        className="group glass-quiet rounded-[24px] cursor-pointer self-stretch h-full flex flex-col p-5"
+        className="group glass-quiet rounded-[24px] cursor-pointer p-5"
       >
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-3">
           <div className="text-base font-semibold text-[var(--graphite)]">Canvassing Today</div>
           <span className="text-zinc-400 group-hover:text-[var(--accent-blue)] transition-colors leading-none text-base">
             →
           </span>
         </div>
         {!canvassStats ? (
-          <div className="grid grid-cols-3 gap-3 mt-auto">
+          <div className="grid grid-cols-3 gap-3">
             {[0, 1, 2].map((i) => (
               <div key={i} className="h-14 bg-black/[0.04] rounded-xl animate-pulse" />
             ))}
           </div>
         ) : (
-          <div className="grid grid-cols-3 gap-3 text-center mt-auto">
+          <div className="grid grid-cols-3 gap-3 text-center">
             <div>
               <div className="text-[2.34375rem] font-extrabold tabular-nums tracking-tight leading-none text-zinc-900">
                 {canvassStats.door}
@@ -613,15 +671,15 @@ export default function HomeDashboard({
   greeting,
   firstName,
   stageStats,
-  totalPipelineValue,
   totalActiveLeads,
-  estimatesCount,
+  pipelineValue,
   recentLead,
   calendarEvents,
   gcalConnected,
   tasks,
   onSelectStage,
   onCreateLead,
+  onOpenPipeline,
   onOpenCalendar,
   onOpenTasks,
   onOpenLead,
@@ -683,6 +741,7 @@ export default function HomeDashboard({
 
   // --- Live storm alert (self-fetched, near the device when location is allowed) ---
   const [stormReports, setStormReports] = useState<StormReport[]>([]);
+  const [latestNearby, setLatestNearby] = useState<StormReport | undefined>(undefined);
   const [stormStatus, setStormStatus] = useState<'loading' | 'ready' | 'error'>('loading');
 
   useEffect(() => {
@@ -692,6 +751,7 @@ export default function HomeDashboard({
       try {
         const params = new URLSearchParams({
           window: '24h',
+          latest: '1',
         });
         if (origin) {
           params.set('lat', String(origin.lat));
@@ -709,7 +769,9 @@ export default function HomeDashboard({
           setStormStatus('error');
           return;
         }
-        setStormReports(data.reports || []);
+        const reports = data.reports || [];
+        setStormReports(reports);
+        setLatestNearby(data.latest ?? newestStormReport(reports));
         setStormStatus('ready');
       } catch {
         if (!cancelled) setStormStatus('error');
@@ -743,12 +805,7 @@ export default function HomeDashboard({
     };
   }, []);
 
-  const latestReport = useMemo(() => {
-    if (stormReports.length === 0) return undefined;
-    return stormReports.reduce((newest, r) =>
-      r.validTime > newest.validTime ? r : newest
-    );
-  }, [stormReports]);
+  const latestReport = latestNearby ?? newestStormReport(stormReports);
 
   const activeSevere = useMemo(
     () => stormReports.some((r) => severityForReport(r) !== 'marginal'),
@@ -834,43 +891,9 @@ export default function HomeDashboard({
         </button>
       </div>
 
-      {/* Hero — pipeline value commands; jobs and estimates split below it. */}
-      <div className="glass rounded-[32px] mb-4 overflow-hidden p-0">
-        <div className="px-6 pt-6 pb-5">
-          <div className="text-[2.34375rem] font-extrabold tabular-nums tracking-tight leading-none text-zinc-900">
-            ${totalPipelineValue.toLocaleString()}
-          </div>
-          <div className="text-xs text-zinc-400 mt-1.5">pipeline value</div>
-        </div>
-        <div className="grid grid-cols-2 border-t border-[var(--glass-border)]">
-          <div className="px-6 py-4">
-            <div className="text-xl font-semibold tabular-nums text-zinc-900">
-              {totalActiveLeads}
-            </div>
-            <div className="text-xs text-zinc-400 mt-0.5">
-              active job{totalActiveLeads === 1 ? '' : 's'}
-            </div>
-          </div>
-          <div className="px-6 py-4 border-l border-[var(--glass-border)]">
-            <div className="text-xl font-semibold tabular-nums text-zinc-900">
-              {estimatesCount}
-            </div>
-            <div className="text-xs text-zinc-400 mt-0.5">
-              estimate{estimatesCount === 1 ? '' : 's'} on file
-            </div>
-          </div>
-        </div>
-        <div className="px-6 pt-5 pb-6">
-          <StageFunnel
-            stageStats={stageStats}
-            onSelectStage={onSelectStage}
-            embedded
-          />
-        </div>
-      </div>
+      <HomeLeadPeak recentLead={recentLead} onOpenLead={onOpenLead} />
 
       {/* Storm — glass; blue/coral is a whisper tint + dot, not a painted slab. */}
-
       <HomeStormBlock
         activeSevere={activeSevere}
         stormStatus={stormStatus}
@@ -879,145 +902,153 @@ export default function HomeDashboard({
         onOpenWeather={onOpenWeather}
       />
 
-
-      {/* Resume + tasks keep full glass. Canvass and schedule recede so
-          four tiles don't compete with the pipeline hero. */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 items-start">
-        <GlimpseCard
-          title="Jump Back In"
-          onOpen={() => recentLead && onOpenLead(recentLead.id)}
-          className="sm:col-span-2"
-        >
-          {!recentLead ? (
-            <p className="text-sm text-zinc-400">No leads yet</p>
-          ) : (
-            <div>
-              <div className="text-base font-medium text-zinc-900 truncate">
-                {recentLead.name || recentLead.address || 'Unnamed lead'}
-              </div>
-              {recentLead.address && (
-                <div className="text-sm text-zinc-500 truncate mt-0.5">
-                  {recentLead.address}
+      {/* CRM left (pipeline + tasks); today right (canvass + schedule).
+          Flatten on phone so order is pipeline → canvass → schedule → tasks. */}
+      <div className="flex flex-col gap-3 sm:grid sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] sm:items-start sm:gap-4">
+        <div className="flex flex-col gap-3 sm:gap-4 max-sm:contents">
+          <div className="glass rounded-[32px] p-5 sm:p-6 order-1 sm:order-none">
+            <button
+              type="button"
+              onClick={onOpenPipeline}
+              className="group flex w-full items-center justify-between gap-4 min-h-11 mb-4"
+            >
+              <span className="text-base font-semibold text-zinc-900">Pipeline</span>
+              <span className="text-zinc-400 group-hover:text-[var(--accent-blue)] transition-colors text-lg leading-none shrink-0">
+                →
+              </span>
+            </button>
+            <StageFunnel
+              stageStats={stageStats}
+              onSelectStage={onSelectStage}
+              embedded
+            />
+            <div className="grid grid-cols-2 border-t border-[var(--glass-border)] mt-5 pt-4">
+              <div className="pr-4">
+                <div className="text-xl font-semibold tabular-nums text-zinc-900">
+                  {totalActiveLeads}
                 </div>
-              )}
-              <div className="flex items-center gap-2 mt-3">
-                <span
-                  className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${recentLead.stageBadgeClass}`}
-                >
-                  {recentLead.stageLabel}
-                </span>
-                {recentLead.jobNumber && (
-                  <span className="text-xs text-zinc-400">{recentLead.jobNumber}</span>
-                )}
+                <div className="text-[0.6875rem] font-medium uppercase tracking-wide text-zinc-400 mt-0.5">
+                  active job{totalActiveLeads === 1 ? '' : 's'}
+                </div>
+              </div>
+              <div className="pl-4 border-l border-[var(--glass-border)]">
+                <div className="text-xl font-semibold tabular-nums text-[var(--accent-green)]">
+                  ${pipelineValue.toLocaleString()}
+                </div>
+                <div className="text-[0.6875rem] font-medium uppercase tracking-wide text-zinc-400 mt-0.5">
+                  pipeline value
+                </div>
               </div>
             </div>
-          )}
-        </GlimpseCard>
-
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={onOpenCanvassing}
-          onKeyDown={(e) => {
-            if (e.key !== 'Enter' && e.key !== ' ') return;
-            e.preventDefault();
-            onOpenCanvassing();
-          }}
-          className="group glass-quiet rounded-[24px] cursor-pointer self-stretch h-full flex flex-col p-5"
-        >
-          <div className="flex items-center justify-between mb-5">
-            <div className="text-base font-semibold tracking-tight text-[var(--graphite)]">Canvassing Today</div>
-            <span className="text-zinc-400 group-hover:text-[var(--accent-blue)] transition-colors leading-none text-base">
-              →
-            </span>
           </div>
-          {!canvassStats ? (
-            <div className="grid grid-cols-3 gap-3 mt-auto">
-              {[0, 1, 2].map((i) => (
-                <div key={i} className="h-14 bg-black/[0.04] rounded-xl animate-pulse" />
-              ))}
-            </div>
-          ) : (
-            <div className="grid grid-cols-3 gap-3 text-center mt-auto">
-              <div>
-                <div className="text-[2.34375rem] font-extrabold tabular-nums tracking-tight leading-none text-zinc-900">
-                  {canvassStats.door}
+
+          <GlimpseCard title="Open Tasks" onOpen={onOpenTasks} className="order-4 sm:order-none">
+            {openTasksCount === 0 ? (
+              <p className="text-sm text-zinc-400">No open tasks</p>
+            ) : (
+              <div className="flex items-start gap-5">
+                <div className="text-3xl font-semibold tabular-nums text-zinc-900 shrink-0">
+                  {openTasksCount}
                 </div>
-                <div className="text-[0.75rem] font-medium uppercase tracking-[0.08em] text-[var(--steel)] mt-1.5">
-                  Doors
-                </div>
-              </div>
-              <div>
-                <div className="text-[2.34375rem] font-extrabold tabular-nums tracking-tight leading-none text-zinc-900">
-                  {canvassStats.conversation}
-                </div>
-                <div className="text-[0.75rem] font-medium uppercase tracking-[0.08em] text-[var(--steel)] mt-1.5">
-                  Convos
-                </div>
-              </div>
-              <div>
-                <div className="text-[2.34375rem] font-extrabold tabular-nums tracking-tight leading-none text-[var(--accent-green)]">
-                  {canvassStats.signed}
-                </div>
-                <div className="text-[0.75rem] font-medium uppercase tracking-[0.08em] text-[var(--steel)] mt-1.5">
-                  Signed
+                <div className="space-y-1.5 min-w-0 flex-1 pt-1">
+                  {listedTasks.map((t) => (
+                    <div key={t.id} className="flex items-center gap-2 min-w-0">
+                      {t.dueLabel && (
+                        <span
+                          className={`text-xs font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 shrink-0 ${
+                            t.overdue
+                              ? 'bg-[var(--danger-soft)] text-danger'
+                              : 'bg-black/[0.04] text-zinc-500'
+                          }`}
+                        >
+                          {t.dueLabel}
+                        </span>
+                      )}
+                      <span className="text-sm text-zinc-700 truncate">{t.title}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
-            </div>
-          )}
+            )}
+          </GlimpseCard>
         </div>
 
-        <GlimpseCard title="Today's Schedule" onOpen={onOpenCalendar} quiet>
-          {todaysEvents.length === 0 ? (
-            <p className="text-sm text-zinc-400">Nothing on the calendar today</p>
-          ) : (
-            <div className="space-y-2.5">
-              {todaysEvents.map((ev) => (
-                <div key={ev.id} className="flex items-center gap-3">
-                  <div className="text-xs font-semibold tabular-nums text-zinc-600 bg-black/[0.04] border border-black/[0.06] rounded-full px-2.5 py-1 shrink-0 min-w-[4.25rem] text-center">
-                    {ev.allDay ? 'All day' : formatEventTimeLabel(ev)}
-                  </div>
-                  <div className="text-sm text-zinc-700 truncate">{ev.title}</div>
-                </div>
-              ))}
-              {todaysEventsTotal > todaysEvents.length && (
-                <div className="text-xs text-zinc-400 pt-0.5">
-                  +{todaysEventsTotal - todaysEvents.length} more today
-                </div>
-              )}
+        <div className="flex flex-col gap-3 sm:gap-4 max-sm:contents">
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={onOpenCanvassing}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              e.preventDefault();
+              onOpenCanvassing();
+            }}
+            className="group glass-quiet rounded-[24px] cursor-pointer p-5 order-2 sm:order-none"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-base font-semibold tracking-tight text-[var(--graphite)]">Canvassing Today</div>
+              <span className="text-zinc-400 group-hover:text-[var(--accent-blue)] transition-colors leading-none text-base">
+                →
+              </span>
             </div>
-          )}
-        </GlimpseCard>
-
-        <GlimpseCard title="Open Tasks" onOpen={onOpenTasks} className="sm:col-span-2">
-          {openTasksCount === 0 ? (
-            <p className="text-sm text-zinc-400">No open tasks</p>
-          ) : (
-            <div className="flex items-start gap-5">
-              <div className="text-3xl font-semibold tabular-nums text-zinc-900 shrink-0">
-                {openTasksCount}
-              </div>
-              <div className="space-y-1.5 min-w-0 flex-1 pt-1">
-                {listedTasks.map((t) => (
-                  <div key={t.id} className="flex items-center gap-2 min-w-0">
-                    {t.dueLabel && (
-                      <span
-                        className={`text-xs font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 shrink-0 ${
-                          t.overdue
-                            ? 'bg-[var(--danger-soft)] text-danger'
-                            : 'bg-black/[0.04] text-zinc-500'
-                        }`}
-                      >
-                        {t.dueLabel}
-                      </span>
-                    )}
-                    <span className="text-sm text-zinc-700 truncate">{t.title}</span>
-                  </div>
+            {!canvassStats ? (
+              <div className="grid grid-cols-3 gap-3">
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className="h-14 bg-black/[0.04] rounded-xl animate-pulse" />
                 ))}
               </div>
-            </div>
-          )}
-        </GlimpseCard>
+            ) : (
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <div className="text-[2.34375rem] font-extrabold tabular-nums tracking-tight leading-none text-zinc-900">
+                    {canvassStats.door}
+                  </div>
+                  <div className="text-[0.75rem] font-medium uppercase tracking-[0.08em] text-[var(--steel)] mt-1.5">
+                    Doors
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[2.34375rem] font-extrabold tabular-nums tracking-tight leading-none text-zinc-900">
+                    {canvassStats.conversation}
+                  </div>
+                  <div className="text-[0.75rem] font-medium uppercase tracking-[0.08em] text-[var(--steel)] mt-1.5">
+                    Convos
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[2.34375rem] font-extrabold tabular-nums tracking-tight leading-none text-[var(--accent-green)]">
+                    {canvassStats.signed}
+                  </div>
+                  <div className="text-[0.75rem] font-medium uppercase tracking-[0.08em] text-[var(--steel)] mt-1.5">
+                    Signed
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <GlimpseCard title="Today's Schedule" onOpen={onOpenCalendar} quiet className="order-3 sm:order-none">
+            {todaysEvents.length === 0 ? (
+              <p className="text-sm text-zinc-400">Nothing on the calendar today</p>
+            ) : (
+              <div className="space-y-2.5">
+                {todaysEvents.map((ev) => (
+                  <div key={ev.id} className="flex items-center gap-3">
+                    <div className="text-xs font-semibold tabular-nums text-zinc-600 bg-black/[0.04] border border-black/[0.06] rounded-full px-2.5 py-1 shrink-0 min-w-[4.25rem] text-center">
+                      {ev.allDay ? 'All day' : formatEventTimeLabel(ev)}
+                    </div>
+                    <div className="text-sm text-zinc-700 truncate">{ev.title}</div>
+                  </div>
+                ))}
+                {todaysEventsTotal > todaysEvents.length && (
+                  <div className="text-xs text-zinc-400 pt-0.5">
+                    +{todaysEventsTotal - todaysEvents.length} more today
+                  </div>
+                )}
+              </div>
+            )}
+          </GlimpseCard>
+        </div>
       </div>
     </div>
 

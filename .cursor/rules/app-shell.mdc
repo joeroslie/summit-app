@@ -42,16 +42,14 @@ alwaysApply: false
 |--------|---------------|-----------|
 | `home` | Home | `Home` |
 | `leads` | Pipeline | `Pipeline` |
-| `estimates` | Estimates | `Estimates` |
-| `invoices` | Invoices | `Documents` / `Estimates` |
 | `calendar` | Calendar | `Calendar` |
 | `tasks` | Tasks | `Tasks` |
-| `performance` | Performance | `Performance` |
-| `orders` | Orders | `Orders` |
 | `tools` | Tools | Tools hub |
 | `documents` | Documents | `Documents` |
 | `canvassing` | Tools → Canvassing | `Canvassing` |
 | `weather` | Tools → Weather | `Weather` |
 | `settings` | Profile settings | `Login & Settings` |
+
+Phone bottom bar (not the sidebar): Home · Pipeline · Calendar · Tasks · Tools. Swipe up More → Documents. See `.cursor/rules/phone-pwa.mdc`.
 
 Chat roster: `.cursor/rules/agent-roster.mdc`

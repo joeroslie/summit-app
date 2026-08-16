@@ -6,8 +6,8 @@ alwaysApply: false
 # Invoices
 
 **Chat name:** use `Documents` or `Estimates` for mitigation invoice work  
-**Sidebar label:** Invoices (`activeTab: invoices`)  
-**Entry:** sidebar Invoices tab; mitigation workspace inside Documents
+**Sidebar label:** none — invoices live on the lead (Documents → Invoices)  
+**Entry:** lead Documents → Add → Mitigation invoice
 
 ## Files
 

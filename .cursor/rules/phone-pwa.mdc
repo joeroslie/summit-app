@@ -10,6 +10,19 @@ alwaysApply: false
 **Sidebar label:** n/a  
 **Agent starter:** `.cursor/agents/phone.md`
 
+## Phone bottom bar
+
+Phone only (`md:hidden`). Desktop/iPad keep the sidebar.
+
+| Slot | Tabs |
+|------|------|
+| Bottom bar | Home · Pipeline · Calendar · Tasks · Tools |
+| Swipe up (More) | Documents |
+
+Handle on the tab bar opens the More sheet (same as swipe up). Swipe down or tap the dimmer to close.
+
+`phoneTabBar` / `phoneTabSheet` in `app/page.tsx` (`renderPhoneTabBar`).
+
 ## Files
 
 - `app/manifest.ts`
@@ -19,7 +32,7 @@ alwaysApply: false
 - `app/icon-192.png/route.tsx`
 - `app/icon-512.png/route.tsx`
 - `app/icon-maskable-512.png/route.tsx`
-- `app/page.tsx` — mobile sidebar drawer, `beforeinstallprompt`, Add to Home Screen (~L11138)
+- `app/page.tsx` — phone tab bar + More sheet (`renderPhoneTabBar`), `beforeinstallprompt`, Add to Home Screen (~L11138)
 - `app/globals.css` — mobile layout helpers
 - `next.config.ts` — `allowedDevOrigins` for LAN phone testing
 - `lib/phone.ts` — shared
