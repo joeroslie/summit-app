@@ -1,6 +1,6 @@
 ---
 description: Phone / PWA — file map (@ tag this chat)
-globs: app/manifest.ts,app/icon.tsx,app/apple-icon.tsx
+globs: app/manifest.ts,app/icon.tsx,app/apple-icon.tsx,lib/phone-nav.ts
 alwaysApply: false
 ---
 
@@ -16,10 +16,16 @@ Phone only (`md:hidden`). Desktop/iPad keep the sidebar.
 
 | Slot | Tabs |
 |------|------|
-| Bottom bar | Home · Pipeline · Calendar · Tasks · Tools |
+| Bottom bar | Pipeline · Calendar · Tasks · Tools · Profile |
 | Swipe up (More) | Documents |
 
+Logo in the header goes Home. No Home tab. Profile opens `settings`. On Home, no tab is selected.
+
+Phone header has no avatar menu. Install app and Sign out live at the bottom of Profile settings.
+
 Handle on the tab bar opens the More sheet (same as swipe up). Swipe down or tap the dimmer to close.
+
+Phone edge swipe (48px inset): swipe right from the left edge = Back (same stack as in-app Back). Swipe left from the right edge = Forward, only to undo the last Back — not for switching tabs. Pipeline cards leave those edge strips alone.
 
 `phoneTabBar` / `phoneTabSheet` in `app/page.tsx` (`renderPhoneTabBar`).
 
@@ -35,5 +41,6 @@ Handle on the tab bar opens the More sheet (same as swipe up). Swipe down or tap
 - `app/page.tsx` — phone tab bar + More sheet (`renderPhoneTabBar`), `beforeinstallprompt`, Add to Home Screen (~L11138)
 - `app/globals.css` — mobile layout helpers
 - `next.config.ts` — `allowedDevOrigins` for LAN phone testing
-- `lib/phone.ts` — shared
+- `lib/phone.ts` — shared (US phone formatting)
+- `lib/phone-nav.ts` — phone edge-swipe Back / Forward
 - `components/PhoneInput.tsx` — shared

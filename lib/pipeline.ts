@@ -17,7 +17,7 @@ export const PIPELINE_STAGES: PipelineStage[] = [
   'Closed',
 ];
 
-/** Stages that count in Pipeline value (Home + Pipeline). Lead and Closed do not. */
+/** Stages that count in Total jobs and Pipeline value (Home + Pipeline). Lead and Closed do not. */
 export const PIPELINE_VALUE_STAGES: PipelineStage[] = [
   'Prospect',
   'Approved',
@@ -135,4 +135,16 @@ export function normalizePipelineStage(raw: unknown): PipelineStage {
     Closed: 'Closed',
   };
   return legacy[raw] ?? 'Lead';
+}
+
+/** Next (+1) or previous (−1) stage, or null at either end of the pipeline. */
+export function adjacentPipelineStage(
+  stage: PipelineStage,
+  direction: 1 | -1
+): PipelineStage | null {
+  const i = PIPELINE_STAGES.indexOf(stage);
+  if (i < 0) return null;
+  const next = i + direction;
+  if (next < 0 || next >= PIPELINE_STAGES.length) return null;
+  return PIPELINE_STAGES[next];
 }

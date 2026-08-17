@@ -552,6 +552,7 @@ html[data-theme="night"] body {
 /*
   Below laptop (1024) — denser frost so ink holds up in sun; cheaper blur for GPU.
   Covers portrait and landscape phones. Desktop glass stays airy.
+  Night fill stays at 7% — do not thicken frost after dark.
   Shell (header + drawer) is unchanged.
 */
 @media (max-width: 1023px) {
@@ -562,11 +563,6 @@ html[data-theme="night"] body {
     --glass-saturate: 1.28;
   }
   html[data-theme="night"] {
-    --glass-bg: rgba(255, 255, 255, 0.16);
-    --glass-bg-strong: rgba(255, 255, 255, 0.24);
-    --glass-border: rgba(255, 255, 255, 0.22);
-    --glass-highlight: rgba(255, 255, 255, 0.16);
-    --glass-sheen: rgba(255, 255, 255, 0.1);
     --glass-blur: 16px;
   }
 }

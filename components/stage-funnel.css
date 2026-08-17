@@ -106,6 +106,27 @@
     order: 3;
   }
 }
+@media (max-width: 767px) {
+  .pl-toolbar {
+    margin-bottom: 1.5rem;
+    gap: 0.25rem 0.75rem;
+  }
+  .pl-toolbar-stats {
+    display: none;
+  }
+  .pl-add {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    padding: 0;
+    border: 1px solid var(--chrome);
+    border-radius: 9999px;
+    background: transparent;
+    color: var(--graphite);
+  }
+}
 
 /* Tall stage columns — Storm Watch / Jump Back In glass lift. */
 .kanban-col.glass {
@@ -126,4 +147,126 @@
 .kanban-col.glass-hover:hover {
   border-color: var(--glass-highlight);
   transform: translateY(-2px);
+}
+
+/* Phone mail list — Pipeline. Desktop/iPad keep the kanban. */
+@media (max-width: 767px) {
+  .pl-chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    position: sticky;
+    top: var(--header-h);
+    z-index: 20;
+    background: var(--background);
+    margin-inline: calc(-1 * var(--page-pad-x));
+    margin-bottom: 0.75rem;
+    padding: 0.65rem var(--page-pad-x);
+  }
+  .pl-chips::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.pl-jump {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.25rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  margin-inline: calc(-1 * var(--page-pad-x));
+  margin-bottom: 1.5rem;
+  padding: 0 var(--page-pad-x);
+}
+.pl-jump::-webkit-scrollbar {
+  display: none;
+}
+.pl-jump-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 0 0 auto;
+  min-height: 2.75rem;
+  padding: 0 0.7rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--steel);
+  white-space: nowrap;
+}
+.pl-jump-chip.is-active {
+  background: var(--accent-blue-soft);
+  color: var(--graphite);
+}
+.pl-jump-count {
+  font-weight: 700;
+  color: var(--graphite);
+}
+
+.pl-swipe {
+  position: relative;
+  overflow: hidden;
+  border-radius: 32px;
+  touch-action: pan-y;
+}
+.pl-swipe.is-dragging {
+  touch-action: none;
+}
+.pl-swipe-peek {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  pointer-events: none;
+}
+.pl-swipe-rail {
+  display: flex;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--graphite);
+}
+.pl-swipe-rail--next {
+  justify-content: flex-start;
+  padding-left: 1.25rem;
+}
+.pl-swipe-rail--prev {
+  justify-content: flex-end;
+  padding-right: 1.25rem;
+}
+.pl-swipe-rail[data-stage="Closed"] {
+  color: var(--stage-closed-ink);
+}
+.pl-swipe-rail.is-empty {
+  background: var(--chrome-soft);
+  color: var(--steel);
+}
+.pl-swipe-card {
+  position: relative;
+  z-index: 1;
+  padding: 1.25rem;
+  background: var(--surface-raised);
+  border: 1px solid var(--chrome-line);
+  border-radius: 32px;
+  cursor: pointer;
+}
+.pl-swipe.is-pressed:not(.is-dragging) .pl-swipe-card {
+  transform: scale(0.97);
+  transition: transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pl-swipe.is-pressed:not(.is-dragging) .pl-swipe-card {
+    transform: none;
+    transition: none;
+  }
+  .pl-swipe-card {
+    transition: none;
+  }
 }

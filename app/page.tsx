@@ -123,11 +123,20 @@ import {
   looksLikePhoneIdentifier,
   toE164US,
 } from '@/lib/phone';
+import {
+  PHONE_NAV_COMMIT_PX,
+  PHONE_NAV_LOCK_PX,
+  type PhoneForwardRestore,
+  phoneEdgeNavZone,
+  setPhoneForwardFlag,
+  setPhoneBackFlag,
+} from '@/lib/phone-nav';
 import PhoneInput from '@/components/PhoneInput';
 import PasswordField from '@/components/PasswordField';
 import AddressAutocomplete from '@/components/AddressAutocomplete';
 import CompanyPricing from '@/components/CompanyPricing';
 import HomeDashboard from '@/components/HomeDashboard';
+import HeaderSearch from '@/components/HeaderSearch';
 import '@/components/stage-funnel.css';
 import PipelineBoard from '@/components/PipelineBoard';
 import RoofSystemPicker, {
@@ -140,7 +149,24 @@ import {
   normalizePipelineStage,
   type PipelineStage,
 } from '@/lib/pipeline';
-import type { CreatedLeadInfo } from '@/lib/canvassing';
+import {
+  CANVASS_PINS_STORAGE_KEY,
+  dispositionStyle,
+  type CanvassPin,
+  type CreatedLeadInfo,
+} from '@/lib/canvassing';
+import {
+  queryAppSearch,
+  recordsFromEvent,
+  recordsFromInvoice,
+  recordsFromLead,
+  recordsFromPages,
+  recordsFromPin,
+  recordsFromTask,
+  searchHay,
+  type AppSearchHit,
+  type AppSearchRecord,
+} from '@/lib/app-search';
 
 const RoofTracer = dynamic(() => import('@/components/RoofTracer'), {
   ssr: false,
@@ -1219,15 +1245,19 @@ const COST_KEY_ALIASES: Record<string, string[]> = {
   shingle_mold_labor: ['fascia_mold_labor'],
 };
 
-/** Company library — blank copies + pricing to refer to. */
+/** Company library — live pricing + blank PDF copies. */
 const SYSTEM_DOCUMENTS = [
-  {
-    id: 'takeoff',
-    name: 'Takeoff sheet',
-  },
   {
     id: 'pricing',
     name: 'Company pricing',
+  },
+  {
+    id: 'estimate',
+    name: 'Estimate',
+  },
+  {
+    id: 'takeoff',
+    name: 'Takeoff sheet',
   },
   {
     id: 'mitigation',
@@ -1239,10 +1269,23 @@ const SYSTEM_DOCUMENTS = [
   },
 ] as const;
 
-/** Pre-existing docs that can be uploaded onto a lead (not live tools). */
-const COMPANY_LEAD_DOCUMENTS = SYSTEM_DOCUMENTS.filter(
-  (d) => d.id !== 'pricing'
-);
+type SystemDocId = (typeof SYSTEM_DOCUMENTS)[number]['id'];
+
+/** Live tools that can be started onto a lead (not the hub PDF copies). */
+const COMPANY_LEAD_DOCUMENTS = [
+  {
+    id: 'takeoff',
+    name: 'Takeoff sheet',
+  },
+  {
+    id: 'mitigation',
+    name: 'Mitigation invoice',
+  },
+  {
+    id: 'emergency',
+    name: 'Mitigation Service Agreement',
+  },
+] as const;
 
 /** Company / billing entity — filled in Settings (empty until configured). */
 type CompanySettings = {
@@ -1374,6 +1417,23 @@ type EmergencyAgreementDraft = {
   /** ISO timestamp when signature was captured. */
   clientSignedAt: string | null;
 };
+
+const emptyEmergencyDraft = (): EmergencyAgreementDraft => ({
+  entity: 'prowest',
+  clientName: '',
+  propertyAddress: '',
+  phone: '',
+  email: '',
+  scope: '',
+  serviceStart: '',
+  serviceComplete: '',
+  paymentMode: '',
+  paymentAmount: '',
+  date: '',
+  signerName: '',
+  clientSignatureDataUrl: null,
+  clientSignedAt: null,
+});
 
 /** Structured takeoff line — price-book SKU + qty (not free-text). */
 type TakeoffSkuLine = {
@@ -3917,16 +3977,18 @@ function pipelineValueRollup(
     financialWorksheet?: { approvedJobValue?: number; jobValue?: number };
     approvedJobValue?: number;
   }>
-): { pipelineValue: number; valuedCount: number } {
+): { pipelineValue: number; valuedCount: number; totalJobs: number } {
   let pipelineValue = 0;
   let valuedCount = 0;
+  let totalJobs = 0;
   for (const l of list) {
     if (!countsTowardPipelineValue(normalizePipelineStage(l.category))) continue;
+    totalJobs += 1;
     const v = leadEstimateValue(l);
     pipelineValue += v;
     if (v > 0) valuedCount += 1;
   }
-  return { pipelineValue, valuedCount };
+  return { pipelineValue, valuedCount, totalJobs };
 }
 
 /** Normalize legacy localStorage leads (e.g. clientJobNumber → jobNumber). */
@@ -4986,6 +5048,9 @@ export default function SummitApp() {
   const [lightboxPhoto, setLightboxPhoto] = useState<LeadPhoto | null>(null);
   const [measurementPdfUrl, setMeasurementPdfUrl] = useState<string | null>(null);
   const [measurementPdfName, setMeasurementPdfName] = useState('');
+  const [hubPdfBusy, setHubPdfBusy] = useState(false);
+  const pdfPreviewFileRef = useRef<File | null>(null);
+  const pdfPreviewRevokeRef = useRef<string | null>(null);
   const measurementFileRef = useRef<HTMLInputElement | null>(null);
   const [photoReportOpen, setPhotoReportOpen] = useState(false);
   const [photoReportTitle, setPhotoReportTitle] = useState('Photo Report');
@@ -5156,6 +5221,13 @@ export default function SummitApp() {
   const [currentLeadId, setCurrentLeadId] = useState<number | null>(null);
   const [leadCategory, setLeadCategory] = useState<PipelineStage>('Lead');
   const [headerSearch, setHeaderSearch] = useState('');
+  const [searchPins, setSearchPins] = useState<CanvassPin[]>([]);
+  const [canvassFocusPinId, setCanvassFocusPinId] = useState<number | null>(
+    null
+  );
+  const [searchFocusTaskId, setSearchFocusTaskId] = useState<string | null>(
+    null
+  );
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [email, setEmail] = useState('');
@@ -5331,6 +5403,7 @@ export default function SummitApp() {
     'scope' | 'api' | 'auth' | 'other' | null
   >(null);
   const [newTaskTitle, setNewTaskTitle] = useState('');
+  const newTaskTitleRef = useRef<HTMLInputElement>(null);
   const [newTaskDue, setNewTaskDue] = useState('');
   const [newTaskNotes, setNewTaskNotes] = useState('');
   const [taskListDraftTitle, setTaskListDraftTitle] = useState('');
@@ -5346,6 +5419,22 @@ export default function SummitApp() {
   /** Laptop (1024+): icon rail vs full labels. Phone uses bottom tabs; iPad is always rail. */
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const phoneBackRef = useRef<() => boolean>(() => false);
+  const phoneForwardRef = useRef<() => boolean>(() => false);
+  const phoneForwardRestoreRef = useRef<PhoneForwardRestore | null>(null);
+  const phoneCanGoBackRef = useRef(false);
+  const phoneNavGestureRef = useRef(false);
+  const pendingForwardAfterLeaveRef = useRef<PhoneForwardRestore | null>(null);
+  const armPhoneForward = (entry: PhoneForwardRestore | null) => {
+    phoneForwardRestoreRef.current = entry;
+    setPhoneForwardFlag(entry != null);
+  };
+  const armForwardAfterEstimatorLeave = () => {
+    const restore = pendingForwardAfterLeaveRef.current;
+    pendingForwardAfterLeaveRef.current = null;
+    if (!restore) return;
+    phoneNavGestureRef.current = true;
+    armPhoneForward(restore);
+  };
   const phoneTabSwipeRef = useRef({ y: 0, swiped: false });
   const [isLaptopNav, setIsLaptopNav] = useState(false);
   const sidebarDocPrevCollapsed = useRef<boolean | null>(null);
@@ -5377,6 +5466,7 @@ export default function SummitApp() {
     null
   );
   const headerSearchRef = useRef<HTMLDivElement>(null);
+  const searchPinsLoadedRef = useRef(false);
 
   // Pricing region from open lead address (or form fields / manual override)
   const regionLeadId = currentLeadId ?? estimatorSourceLeadId;
@@ -5882,6 +5972,15 @@ export default function SummitApp() {
       showToast('Could not read photo');
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (pdfPreviewRevokeRef.current) {
+        URL.revokeObjectURL(pdfPreviewRevokeRef.current);
+        pdfPreviewRevokeRef.current = null;
+      }
+    };
+  }, []);
 
   // Flatten stored company logo onto white for PDF drawing (fixes PNG alpha → black).
   useEffect(() => {
@@ -7292,7 +7391,7 @@ export default function SummitApp() {
     doc.setTextColor(muted.r, muted.g, muted.b);
     doc.text(title, right, y + 11.5, { align: 'right' });
     doc.text(
-      d?.date || new Date().toLocaleDateString(),
+      (blank ? undefined : d?.date) || new Date().toLocaleDateString(),
       right,
       y + 16,
       { align: 'right' }
@@ -7390,13 +7489,7 @@ export default function SummitApp() {
     let total = 0;
     if (blank || !d?.lines?.length) {
       doc.setTextColor(muted.r, muted.g, muted.b);
-      doc.text(
-        blank
-          ? 'Blank template — fill as needed'
-          : 'No line items',
-        left + 2,
-        y
-      );
+      doc.text('—', left + 2, y);
       doc.setTextColor(ink.r, ink.g, ink.b);
       y += 10;
     } else {
@@ -7463,9 +7556,11 @@ export default function SummitApp() {
     y += 8;
 
     // --- Notes ---
-    const notesText =
-      d?.notes ||
+    const defaultMitigationNotes =
       'Work performed to mitigate any further damages.\nLabor is included — price covers materials, labor, and roof access / set up.\nPlease forward to Insurance Company for reimbursement.';
+    const notesText = blank
+      ? defaultMitigationNotes
+      : d?.notes || defaultMitigationNotes;
     doc.setTextColor(muted.r, muted.g, muted.b);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
@@ -12161,6 +12256,12 @@ export default function SummitApp() {
       if (!el.closest?.('[data-header-menu]')) {
         setShowUserMenu(false);
       }
+      if (
+        headerSearchRef.current &&
+        !headerSearchRef.current.contains(el)
+      ) {
+        setHeaderSearch('');
+      }
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -12176,6 +12277,54 @@ export default function SummitApp() {
       document.removeEventListener('keydown', onKey);
     };
   }, []);
+
+  useEffect(() => {
+    if (!headerSearch.trim() || searchPinsLoadedRef.current) return;
+    searchPinsLoadedRef.current = true;
+    let cancelled = false;
+    const loadPins = async () => {
+      let pins: CanvassPin[] = [];
+      try {
+        const raw = localStorage.getItem(CANVASS_PINS_STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) pins = parsed as CanvassPin[];
+        }
+      } catch {
+        /* ignore */
+      }
+      try {
+        if (supabaseEnabled && supabase) {
+          const { data, error } = await supabase
+            .from('canvass_pins')
+            .select(
+              'id, address, owner_name, notes, disposition, property_data, lat, lng'
+            )
+            .order('created_at', { ascending: false });
+          if (!error && Array.isArray(data)) {
+            pins = data as CanvassPin[];
+          }
+        }
+      } catch {
+        /* keep local */
+      }
+      if (!cancelled) setSearchPins(pins);
+    };
+    void loadPins();
+    return () => {
+      cancelled = true;
+    };
+  }, [headerSearch, supabaseEnabled, supabase]);
+
+  useEffect(() => {
+    if (!searchFocusTaskId || activeTab !== 'tasks') return;
+    const el = document.querySelector(
+      `[data-search-task-id="${searchFocusTaskId}"]`
+    );
+    if (el instanceof HTMLElement) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }, [searchFocusTaskId, activeTab, tasks]);
 
   // Track standalone (installed) display mode + capture Chrome/Android's install prompt
   useEffect(() => {
@@ -12242,18 +12391,28 @@ export default function SummitApp() {
     };
   }, []);
 
-  // Phone: left-edge swipe is Back (same stack as the in-app Back buttons).
+  // Phone: left-edge swipe → Back, right-edge swipe → Forward (undo last Back).
   useEffect(() => {
     const phone = window.matchMedia('(max-width: 767px)');
     let startX = 0;
     let startY = 0;
     let tracking = false;
+    let edge: 'back' | 'forward' | null = null;
+    const reset = () => {
+      tracking = false;
+      edge = null;
+    };
     const onStart = (e: TouchEvent) => {
       if (!phone.matches) return;
       const t = e.touches[0];
-      if (!t || t.clientX > 28) return;
+      if (!t) return;
       const target = e.target as HTMLElement | null;
-      if (target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      if (target?.closest?.('input, textarea, select, [contenteditable="true"]'))
+        return;
+      const zone = phoneEdgeNavZone(t.clientX, window.innerWidth);
+      if (zone === 'back' && phoneCanGoBackRef.current) edge = 'back';
+      else if (zone === 'forward' && phoneForwardRestoreRef.current) edge = 'forward';
+      else return;
       tracking = true;
       startX = t.clientX;
       startY = t.clientY;
@@ -12264,30 +12423,68 @@ export default function SummitApp() {
       if (!t) return;
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
-      if (dx > 12 && Math.abs(dx) > Math.abs(dy)) {
+      const horizontal = Math.abs(dx) > Math.abs(dy);
+      if (
+        horizontal &&
+        ((edge === 'back' && dx > PHONE_NAV_LOCK_PX) ||
+          (edge === 'forward' && dx < -PHONE_NAV_LOCK_PX))
+      ) {
         e.preventDefault();
       }
     };
     const onEnd = (e: TouchEvent) => {
       if (!tracking) return;
-      tracking = false;
+      const going = edge;
+      reset();
       const t = e.changedTouches[0];
-      if (!t) return;
+      if (!t || !going) return;
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
-      if (dx > 64 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+      if (Math.abs(dx) <= Math.abs(dy) * 1.2) return;
+      if (going === 'back' && dx > PHONE_NAV_COMMIT_PX) {
         phoneBackRef.current();
+      } else if (going === 'forward' && dx < -PHONE_NAV_COMMIT_PX) {
+        phoneForwardRef.current();
       }
     };
     document.addEventListener('touchstart', onStart, { passive: true });
     document.addEventListener('touchmove', onMove, { passive: false });
     document.addEventListener('touchend', onEnd, { passive: true });
+    document.addEventListener('touchcancel', reset, { passive: true });
     return () => {
       document.removeEventListener('touchstart', onStart);
       document.removeEventListener('touchmove', onMove);
       document.removeEventListener('touchend', onEnd);
+      document.removeEventListener('touchcancel', reset);
     };
   }, []);
+
+  const phonePlace = [
+    activeTab,
+    isEditingLead,
+    currentLeadId,
+    profileTab,
+    systemDocWorkspace,
+    sidebarOpen,
+    showUserMenu,
+    headerSearch,
+    measurementPdfUrl ? 'pdf' : '',
+    lightboxPhoto?.id ?? '',
+    showEstimatePicker,
+    showProfessionalEstimate,
+  ].join('|');
+
+  useEffect(() => {
+    setPhoneBackFlag(phoneCanGoBackRef.current);
+    if (phoneNavGestureRef.current) {
+      phoneNavGestureRef.current = false;
+      return;
+    }
+    if (phoneForwardRestoreRef.current) {
+      phoneForwardRestoreRef.current = null;
+      setPhoneForwardFlag(false);
+    }
+  }, [phonePlace]);
 
   const isDocumentWorkspace =
     systemDocWorkspace === 'takeoff' ||
@@ -15860,8 +16057,7 @@ export default function SummitApp() {
       ...trash,
     ]);
     if (measurementPdfUrl && doc.url === measurementPdfUrl) {
-      setMeasurementPdfUrl(null);
-      setMeasurementPdfName('');
+      closePdfPreview();
     }
     showToast('Moved to trash');
   };
@@ -16251,8 +16447,7 @@ export default function SummitApp() {
       ...trash,
     ]);
     if (measurementPdfUrl && doc.url === measurementPdfUrl) {
-      setMeasurementPdfUrl(null);
-      setMeasurementPdfName('');
+      closePdfPreview();
     }
     const remaining = (updated.find((l) => l.id === currentLeadId)?.documents ||
       []
@@ -16890,12 +17085,16 @@ export default function SummitApp() {
     download?: boolean;
     asFile?: boolean;
     sheet?: TakeoffSheet;
+    blank?: boolean;
   }): File | null => {
-    const snapshot = normalizeTakeoff(opts?.sheet ?? takeoffForm);
+    const blank = opts?.blank === true;
+    const snapshot = normalizeTakeoff(
+      opts?.sheet ?? (blank ? emptyTakeoff() : takeoffForm)
+    );
     const lead =
-      currentLeadId != null
-        ? leads.find((l) => l.id === currentLeadId)
-        : null;
+      blank || currentLeadId == null
+        ? null
+        : leads.find((l) => l.id === currentLeadId) || null;
     const clientName = lead
       ? [lead.clientFirstName, lead.clientLastName].filter(Boolean).join(' ')
       : '';
@@ -17000,7 +17199,9 @@ export default function SummitApp() {
     doc.setTextColor(160, 160, 165);
     doc.text('Take off sheet', pageW / 2, pageH - 10, { align: 'center' });
 
-    const safeName = (clientName || 'Lead').replace(/[^\w.-]+/g, '_');
+    const safeName = blank
+      ? 'Blank'
+      : (clientName || 'Lead').replace(/[^\w.-]+/g, '_');
     const fileName = `Takeoff-${safeName}.pdf`;
     const blob = doc.output('blob');
     if (opts?.download !== false && !opts?.asFile) {
@@ -17115,6 +17316,7 @@ export default function SummitApp() {
     const leave = pendingLeave;
     setPendingLeave(null);
     if (leave.kind === 'estimator') {
+      armForwardAfterEstimatorLeave();
       completeLeaveEstimator({
         returnToLead: leave.returnToLead,
         targetTab: leave.targetTab,
@@ -17144,6 +17346,7 @@ export default function SummitApp() {
     await saveCurrentEstimate();
     setPendingLeave(null);
     if (leave.kind === 'estimator') {
+      armForwardAfterEstimatorLeave();
       completeLeaveEstimator({
         returnToLead: leave.returnToLead,
         targetTab: leave.targetTab,
@@ -17593,24 +17796,50 @@ export default function SummitApp() {
     estimateId?: number;
     /** Fresh leads array when called right after persist (avoids stale overwrite) */
     leadsSnapshot?: Lead[];
-  }) => {
+    /** Empty company copy — no client, scope, or totals from the open estimator. */
+    blank?: boolean;
+    asFile?: boolean;
+  }): Promise<File | void> => {
     // Print-friendly letter layout (twin of mitigation invoice)
-    const wantDownload = opts?.download !== false && opts?.save !== true
-      ? true
-      : opts?.download === true;
-    const wantSave = opts?.save === true;
+    const blank = opts?.blank === true;
+    const asFile = opts?.asFile === true;
+    const wantDownload =
+      !asFile &&
+      (opts?.download !== false && opts?.save !== true
+        ? true
+        : opts?.download === true);
+    const wantSave = !blank && !asFile && opts?.save === true;
     // Legacy: generatePDF() with no opts = download only
-    const doDownload = opts == null ? true : wantDownload;
-    const capturedSig = captureEstimatePadIfInk();
+    const doDownload = !asFile && (opts == null ? true : wantDownload);
+    const capturedSig = blank ? null : captureEstimatePadIfInk();
     if (capturedSig) {
       setEstimateSignatureDataUrl(capturedSig.dataUrl);
       setEstimateSignedAt(capturedSig.signedAt);
     }
-    const pdfSignatureUrl = capturedSig?.dataUrl || estimateSignatureDataUrl;
-    const pdfSignedAt = capturedSig?.signedAt || estimateSignedAt;
-    const client = resolveEstimatorClient();
+    const pdfSignatureUrl = blank
+      ? null
+      : capturedSig?.dataUrl || estimateSignatureDataUrl;
+    const pdfSignedAt = blank
+      ? null
+      : capturedSig?.signedAt || estimateSignedAt;
+    const client = blank
+      ? {
+          firstName: '',
+          lastName: '',
+          address: '',
+          city: '',
+          state: '',
+          zip: '',
+          phone: '',
+          email: '',
+          jobNumber: '',
+          fullName: '—',
+          fullAddress: '—',
+          lead: null as Lead | null,
+        }
+      : resolveEstimatorClient();
     const doc = new jsPDF({ unit: 'mm', format: 'letter' });
-    const scopeItems = buildScopeOfWork();
+    const scopeItems = blank ? [] : buildScopeOfWork();
     const pageW = doc.internal.pageSize.getWidth();
     const pageH = doc.internal.pageSize.getHeight();
     const left = 18;
@@ -17676,7 +17905,12 @@ export default function SummitApp() {
     doc.setFontSize(9);
     doc.setTextColor(muted.r, muted.g, muted.b);
     doc.text('Roofing proposal', right, y + 11.5, { align: 'right' });
-    doc.text(`Prepared ${estimateDate}`, right, y + 16, { align: 'right' });
+    doc.text(
+      `Prepared ${blank ? new Date().toLocaleDateString() : estimateDate}`,
+      right,
+      y + 16,
+      { align: 'right' }
+    );
 
     y = 38;
     doc.setDrawColor(rule.r, rule.g, rule.b);
@@ -17757,6 +17991,12 @@ export default function SummitApp() {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
     doc.setTextColor(ink.r, ink.g, ink.b);
+    if (scopeItems.length === 0) {
+      doc.setTextColor(muted.r, muted.g, muted.b);
+      doc.text('—', left + 2, y);
+      doc.setTextColor(ink.r, ink.g, ink.b);
+      y += 10;
+    }
     scopeItems.forEach((item) => {
       if (y > pageH - 55) {
         doc.addPage();
@@ -17775,7 +18015,7 @@ export default function SummitApp() {
       y += Math.max(7, wrapped.length * 4.8);
     });
 
-    if (notes.trim()) {
+    if (!blank && notes.trim()) {
       y += 6;
       if (y > pageH - 50) {
         doc.addPage();
@@ -17807,7 +18047,7 @@ export default function SummitApp() {
     y += 10;
 
     const totalsX = right - 70;
-    if (bufferUsed > 0) {
+    if (!blank && bufferUsed > 0) {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(9);
       doc.setTextColor(muted.r, muted.g, muted.b);
@@ -17824,7 +18064,7 @@ export default function SummitApp() {
     doc.setFontSize(12);
     doc.setTextColor(ink.r, ink.g, ink.b);
     doc.text('Total investment', totalsX, y + 4);
-    doc.text(money(estimatorTotalPrice), right - 2, y + 4, {
+    doc.text(blank ? '—' : money(estimatorTotalPrice), right - 2, y + 4, {
       align: 'right',
     });
     y += 14;
@@ -17877,7 +18117,7 @@ export default function SummitApp() {
     doc.setFontSize(8);
     doc.setTextColor(ink.r, ink.g, ink.b);
     doc.text(
-      `Signed by: ${estimateSignerName.trim() || '__________'}`,
+      `Signed by: ${blank ? '__________' : estimateSignerName.trim() || '__________'}`,
       left,
       y
     );
@@ -17897,18 +18137,24 @@ export default function SummitApp() {
       align: 'center',
     });
 
-    const safeName =
-      [client.firstName, client.lastName].filter(Boolean).join('_') || 'Estimate';
+    const safeName = blank
+      ? 'Blank'
+      : [client.firstName, client.lastName].filter(Boolean).join('_') ||
+        'Estimate';
     const safeBrand =
       estimateBrand.replace(/[^\w]+/g, '_').replace(/^_|_$/g, '') || 'Estimate';
     const fileName = `${safeBrand}_Estimate_${safeName}.pdf`;
     const blob = doc.output('blob');
 
+    if (asFile) {
+      return new File([blob], fileName, { type: 'application/pdf' });
+    }
+
     if (doDownload) {
       doc.save(fileName);
     }
 
-    if (!wantSave) {
+    if (blank || !wantSave) {
       if (doDownload) showToast('Estimate PDF downloaded');
       return;
     }
@@ -18039,6 +18285,112 @@ export default function SummitApp() {
       console.error('Estimate save PDF error', err);
       showToast('Save failed — downloading PDF instead');
       doc.save(fileName);
+    }
+  };
+
+  const closePdfPreview = () => {
+    setMeasurementPdfUrl(null);
+    setMeasurementPdfName('');
+    pdfPreviewFileRef.current = null;
+    if (pdfPreviewRevokeRef.current) {
+      URL.revokeObjectURL(pdfPreviewRevokeRef.current);
+      pdfPreviewRevokeRef.current = null;
+    }
+  };
+
+  const openHubPdfPreview = (file: File) => {
+    if (pdfPreviewRevokeRef.current) {
+      URL.revokeObjectURL(pdfPreviewRevokeRef.current);
+    }
+    const url = URL.createObjectURL(file);
+    pdfPreviewRevokeRef.current = url;
+    pdfPreviewFileRef.current = file;
+    setMeasurementPdfName(file.name);
+    setMeasurementPdfUrl(url);
+  };
+
+  const openRemotePdfPreview = (url: string, name: string) => {
+    if (pdfPreviewRevokeRef.current) {
+      URL.revokeObjectURL(pdfPreviewRevokeRef.current);
+      pdfPreviewRevokeRef.current = null;
+    }
+    pdfPreviewFileRef.current = null;
+    setMeasurementPdfName(name);
+    setMeasurementPdfUrl(url);
+  };
+
+  const downloadOpenPdf = async () => {
+    const file = pdfPreviewFileRef.current;
+    const url = measurementPdfUrl;
+    const name = measurementPdfName || 'document.pdf';
+    if (
+      file &&
+      typeof navigator.canShare === 'function' &&
+      navigator.canShare({ files: [file] })
+    ) {
+      try {
+        await navigator.share({ files: [file], title: name });
+        return;
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') return;
+      }
+    }
+    if (!url) return;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name.toLowerCase().endsWith('.pdf') ? name : `${name}.pdf`;
+    a.rel = 'noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  const openHubLibraryDoc = async (id: SystemDocId) => {
+    if (id === 'pricing') {
+      openSystemDoc('pricing', 'hub');
+      return;
+    }
+    if (hubPdfBusy) return;
+    setHubPdfBusy(true);
+    try {
+      let file: File | void | null = null;
+      if (id === 'estimate') {
+        file = await generatePDF({
+          blank: true,
+          asFile: true,
+          download: false,
+          save: false,
+        });
+      } else if (id === 'takeoff') {
+        file = generateTakeoffPdf({
+          blank: true,
+          asFile: true,
+          download: false,
+          sheet: emptyTakeoff(),
+        });
+      } else if (id === 'mitigation') {
+        file = generateMitigationPdf({
+          blank: true,
+          asFile: true,
+          entity: 'prowest',
+          download: false,
+          save: false,
+        });
+      } else {
+        file = await generateEmergencyAgreementPdf({
+          asFile: true,
+          download: false,
+          save: false,
+          draft: emptyEmergencyDraft(),
+        });
+      }
+      if (file) openHubPdfPreview(file);
+      else showToast('Could not build PDF');
+    } catch (err) {
+      console.error('Hub PDF error', err);
+      showToast('Could not build PDF');
+    } finally {
+      setHubPdfBusy(false);
     }
   };
 
@@ -18340,26 +18692,337 @@ export default function SummitApp() {
     );
   };
 
-  const headerSearchQuery = headerSearch.trim().toLowerCase();
-  const headerSearchResults = headerSearchQuery
-    ? leads
-        .filter((lead) => {
-          const hay = [
-            lead.clientFirstName,
-            lead.clientLastName,
-            lead.clientAddress,
-            lead.clientCity,
-            lead.clientPhone,
-            lead.clientEmail,
-            lead.jobNumber,
-            lead.category,
-          ]
-            .join(' ')
-            .toLowerCase();
-          return hay.includes(headerSearchQuery);
+  const headerSearchQuery = headerSearch.trim();
+  const headerSearchRecords: AppSearchRecord[] = headerSearchQuery
+    ? (() => {
+    const records: AppSearchRecord[] = [];
+    for (const lead of leads) {
+      const crew = crewById(lead.assignedCrew);
+      const sheet = resolveFinancialWorksheet(lead);
+      records.push(
+        ...recordsFromLead({
+          id: lead.id,
+          clientFirstName: lead.clientFirstName,
+          clientLastName: lead.clientLastName,
+          clientAddress: lead.clientAddress,
+          clientCity: lead.clientCity,
+          clientState: lead.clientState,
+          clientZip: lead.clientZip,
+          clientPhone: lead.clientPhone,
+          clientEmail: lead.clientEmail,
+          additionalEmails: lead.additionalEmails,
+          additionalContacts: lead.additionalContacts,
+          company: lead.company,
+          jobNumber: lead.jobNumber,
+          billingAddress: lead.billingAddress,
+          billingCity: lead.billingCity,
+          billingState: lead.billingState,
+          billingZip: lead.billingZip,
+          jobCategory: lead.jobCategory,
+          hoaInfo: lead.hoaInfo,
+          leadSource: lead.leadSource,
+          referralName: lead.referralName,
+          insuranceCompany: lead.insuranceCompany,
+          damageLocation: lead.damageLocation,
+          dateOfLoss: lead.dateOfLoss,
+          claimNumber: lead.claimNumber,
+          policyNumber: lead.policyNumber,
+          adjusterName: lead.adjusterName,
+          adjusterPhone: lead.adjusterPhone,
+          adjusterEmail: lead.adjusterEmail,
+          category: normalizePipelineStage(lead.category),
+          notes: lead.notes,
+          assignedCrewName: crew?.name,
+          assignedCrewContact: crew?.contact,
+          assignedCrewPhone: crew?.phone,
+          adjustmentDate: lead.adjustmentDate,
+          financialNotes: sheet.notes,
+          financialLabels: sheet.sections
+            .flatMap((s) => [s.title, ...s.lines.map((l) => l.label)])
+            .join(' '),
+          takeoffNotes: lead.takeoff?.notes,
+          photoReportTitles: (lead.photoReports || [])
+            .map((r) => r.title)
+            .join(' '),
+          approvedJobValue: sheet.approvedJobValue,
+          estimates: (lead.estimates || []).map((est) => ({
+            id: est.id,
+            date: est.date,
+            selectedShingle: est.selectedShingle,
+            systemLabel: estimateSystemLabel(est),
+            notes: est.notes,
+            total: est.total,
+            pdfName: est.pdfName,
+          })),
+          documents: lead.documents,
+          measurementReports: lead.measurementReports,
+          photos: lead.photos,
         })
-        .slice(0, 6)
+      );
+    }
+    const visibleEvents = (
+      Array.isArray(calendarEvents) ? calendarEvents : []
+    ).filter(
+      (e) => e && e.startDate && (gcalConnected || e.source !== 'google')
+    );
+    for (const event of visibleEvents) {
+      records.push(
+        recordsFromEvent({
+          id: event.id,
+          title: event.title,
+          notes: event.notes,
+          startDate: event.startDate,
+          leadName: event.leadName,
+        })
+      );
+    }
+    const visibleTasks = (
+      gcalConnected
+        ? safeTasksState
+        : purgeGoogleSourcedTasks(safeTasksState)
+    ).filter((t) => t && typeof t.title === 'string' && isActiveSummitTask(t));
+    for (const task of visibleTasks) {
+      const list = safeTaskLists.find((l) => l.id === task.listId);
+      records.push(
+        recordsFromTask({
+          id: task.id,
+          title: task.title,
+          notes: task.notes,
+          dueDate: task.dueDate,
+          listId: task.listId,
+          listTitle: list?.title,
+        })
+      );
+    }
+    const seenInvoiceUrls = new Set<string>();
+    for (const inv of Array.isArray(appInvoices) ? appInvoices : []) {
+      if (inv.url) seenInvoiceUrls.add(inv.url);
+      records.push(
+        recordsFromInvoice({
+          id: inv.id,
+          title: inv.title,
+          leadLabel: inv.leadLabel,
+          job: inv.job,
+          claimNumber: inv.claimNumber,
+          fileName: inv.fileName,
+          url: inv.url,
+          leadId: inv.leadId,
+          total: inv.total,
+        })
+      );
+    }
+    for (const lead of leads) {
+      for (const doc of lead.documents || []) {
+        if (inferLeadDocFolder(doc) !== 'invoices') continue;
+        if (doc.url && seenInvoiceUrls.has(doc.url)) continue;
+        records.push(
+          recordsFromInvoice({
+            id: doc.id,
+            title: doc.name,
+            leadLabel: leadDisplayFromParts(
+              lead.clientFirstName,
+              lead.clientLastName
+            ),
+            job: lead.jobNumber,
+            fileName: doc.name,
+            url: doc.url,
+            leadId: lead.id,
+          })
+        );
+      }
+    }
+    for (const pin of searchPins) {
+      const property =
+        pin.property_data && typeof pin.property_data === 'object'
+          ? pin.property_data
+          : {};
+      records.push(
+        recordsFromPin({
+          id: pin.id,
+          address: pin.address,
+          owner_name: pin.owner_name,
+          notes: pin.notes,
+          disposition: pin.disposition,
+          dispositionLabel: dispositionStyle(pin.disposition).label,
+          parcelId:
+            'parcelId' in property
+              ? (property as { parcelId?: string | null }).parcelId
+              : null,
+          siteAddress:
+            'siteAddress' in property
+              ? (property as { siteAddress?: string | null }).siteAddress
+              : null,
+        })
+      );
+    }
+    records.push(
+      ...recordsFromPages([
+        {
+          id: 'home',
+          title: 'Home',
+          haystack: 'home dashboard',
+          action: { type: 'page', tab: 'home' },
+        },
+        {
+          id: 'pipeline',
+          title: 'Pipeline',
+          haystack: 'pipeline jobs leads board',
+          action: { type: 'page', tab: 'leads' },
+        },
+        {
+          id: 'calendar',
+          title: 'Calendar',
+          haystack: 'calendar schedule appointments',
+          action: { type: 'page', tab: 'calendar' },
+        },
+        {
+          id: 'tasks',
+          title: 'Tasks',
+          haystack: 'tasks to-do list',
+          action: { type: 'page', tab: 'tasks' },
+        },
+        {
+          id: 'tools',
+          title: 'Tools',
+          haystack: 'tools hub',
+          action: { type: 'page', tab: 'tools' },
+        },
+        {
+          id: 'weather',
+          title: 'Weather',
+          subtitle: 'Tools',
+          haystack: 'weather storms tracker',
+          action: { type: 'page', tab: 'weather' },
+        },
+        {
+          id: 'canvassing',
+          title: 'Canvassing',
+          subtitle: 'Tools',
+          haystack: 'canvassing doors map neighborhoods pins',
+          action: { type: 'page', tab: 'canvassing' },
+        },
+        {
+          id: 'documents',
+          title: 'Documents',
+          haystack: 'documents files library',
+          action: { type: 'page', tab: 'documents' },
+        },
+        {
+          id: 'settings',
+          title: 'Profile settings',
+          haystack: 'profile settings',
+          action: { type: 'page', tab: 'settings' },
+        },
+        {
+          id: 'account',
+          title: 'Account',
+          subtitle: 'Profile settings',
+          haystack: searchHay([
+            'account password signed in',
+            authUserEmail,
+            userEmail,
+            email,
+          ]),
+          action: {
+            type: 'page',
+            tab: 'settings',
+            settingsSection: 'account',
+          },
+        },
+        {
+          id: 'google',
+          title: 'Google Calendar & Tasks',
+          subtitle: 'Profile settings',
+          haystack: searchHay(['google calendar tasks connect', gcalEmail, gcalName]),
+          action: {
+            type: 'page',
+            tab: 'settings',
+            settingsSection: 'google',
+          },
+        },
+        {
+          id: 'appearance',
+          title: 'Appearance',
+          subtitle: 'Profile settings',
+          haystack: 'appearance theme display',
+          action: {
+            type: 'page',
+            tab: 'settings',
+            settingsSection: 'appearance',
+          },
+        },
+        {
+          id: 'profile',
+          title: 'Profile',
+          subtitle: 'Profile settings',
+          haystack: searchHay([
+            'profile name title phone email',
+            userName,
+            userTitle,
+            userCompany,
+            userPhone,
+            userEmail,
+          ]),
+          action: {
+            type: 'page',
+            tab: 'settings',
+            settingsSection: 'profile',
+          },
+        },
+        {
+          id: 'company',
+          title: 'Company',
+          subtitle: 'Profile settings',
+          haystack: searchHay([
+            'company license roc office project manager',
+            companySettings.company,
+            companySettings.projectManager,
+            companySettings.projectManagerPhone,
+            companySettings.projectManagerEmail,
+            companySettings.address,
+            companySettings.phone,
+            companySettings.fax,
+            companySettings.license,
+          ]),
+          action: {
+            type: 'page',
+            tab: 'settings',
+            settingsSection: 'company',
+          },
+        },
+        {
+          id: 'pricing',
+          title: 'Company pricing',
+          haystack: 'company pricing price book costs labor',
+          action: { type: 'page', tab: 'documents', workspace: 'pricing' },
+        },
+        {
+          id: 'takeoff',
+          title: 'Takeoff sheet',
+          haystack: 'takeoff take off sheet',
+          action: { type: 'page', tab: 'documents', workspace: 'takeoff' },
+        },
+        {
+          id: 'mitigation',
+          title: 'Mitigation invoice',
+          haystack: 'mitigation invoice tarp',
+          action: { type: 'page', tab: 'documents', workspace: 'mitigation' },
+        },
+        {
+          id: 'emergency',
+          title: 'Mitigation Service Agreement',
+          haystack: 'mitigation service agreement emergency',
+          action: { type: 'page', tab: 'documents', workspace: 'emergency' },
+        },
+      ])
+    );
+    return records;
+  })()
     : [];
+  const headerSearchResults = queryAppSearch(
+    headerSearchRecords,
+    headerSearchQuery
+  );
 
   const openNavTab = (tab: AppTab) => {
     setShowProfessionalEstimate(false);
@@ -18391,6 +19054,104 @@ export default function SummitApp() {
     handleTabChange(tab);
   };
 
+  const handleHeaderSearchSelect = (hit: AppSearchHit) => {
+    setHeaderSearch('');
+    setSidebarOpen(false);
+    setShowUserMenu(false);
+    setShowProfessionalEstimate(false);
+    setShowEstimatePicker(false);
+    setInvoicePickerMode(false);
+    setSearchFocusTaskId(null);
+
+    const action = hit.action;
+    if (action.type === 'lead') {
+      openLeadProfile(action.leadId);
+      return;
+    }
+    if (action.type === 'estimate') {
+      const lead = leads.find((l) => l.id === action.leadId);
+      const estimate = lead?.estimates?.find((e) => e.id === action.estimateId);
+      if (estimate) openLeadEstimate(action.leadId, estimate);
+      else openLeadProfile(action.leadId);
+      return;
+    }
+    if (action.type === 'event') {
+      openNavTab('calendar');
+      setCalendarSelectedDay(action.date);
+      setCalendarCursor(new Date(`${action.date}T12:00:00`));
+      const event = calendarEvents.find((e) => e.id === action.eventId);
+      if (event) openEditCalendarEvent(event);
+      return;
+    }
+    if (action.type === 'task') {
+      persistActiveTaskListId(action.listId);
+      setSearchFocusTaskId(action.taskId);
+      const task = safeTasksState.find((t) => t.id === action.taskId);
+      if (task?.completed) setTasksCompletedOpen(true);
+      openNavTab('tasks');
+      return;
+    }
+    if (action.type === 'document') {
+      openLeadProfile(action.leadId);
+      setProfileTab('documents');
+      if (action.url) {
+        openRemotePdfPreview(action.url, hit.title);
+      }
+      return;
+    }
+    if (action.type === 'photo') {
+      openLeadProfile(action.leadId);
+      setProfileTab('photos');
+      const lead = leads.find((l) => l.id === action.leadId);
+      const photo = (lead?.photos || []).find((p) => p.id === action.photoId);
+      if (photo) setLightboxPhoto(photo);
+      return;
+    }
+    if (action.type === 'invoice') {
+      if (action.leadId != null) {
+        openLeadProfile(action.leadId);
+        setProfileTab('documents');
+      }
+      if (action.url) {
+        openRemotePdfPreview(action.url, hit.title);
+      }
+      return;
+    }
+    if (action.type === 'pin') {
+      setCanvassFocusPinId(action.pinId);
+      openNavTab('canvassing');
+      return;
+    }
+    if (action.type === 'page') {
+      if (action.workspace === 'pricing') {
+        openSystemDoc('pricing', 'hub');
+        return;
+      }
+      if (action.workspace === 'takeoff') {
+        openSystemDoc('takeoff', 'hub');
+        return;
+      }
+      if (action.workspace === 'mitigation') {
+        openMitigationWorkspace('personal');
+        return;
+      }
+      if (action.workspace === 'emergency') {
+        openEmergencyAgreement();
+        return;
+      }
+      const tab = action.tab as AppTab;
+      if (APP_TABS.includes(tab)) openNavTab(tab);
+      if (action.settingsSection) {
+        const sectionId = `settings-${action.settingsSection}`;
+        window.setTimeout(() => {
+          document
+            .getElementById(sectionId)
+            ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 50);
+      }
+    }
+  };
+
   type SidebarItem = {
     tab: AppTab;
     label: string;
@@ -18414,11 +19175,11 @@ export default function SummitApp() {
     { tab: 'documents', label: 'Documents', icon: 'documents' },
   ];
   const phoneTabBar: SidebarItem[] = [
-    { tab: 'home', label: 'Home', icon: 'home' },
     { tab: 'leads', label: 'Pipeline', icon: 'jobs' },
     { tab: 'calendar', label: 'Calendar', icon: 'calendar' },
     { tab: 'tasks', label: 'Tasks', icon: 'tasks' },
     { tab: 'tools', label: 'Tools', icon: 'tools' },
+    { tab: 'settings', label: 'Profile', icon: 'settings' },
   ];
   const phoneTabSheet: SidebarItem[] = [
     { tab: 'documents', label: 'Documents', icon: 'documents' },
@@ -18430,56 +19191,168 @@ export default function SummitApp() {
       (tab === 'leads' && isEditingLead && currentLeadId != null) ||
       (tab === 'tools' && (activeTab === 'canvassing' || activeTab === 'weather')));
 
-  const goPhoneBack = () => {
-    if (sidebarOpen) {
-      setSidebarOpen(false);
-      return true;
-    }
-    if (showUserMenu) {
-      setShowUserMenu(false);
-      return true;
-    }
-    if (headerSearch) {
-      setHeaderSearch('');
-      return true;
-    }
+  const snapshotPhoneForward = (): PhoneForwardRestore | null => {
+    if (sidebarOpen) return { kind: 'sidebar' };
+    if (showUserMenu) return { kind: 'userMenu' };
+    if (headerSearch) return { kind: 'headerSearch', query: headerSearch };
     if (measurementPdfUrl) {
-      setMeasurementPdfUrl(null);
-      setMeasurementPdfName('');
-      return true;
+      return {
+        kind: 'pdf',
+        url: measurementPdfUrl,
+        name: measurementPdfName,
+        file: pdfPreviewFileRef.current,
+      };
     }
-    if (lightboxPhoto) {
-      setLightboxPhoto(null);
-      return true;
-    }
+    if (lightboxPhoto) return { kind: 'lightbox', photo: lightboxPhoto };
     if (showEstimatePicker) {
-      setShowEstimatePicker(false);
-      setInvoicePickerMode(false);
-      return true;
+      return { kind: 'estimatePicker', invoice: invoicePickerMode };
     }
-    if (showProfessionalEstimate) {
-      setShowProfessionalEstimate(false);
-      return true;
-    }
+    if (showProfessionalEstimate) return { kind: 'professionalEstimate' };
     if (systemDocWorkspace) {
-      exitLeadDocumentWorkspace();
-      return true;
+      return {
+        kind: 'docWorkspace',
+        workspace: systemDocWorkspace,
+        origin: systemDocOrigin,
+        leadId: currentLeadId,
+      };
     }
     if (isEditingLead && profileTab === 'estimator') {
-      leaveEstimator({ returnToLead: true });
-      return true;
+      return { kind: 'estimator', leadId: estimatorSourceLeadId ?? currentLeadId };
     }
-    if (isEditingLead) {
-      closeLeadProfile();
-      return true;
+    if (isEditingLead && currentLeadId != null) {
+      return { kind: 'lead', leadId: currentLeadId, profileTab };
     }
     if (activeTab === 'canvassing' || activeTab === 'weather') {
-      openNavTab('tools');
+      return { kind: 'tool', tab: activeTab };
+    }
+    return null;
+  };
+
+  const goPhoneBack = () => {
+    const restore = snapshotPhoneForward();
+    if (!restore) return false;
+
+    if (restore.kind === 'estimator') {
+      const left = leaveEstimator({ returnToLead: true });
+      if (left) {
+        phoneNavGestureRef.current = true;
+        armPhoneForward(restore);
+      } else {
+        pendingForwardAfterLeaveRef.current = restore;
+      }
       return true;
     }
-    return false;
+
+    phoneNavGestureRef.current = true;
+    armPhoneForward(restore);
+
+    switch (restore.kind) {
+      case 'sidebar':
+        setSidebarOpen(false);
+        break;
+      case 'userMenu':
+        setShowUserMenu(false);
+        break;
+      case 'headerSearch':
+        setHeaderSearch('');
+        break;
+      case 'pdf':
+        closePdfPreview();
+        break;
+      case 'lightbox':
+        setLightboxPhoto(null);
+        break;
+      case 'estimatePicker':
+        setShowEstimatePicker(false);
+        setInvoicePickerMode(false);
+        break;
+      case 'professionalEstimate':
+        setShowProfessionalEstimate(false);
+        break;
+      case 'docWorkspace':
+        exitLeadDocumentWorkspace();
+        break;
+      case 'lead':
+        closeLeadProfile();
+        break;
+      case 'tool':
+        openNavTab('tools');
+        break;
+    }
+    return true;
   };
   phoneBackRef.current = goPhoneBack;
+  phoneCanGoBackRef.current = snapshotPhoneForward() != null;
+
+  const goPhoneForward = () => {
+    const restore = phoneForwardRestoreRef.current;
+    if (!restore) return false;
+    phoneNavGestureRef.current = true;
+    armPhoneForward(null);
+
+    switch (restore.kind) {
+      case 'sidebar':
+        setSidebarOpen(true);
+        break;
+      case 'userMenu':
+        setShowUserMenu(true);
+        break;
+      case 'headerSearch':
+        setHeaderSearch(restore.query);
+        break;
+      case 'pdf':
+        if (restore.file) openHubPdfPreview(restore.file);
+        else openRemotePdfPreview(restore.url, restore.name);
+        break;
+      case 'lightbox':
+        setLightboxPhoto(restore.photo);
+        break;
+      case 'estimatePicker':
+        setShowEstimatePicker(true);
+        setInvoicePickerMode(restore.invoice);
+        break;
+      case 'professionalEstimate':
+        setShowProfessionalEstimate(true);
+        break;
+      case 'docWorkspace':
+        setSystemDocWorkspace(restore.workspace);
+        setSystemDocOrigin(restore.origin);
+        if (restore.origin === 'lead' && restore.leadId != null) {
+          setCurrentLeadId(restore.leadId);
+          setIsEditingLead(true);
+          setActiveTab('leads');
+        } else {
+          setActiveTab('documents');
+        }
+        break;
+      case 'estimator': {
+        const id = restore.leadId;
+        if (id != null) {
+          const lead = leads.find((l) => l.id === id);
+          if (lead) applyLeadFields(lead);
+          setCurrentLeadId(id);
+        }
+        setIsEditingLead(true);
+        setActiveTab('leads');
+        setProfileTab('estimator');
+        break;
+      }
+      case 'lead': {
+        const lead = leads.find((l) => l.id === restore.leadId);
+        if (!lead) break;
+        applyLeadFields(lead);
+        setIsEditingLead(true);
+        setActiveTab('leads');
+        setProfileTab(restore.profileTab as ProfileTab);
+        break;
+      }
+      case 'tool':
+        setActiveTab(restore.tab);
+        break;
+    }
+    return true;
+  };
+  phoneForwardRef.current = goPhoneForward;
 
   const SidebarIcon = ({
     icon,
@@ -18539,6 +19412,13 @@ export default function SummitApp() {
             <path d="M14 3v5h5" />
           </svg>
         );
+      case 'settings':
+        return (
+          <svg {...common}>
+            <circle cx="12" cy="8" r="3.25" />
+            <path d="M5.5 19.5c1.2-3.2 3.4-4.75 6.5-4.75s5.3 1.55 6.5 4.75" />
+          </svg>
+        );
       default:
         return null;
     }
@@ -18586,7 +19466,7 @@ export default function SummitApp() {
   const sidebarRail = !isLaptopNav || sidebarCollapsed;
 
   /** Document workspaces sit beside the sidebar and below the app header. */
-  const documentWorkspaceClass = `fixed top-[var(--header-h)] bottom-0 max-md:bottom-[calc(3.75rem+env(safe-area-inset-bottom,0px))] right-0 z-[35] bg-zinc-50 overflow-y-auto overflow-x-hidden transition-[left] duration-200 ease-out left-0 md:left-[4.25rem] ${
+  const documentWorkspaceClass = `fixed top-[var(--header-h)] bottom-0 max-md:bottom-[calc(3.75rem+env(safe-area-inset-bottom,0px))] right-0 z-[35] bg-[var(--surface)] overflow-y-auto overflow-x-hidden transition-[left] duration-200 ease-out left-0 md:left-[4.25rem] ${
     sidebarRail ? 'lg:left-[4.25rem]' : 'lg:left-[15.5rem]'
   }`;
 
@@ -18841,63 +19721,16 @@ export default function SummitApp() {
         )}
 
         {/* Search */}
-        <div
-          ref={headerSearchRef}
-          className="flex-1 min-w-0 max-w-xl lg:max-w-lg relative"
-        >
-          <input
-            type="search"
-            value={headerSearch}
-            onChange={(e) => setHeaderSearch(e.target.value)}
-            placeholder="Search jobs, leads, estimates..."
-            className="glass w-full h-10 px-4 rounded-full text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-[var(--accent-blue-ring)]"
-          />
-          {headerSearchQuery && (
-            <div className="menu-panel z-[60] overflow-hidden rounded-2xl text-zinc-900 max-md:fixed max-md:left-3 max-md:right-3 max-md:top-[calc(var(--header-h)+0.35rem)] md:absolute md:left-0 md:right-0 md:mt-2">
-              {headerSearchResults.length === 0 ? (
-                <div className="px-4 py-6 text-sm text-zinc-400 text-center">
-                  No matches for “{headerSearch.trim()}”
-                </div>
-              ) : (
-                <div className="max-h-80 overflow-y-auto py-1">
-                  {headerSearchResults.map((lead, leadIdx) => {
-                    const stage = normalizePipelineStage(lead.category);
-                    return (
-                      <button
-                        key={`search-${lead.supabaseId || lead.id}-${leadIdx}`}
-                        type="button"
-                        onClick={() => {
-                          openLeadProfile(lead.id);
-                          setHeaderSearch('');
-                          setSidebarOpen(false);
-                        }}
-                        className="w-full text-left px-4 py-3 hover:bg-black/[0.04] transition-colors border-b border-zinc-200 last:border-0"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="font-medium text-sm truncate">
-                            {[lead.clientFirstName, lead.clientLastName]
-                              .filter(Boolean)
-                              .join(' ') || 'Untitled lead'}
-                          </div>
-                          <span className="text-[10px] uppercase tracking-wide text-zinc-400 shrink-0">
-                            {stage}
-                          </span>
-                        </div>
-                        <div className="text-xs text-zinc-500 mt-0.5 truncate">
-                          {lead.clientAddress || 'No address'}
-                          {lead.jobNumber ? ` · #${lead.jobNumber}` : ''}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        <HeaderSearch
+          value={headerSearch}
+          onChange={setHeaderSearch}
+          results={headerSearchResults}
+          onSelect={handleHeaderSearchSelect}
+          containerRef={headerSearchRef}
+        />
 
-        {/* User */}
-        <div className="relative shrink-0" data-header-menu>
+        {/* User — desktop/iPad menu. Phone: Profile tab. */}
+        <div className="relative shrink-0 hidden md:block" data-header-menu>
           <button
             type="button"
             onClick={() => {
@@ -18929,7 +19762,7 @@ export default function SummitApp() {
                   setShowUserMenu(false);
                   handleTabChange('home');
                 }}
-                className="w-full text-left px-4 py-2.5 min-h-11 text-sm hover:bg-black/[0.04] text-zinc-700"
+                className="hidden md:block w-full text-left px-4 py-2.5 min-h-11 text-sm hover:bg-black/[0.04] text-zinc-700"
               >
                 Home
               </button>
@@ -18939,7 +19772,7 @@ export default function SummitApp() {
                   setShowUserMenu(false);
                   handleTabChange('settings');
                 }}
-                className="w-full text-left px-4 py-2.5 min-h-11 text-sm hover:bg-black/[0.04] text-zinc-700"
+                className="hidden md:block w-full text-left px-4 py-2.5 min-h-11 text-sm hover:bg-black/[0.04] text-zinc-700"
               >
                 Profile settings
               </button>
@@ -19011,190 +19844,190 @@ export default function SummitApp() {
   if (!isLoggedIn) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6">
-        <div className="w-full max-w-md text-center glass rounded-[32px] p-8 sm:p-10">
-          <div className="mx-auto mb-8 flex justify-center">
-            {renderAppMark({
-              size: 'xl',
-              imgClassName:
-                'w-20 h-20 rounded-3xl object-contain border border-[var(--glass-border)] bg-[var(--surface-raised)]',
-            })}
-          </div>
-
-          <div className="font-bold text-5xl tracking-tighter text-zinc-900 mb-12">
-            {appDisplayName()}
-          </div>
-
-          {authMode === 'recovery' ? (
-            <div className="space-y-6">
-              <PasswordField
-                value={newPassword}
-                onChange={setNewPassword}
-                placeholder="New password"
-                autoComplete="new-password"
-                className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
-              />
-              <PasswordField
-                value={confirmPassword}
-                onChange={setConfirmPassword}
-                placeholder="Confirm password"
-                autoComplete="new-password"
-                className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void handleUpdateRecoveryPassword();
-                }}
-              />
-              {authMessage ? (
-                <p className="text-sm text-zinc-700">{authMessage}</p>
-              ) : null}
-              <button
-                type="button"
-                disabled={authBusy}
-                onClick={() => void handleUpdateRecoveryPassword()}
-                className="btn-primary btn-primary-lg w-full disabled:opacity-50"
-              >
-                Update password
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              <div>
-                <input
-                  type="text"
-                  inputMode={
-                    looksLikePhoneIdentifier(email) ? 'tel' : 'email'
-                  }
-                  value={email}
-                  onChange={(e) => {
-                    setPhoneOtpSent(false);
-                    setPhoneOtp('');
-                    setEmail(formatLoginIdentifier(e.target.value));
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter') return;
-                    if (phoneOtpSent) void handlePhoneVerify();
-                    else void handleLogin();
-                  }}
-                  className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
-                  placeholder="Email or phone number"
-                  autoComplete={
-                    looksLikePhoneIdentifier(email) ? 'tel' : 'email'
-                  }
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                />
+            <div className="w-full max-w-md text-center glass rounded-[32px] p-8 sm:p-10">
+              <div className="mx-auto mb-8 flex justify-center">
+                {renderAppMark({
+                  size: 'xl',
+                  imgClassName:
+                    'w-20 h-20 rounded-3xl object-contain border border-[var(--glass-border)] bg-[var(--surface-raised)]',
+                })}
               </div>
 
-              {phoneOtpSent ? (
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  value={phoneOtp}
-                  onChange={(e) =>
-                    setPhoneOtp(e.target.value.replace(/\D/g, '').slice(0, 8))
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') void handlePhoneVerify();
-                  }}
-                  className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white tracking-[0.3em] text-center"
-                  placeholder="6-digit code"
-                />
-              ) : looksLikePhoneIdentifier(email) ? null : (
-                <PasswordField
-                  value={password}
-                  onChange={setPassword}
-                  placeholder="Password"
-                  autoComplete="current-password"
-                  className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') void handleLogin();
-                  }}
-                />
-              )}
+              <div className="font-bold text-5xl tracking-tighter text-zinc-900 mb-12">
+                {appDisplayName()}
+              </div>
 
-              {authMessage ? (
-                <p className="text-sm text-zinc-700">{authMessage}</p>
-              ) : null}
-
-              <button
-                type="button"
-                disabled={authBusy}
-                onClick={() =>
-                  void (phoneOtpSent ? handlePhoneVerify() : handleLogin())
-                }
-                className="btn-primary btn-primary-lg w-full disabled:opacity-50"
-              >
-                {phoneOtpSent
-                  ? 'Verify code'
-                  : toE164US(email)
-                    ? 'Send code'
-                    : 'Sign In'}
-              </button>
-
-              <div className="space-y-3">
-                {phoneOtpSent ? (
+              {authMode === 'recovery' ? (
+                <div className="space-y-6">
+                  <PasswordField
+                    value={newPassword}
+                    onChange={setNewPassword}
+                    placeholder="New password"
+                    autoComplete="new-password"
+                    className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
+                  />
+                  <PasswordField
+                    value={confirmPassword}
+                    onChange={setConfirmPassword}
+                    placeholder="Confirm password"
+                    autoComplete="new-password"
+                    className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void handleUpdateRecoveryPassword();
+                    }}
+                  />
+                  {authMessage ? (
+                    <p className="text-sm text-zinc-700">{authMessage}</p>
+                  ) : null}
                   <button
                     type="button"
                     disabled={authBusy}
-                    onClick={() => void handlePhoneSendCode()}
-                    className="btn-text w-full disabled:opacity-50"
+                    onClick={() => void handleUpdateRecoveryPassword()}
+                    className="btn-primary btn-primary-lg w-full disabled:opacity-50"
                   >
-                    Resend code
+                    Update password
                   </button>
-                ) : looksLikePhoneIdentifier(email) ? null : (
-                  <button
-                    type="button"
-                    disabled={authBusy}
-                    onClick={() => void handleCreateAccount()}
-                    className="btn-text w-full disabled:opacity-50"
-                  >
-                    Create account
-                  </button>
-                )}
-
-                {phoneOtpSent ? null : (
-                  <>
-                    <div className="flex items-center gap-3 pt-1">
-                      <span className="h-px flex-1 bg-[var(--chrome-line)]" />
-                      <span className="text-xs text-[var(--steel)]">or</span>
-                      <span className="h-px flex-1 bg-[var(--chrome-line)]" />
-                    </div>
-                    <button
-                      type="button"
-                      disabled={authBusy}
-                      onClick={() => void handleOAuth('google')}
-                      className="btn-secondary w-full disabled:opacity-50"
-                    >
-                      Continue with Google
-                    </button>
-                    <button
-                      type="button"
-                      disabled={authBusy}
-                      onClick={() => void handleOAuth('azure')}
-                      className="btn-secondary w-full disabled:opacity-50"
-                    >
-                      Continue with Microsoft
-                    </button>
-                  </>
-                )}
-
-                {looksLikePhoneIdentifier(email) ? null : (
+                </div>
+              ) : (
+                <div className="space-y-6">
                   <div>
-                    <button
-                      type="button"
-                      disabled={authBusy}
-                      onClick={() => void handleForgotPassword()}
-                      className="btn-text w-full disabled:opacity-50"
-                    >
-                      Forgot password?
-                    </button>
+                    <input
+                      type="text"
+                      inputMode={
+                        looksLikePhoneIdentifier(email) ? 'tel' : 'email'
+                      }
+                      value={email}
+                      onChange={(e) => {
+                        setPhoneOtpSent(false);
+                        setPhoneOtp('');
+                        setEmail(formatLoginIdentifier(e.target.value));
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter') return;
+                        if (phoneOtpSent) void handlePhoneVerify();
+                        else void handleLogin();
+                      }}
+                      className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
+                      placeholder="Email or phone number"
+                      autoComplete={
+                        looksLikePhoneIdentifier(email) ? 'tel' : 'email'
+                      }
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                    />
                   </div>
-                )}
-              </div>
+
+                  {phoneOtpSent ? (
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      value={phoneOtp}
+                      onChange={(e) =>
+                        setPhoneOtp(e.target.value.replace(/\D/g, '').slice(0, 8))
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void handlePhoneVerify();
+                      }}
+                      className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white tracking-[0.3em] text-center"
+                      placeholder="6-digit code"
+                    />
+                  ) : looksLikePhoneIdentifier(email) ? null : (
+                    <PasswordField
+                      value={password}
+                      onChange={setPassword}
+                      placeholder="Password"
+                      autoComplete="current-password"
+                      className="w-full px-6 py-4 border border-zinc-200 rounded-2xl focus:outline-none focus:border-zinc-400 text-base bg-white"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void handleLogin();
+                      }}
+                    />
+                  )}
+
+                  {authMessage ? (
+                    <p className="text-sm text-zinc-700">{authMessage}</p>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    disabled={authBusy}
+                    onClick={() =>
+                      void (phoneOtpSent ? handlePhoneVerify() : handleLogin())
+                    }
+                    className="btn-primary btn-primary-lg w-full disabled:opacity-50"
+                  >
+                    {phoneOtpSent
+                      ? 'Verify code'
+                      : toE164US(email)
+                        ? 'Send code'
+                        : 'Sign In'}
+                  </button>
+
+                  <div className="space-y-3">
+                    {phoneOtpSent ? (
+                      <button
+                        type="button"
+                        disabled={authBusy}
+                        onClick={() => void handlePhoneSendCode()}
+                        className="btn-text w-full disabled:opacity-50"
+                      >
+                        Resend code
+                      </button>
+                    ) : looksLikePhoneIdentifier(email) ? null : (
+                      <button
+                        type="button"
+                        disabled={authBusy}
+                        onClick={() => void handleCreateAccount()}
+                        className="btn-text w-full disabled:opacity-50"
+                      >
+                        Create account
+                      </button>
+                    )}
+
+                    {phoneOtpSent ? null : (
+                      <>
+                        <div className="flex items-center gap-3 pt-1">
+                          <span className="h-px flex-1 bg-[var(--chrome-line)]" />
+                          <span className="text-xs text-[var(--steel)]">or</span>
+                          <span className="h-px flex-1 bg-[var(--chrome-line)]" />
+                        </div>
+                        <button
+                          type="button"
+                          disabled={authBusy}
+                          onClick={() => void handleOAuth('google')}
+                          className="btn-secondary w-full disabled:opacity-50"
+                        >
+                          Continue with Google
+                        </button>
+                        <button
+                          type="button"
+                          disabled={authBusy}
+                          onClick={() => void handleOAuth('azure')}
+                          className="btn-secondary w-full disabled:opacity-50"
+                        >
+                          Continue with Microsoft
+                        </button>
+                      </>
+                    )}
+
+                    {looksLikePhoneIdentifier(email) ? null : (
+                      <div>
+                        <button
+                          type="button"
+                          disabled={authBusy}
+                          onClick={() => void handleForgotPassword()}
+                          className="btn-text w-full disabled:opacity-50"
+                        >
+                          Forgot password?
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </div>
       </div>
     );
   }
@@ -22216,7 +23049,10 @@ export default function SummitApp() {
               </button>
               <button
                 type="button"
-                onClick={() => setPendingLeave(null)}
+                onClick={() => {
+                  pendingForwardAfterLeaveRef.current = null;
+                  setPendingLeave(null);
+                }}
                 className="w-full py-3 rounded-2xl font-medium text-sm text-zinc-500 hover:text-zinc-800"
               >
                 Keep editing
@@ -22301,6 +23137,44 @@ export default function SummitApp() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {measurementPdfUrl && (
+        <div className="fixed inset-0 z-[90] flex flex-col bg-zinc-900">
+          <div className="flex flex-col gap-3 px-4 py-3 bg-white border-b border-zinc-200 pt-[max(0.75rem,env(safe-area-inset-top))] sm:flex-row sm:items-center sm:justify-between">
+            <div className="font-semibold text-zinc-900 truncate min-w-0">
+              {measurementPdfName || 'Document'}
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => void downloadOpenPdf()}
+                className="min-h-11 flex-1 sm:flex-none px-4 rounded-full text-sm font-semibold btn-primary"
+              >
+                Download
+              </button>
+              <a
+                href={measurementPdfUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center justify-center min-h-11 flex-1 sm:flex-none px-4 rounded-full text-sm font-semibold border border-zinc-200 text-zinc-700"
+              >
+                Open tab
+              </a>
+              <button
+                type="button"
+                onClick={closePdfPreview}
+                className="min-h-11 flex-1 sm:flex-none px-4 rounded-full text-sm font-semibold border border-zinc-200 text-zinc-700"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+          <iframe
+            title={measurementPdfName || 'Document'}
+            src={measurementPdfUrl}
+            className="flex-1 w-full bg-zinc-100 pb-[env(safe-area-inset-bottom,0px)]"
+          />
         </div>
       )}
       {renderAppSidebar()}
@@ -23942,14 +24816,14 @@ export default function SummitApp() {
                     .badge,
               }
             : null;
-          const { pipelineValue } = pipelineValueRollup(leads);
+          const { pipelineValue, totalJobs } = pipelineValueRollup(leads);
 
           return (
             <HomeDashboard
               greeting={greeting}
               firstName={firstName}
               stageStats={stageStats}
-              totalActiveLeads={leads.length}
+              totalJobs={totalJobs}
               pipelineValue={pipelineValue}
               recentLead={recentLead}
               calendarEvents={calendarEvents}
@@ -23976,16 +24850,24 @@ export default function SummitApp() {
         })()}
 
         {activeTab === 'documents' && (
-          <div className="page-shell page-fade pb-8 w-full flex flex-col min-h-[calc(100dvh-var(--header-h)-10rem)]">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 shrink-0">
-              <h1 className="page-title">
-                Documents
-              </h1>
+          <div className="page-shell page-fade pb-8 w-full">
+            <div className="mb-8">
+              <h1 className="page-title">Documents</h1>
             </div>
-            <div className="flex-1 flex items-center justify-center">
-              <p className="text-sm font-medium text-zinc-800 text-center">
-                No documents yet
-              </p>
+            <div aria-busy={hubPdfBusy || undefined}>
+              {SYSTEM_DOCUMENTS.map((doc) => (
+                <button
+                  key={doc.id}
+                  type="button"
+                  disabled={hubPdfBusy && doc.id !== 'pricing'}
+                  onClick={() => void openHubLibraryDoc(doc.id)}
+                  className="list-row min-h-11 disabled:opacity-50"
+                >
+                  <div className="text-lg font-semibold text-zinc-900">
+                    {doc.name}
+                  </div>
+                </button>
+              ))}
             </div>
           </div>
         )}
@@ -24270,9 +25152,32 @@ export default function SummitApp() {
             <div className="page-shell page-fade space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div>
-                  <h1 className="page-title">
-                    Calendar
-                  </h1>
+                  <div className="flex items-center justify-between gap-3">
+                    <h1 className="page-title">
+                      Calendar
+                    </h1>
+                    <button
+                      type="button"
+                      onClick={() => openCreateCalendarEvent(selectedIso)}
+                      className="inline-flex md:hidden items-center justify-center w-11 h-11 p-0 border border-[var(--chrome)] rounded-full bg-transparent text-[var(--graphite)]"
+                      aria-label="Create event"
+                    >
+                      <svg
+                        width="18"
+                        height="18"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        aria-hidden
+                      >
+                        <path
+                          d="M12 5v14M5 12h14"
+                          stroke="currentColor"
+                          strokeWidth="1.75"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                    </button>
+                  </div>
                   {gcalEmail ? (
                     <p className="text-zinc-500 mt-1 text-sm">{gcalEmail}</p>
                   ) : null}
@@ -24367,7 +25272,7 @@ export default function SummitApp() {
                   <button
                     type="button"
                     onClick={() => openCreateCalendarEvent(selectedIso)}
-                    className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold"
+                    className="btn-primary hidden md:inline-flex px-5 py-2.5 rounded-2xl text-sm font-semibold"
                   >
                     Create event
                   </button>
@@ -25047,10 +25952,31 @@ export default function SummitApp() {
           return (
             <div className="page-shell page-fade space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <div>
+                <div className="flex items-center justify-between gap-3">
                   <h1 className="page-title">
                     Tasks
                   </h1>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!newTaskTitle.trim()) {
+                        newTaskTitleRef.current?.focus();
+                        return;
+                      }
+                      void addTask();
+                    }}
+                    className="inline-flex md:hidden items-center justify-center w-11 h-11 p-0 border border-[var(--chrome)] rounded-full bg-transparent text-[var(--graphite)]"
+                    aria-label="Add task"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+                      <path
+                        d="M12 5v14M5 12h14"
+                        stroke="currentColor"
+                        strokeWidth="1.75"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  </button>
                 </div>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                   {!gcalConnected ? (
@@ -25231,6 +26157,7 @@ export default function SummitApp() {
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
                   <input
+                    ref={newTaskTitleRef}
                     type="text"
                     value={newTaskTitle}
                     onChange={(e) => setNewTaskTitle(e.target.value)}
@@ -25257,7 +26184,7 @@ export default function SummitApp() {
                 <button
                   type="button"
                   onClick={() => void addTask()}
-                  className="btn-primary px-5 py-2.5 rounded-2xl text-sm font-semibold"
+                  className="btn-primary hidden md:inline-flex px-5 py-2.5 rounded-2xl text-sm font-semibold"
                 >
                   Add task
                 </button>
@@ -25275,7 +26202,12 @@ export default function SummitApp() {
                   openTasks.map((task) => (
                     <div
                       key={task.id}
-                      className="rounded-2xl border border-zinc-200 bg-white px-4 py-3 flex flex-col sm:flex-row sm:items-start gap-3"
+                      data-search-task-id={task.id}
+                      className={`rounded-2xl border border-zinc-200 bg-white px-4 py-3 flex flex-col sm:flex-row sm:items-start gap-3 ${
+                        searchFocusTaskId === task.id
+                          ? 'ring-2 ring-[var(--accent-blue-ring)]'
+                          : ''
+                      }`}
                     >
                       <button
                         type="button"
@@ -25381,7 +26313,12 @@ export default function SummitApp() {
                       {doneTasks.map((task) => (
                         <div
                           key={task.id}
-                          className="rounded-2xl border border-zinc-100 bg-zinc-50/80 px-4 py-3 flex items-center gap-3"
+                          data-search-task-id={task.id}
+                          className={`rounded-2xl border border-zinc-100 bg-zinc-50/80 px-4 py-3 flex items-center gap-3 ${
+                            searchFocusTaskId === task.id
+                              ? 'ring-2 ring-[var(--accent-blue-ring)]'
+                              : ''
+                          }`}
                         >
                           <button
                             type="button"
@@ -25526,7 +26463,7 @@ export default function SummitApp() {
                 .reduce((sum, l) => sum + leadEstimateValue(l), 0),
             ])
           ) as Record<PipelineStage, number>;
-          const { pipelineValue, valuedCount } = pipelineValueRollup(leads);
+          const { pipelineValue, valuedCount, totalJobs } = pipelineValueRollup(leads);
           const avgDeal =
             valuedCount > 0 ? Math.round(pipelineValue / valuedCount) : 0;
           const closedCount = leads.filter(
@@ -25545,6 +26482,7 @@ export default function SummitApp() {
                   pipelineValue,
                   avgEstimate: avgDeal,
                   closedCount,
+                  totalJobs,
                   stageValue,
                 }}
                 setLeadsView={setLeadsView}
@@ -25603,6 +26541,7 @@ export default function SummitApp() {
             onOpenLead={openLeadFromCanvassPin}
             showToast={showToast}
             onBack={() => handleTabChange('tools')}
+            focusPinId={canvassFocusPinId}
           />
         )}
 
@@ -25613,7 +26552,10 @@ export default function SummitApp() {
             </h1>
 
             <div className="space-y-6">
-              <section className="glass list-card space-y-4">
+              <section
+                id="settings-account"
+                className="glass list-card space-y-4 scroll-mt-24"
+              >
                 <h2 className="text-lg font-semibold text-[var(--graphite)]">
                   Account
                 </h2>
@@ -25657,7 +26599,10 @@ export default function SummitApp() {
                 </button>
               </section>
 
-              <section className="glass list-card space-y-4">
+              <section
+                id="settings-google"
+                className="glass list-card space-y-4 scroll-mt-24"
+              >
                 <h2 className="text-lg font-semibold text-[var(--graphite)]">
                   Google Calendar & Tasks
                 </h2>
@@ -25758,7 +26703,10 @@ export default function SummitApp() {
                 )}
               </section>
 
-              <section className="glass list-card space-y-4">
+              <section
+                id="settings-appearance"
+                className="glass list-card space-y-4 scroll-mt-24"
+              >
                 <div>
                   <h2 className="text-lg font-semibold text-[var(--graphite)]">
                     Appearance
@@ -25816,7 +26764,10 @@ export default function SummitApp() {
                 </div>
               </section>
 
-              <section className="glass list-card space-y-4">
+              <section
+                id="settings-profile"
+                className="glass list-card space-y-4 scroll-mt-24"
+              >
                 <h2 className="text-lg font-semibold text-[var(--graphite)]">Profile</h2>
                 <div>
                   <div className="text-xs font-medium uppercase tracking-wide text-[var(--steel)] mb-1.5">
@@ -25912,7 +26863,10 @@ export default function SummitApp() {
                 </div>
               </section>
 
-              <section className="glass list-card space-y-4">
+              <section
+                id="settings-company"
+                className="glass list-card space-y-4 scroll-mt-24"
+              >
                 <h2 className="text-lg font-semibold text-[var(--graphite)]">Company</h2>
                 <div>
                   <div className="text-xs font-medium uppercase tracking-wide text-[var(--steel)] mb-1.5">
@@ -26091,6 +27045,24 @@ export default function SummitApp() {
                   className="btn-primary px-6 py-3 rounded-2xl text-sm font-semibold"
                 >
                   Save Settings
+                </button>
+              </div>
+              <div className="md:hidden flex flex-col gap-3">
+                {!isStandaloneApp && (
+                  <button
+                    type="button"
+                    onClick={() => void handleInstallApp()}
+                    className="px-6 py-3 rounded-2xl text-sm font-semibold border border-[var(--chrome-line)] text-[var(--graphite)]"
+                  >
+                    Install app
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void handleSignOut()}
+                  className="px-6 py-3 rounded-2xl text-sm font-semibold border border-[var(--chrome-line)] text-[var(--graphite)]"
+                >
+                  Sign out
                 </button>
               </div>
             </div>
@@ -28719,8 +29691,7 @@ export default function SummitApp() {
                                     <button
                                       type="button"
                                       onClick={() => {
-                                        setMeasurementPdfUrl(doc.url);
-                                        setMeasurementPdfName(doc.name);
+                                        openRemotePdfPreview(doc.url, doc.name);
                                       }}
                                       className="flex-1 min-w-0 text-left"
                                     >
@@ -29969,17 +30940,12 @@ export default function SummitApp() {
 
                           {profilePhotos.length > 0 ? (
                             <div className="mt-6">
-                              <div className="flex items-center justify-between mb-3">
-                                <div className="text-sm text-zinc-500">
-                                  Thumbnail grid · tap to enlarge · Delete to remove
-                                </div>
-                              </div>
                               {/* Dense grid so hundreds of thumbs stay browsable */}
                               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-1.5 sm:gap-2 max-h-[min(70vh,720px)] overflow-y-auto overscroll-contain p-0.5 rounded-2xl">
                                 {profilePhotos.map((photo) => (
                                   <div
                                     key={photo.id}
-                                    className="group relative aspect-square rounded-xl overflow-hidden border border-zinc-200 bg-zinc-100"
+                                    className="relative aspect-square rounded-xl overflow-hidden border border-zinc-200 bg-zinc-100"
                                   >
                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img
@@ -29996,7 +30962,7 @@ export default function SummitApp() {
                                         e.stopPropagation();
                                         removeLeadPhoto(photo.id);
                                       }}
-                                      className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1"
+                                      className="absolute inset-x-0 bottom-0 z-10 min-h-11 px-2 text-xs font-semibold bg-black/75 text-white hover:bg-black/90 hover:text-[var(--danger)]"
                                       aria-label={`Delete ${photo.name}`}
                                     >
                                       Delete
@@ -30253,8 +31219,10 @@ export default function SummitApp() {
                                                 'application/pdf' ||
                                               /\.pdf$/i.test(doc.name);
                                             if (isPdf) {
-                                              setMeasurementPdfUrl(doc.url);
-                                              setMeasurementPdfName(doc.name);
+                                              openRemotePdfPreview(
+                                                doc.url,
+                                                doc.name
+                                              );
                                             } else {
                                               window.open(
                                                 doc.url,
@@ -30353,8 +31321,6 @@ export default function SummitApp() {
                     </button>
                   </div>
 
-                  {/* Photo lightbox */}
-                  
       {photoReportOpen && currentLeadId != null && (() => {
         const lead = leads.find((l) => l.id === currentLeadId);
         const photos = lead?.photos || [];
@@ -30482,61 +31448,41 @@ export default function SummitApp() {
         );
       })()}
 
-      
-      {measurementPdfUrl && (
-        <div className="fixed inset-0 z-[85] flex flex-col bg-black/50">
-          <div className="flex items-center justify-between gap-3 px-4 py-3 bg-white border-b border-zinc-200">
-            <div className="font-semibold text-zinc-900 truncate">{measurementPdfName || 'Measurement report'}</div>
-            <div className="flex gap-2 shrink-0">
-              <a
-                href={measurementPdfUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="px-3 py-1.5 rounded-xl text-sm font-semibold border border-zinc-200 text-zinc-700"
-              >
-                Open tab
-              </a>
-              <button
-                type="button"
-                onClick={() => {
-                  setMeasurementPdfUrl(null);
-                  setMeasurementPdfName('');
-                }}
-                className="px-3 py-1.5 rounded-xl text-sm font-semibold bg-zinc-900 text-white"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-          <iframe
-            title="Measurement PDF"
-            src={measurementPdfUrl}
-            className="flex-1 w-full bg-zinc-100"
-          />
-        </div>
-      )}
-
       {lightboxPhoto && (
                     <div
-                      className="fixed inset-0 z-[70] bg-black/90 flex items-center justify-center p-4"
+                      className="fixed inset-0 z-[80] bg-black/90 flex flex-col"
                       onClick={() => setLightboxPhoto(null)}
                     >
-                      <button
-                        type="button"
-                        className="text-xs text-zinc-500 hover:text-red-500/90 shrink-0 px-2 py-1 self-center"
-                        onClick={() => setLightboxPhoto(null)}
-                        aria-label="Close"
-                      >
-                        Close
-                      </button>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={lightboxPhoto.url || lightboxPhoto.dataUrl || ''}
-                        alt={lightboxPhoto.name}
-                        className="max-w-full max-h-[85vh] object-contain rounded-lg"
+                      <div
+                        className="flex items-center justify-between gap-2 px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))] shrink-0"
                         onClick={(e) => e.stopPropagation()}
-                      />
-                      <div className="absolute bottom-6 left-0 right-0 text-center text-white/80 text-sm px-4">
+                      >
+                        <button
+                          type="button"
+                          className="min-h-11 px-4 rounded-full text-sm font-semibold bg-white text-zinc-900"
+                          onClick={() => setLightboxPhoto(null)}
+                        >
+                          Close
+                        </button>
+                        <button
+                          type="button"
+                          className="min-h-11 px-4 rounded-full text-sm font-semibold bg-[var(--danger)] text-[#111111]"
+                          onClick={() => removeLeadPhoto(lightboxPhoto.id)}
+                          aria-label={`Delete ${lightboxPhoto.name}`}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                      <div className="flex-1 flex items-center justify-center p-4 min-h-0">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={lightboxPhoto.url || lightboxPhoto.dataUrl || ''}
+                          alt={lightboxPhoto.name}
+                          className="max-w-full max-h-full object-contain rounded-lg"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </div>
+                      <div className="text-center text-white/80 text-sm px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
                         {lightboxPhoto.name}
                       </div>
                     </div>

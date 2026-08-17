@@ -79,7 +79,7 @@ type HomeDashboardProps = {
   greeting: string;
   firstName: string;
   stageStats: HomeStageStat[];
-  totalActiveLeads: number;
+  totalJobs: number;
   pipelineValue: number;
   recentLead: HomeRecentLead | null;
   calendarEvents: SummitCalendarEvent[];
@@ -671,7 +671,7 @@ export default function HomeDashboard({
   greeting,
   firstName,
   stageStats,
-  totalActiveLeads,
+  totalJobs,
   pipelineValue,
   recentLead,
   calendarEvents,
@@ -917,26 +917,65 @@ export default function HomeDashboard({
                 →
               </span>
             </button>
-            <StageFunnel
-              stageStats={stageStats}
-              onSelectStage={onSelectStage}
-              embedded
-            />
-            <div className="grid grid-cols-2 border-t border-[var(--glass-border)] mt-5 pt-4">
-              <div className="pr-4">
-                <div className="text-xl font-semibold tabular-nums text-zinc-900">
-                  {totalActiveLeads}
+            <div className="sm:hidden">
+              <StageBar
+                stageStats={stageStats}
+                total={stageStats.reduce((n, s) => n + s.count, 0)}
+                className="h-4 mb-3"
+              />
+              <div className="flex flex-col">
+                {stageStats.map((s) => (
+                  <button
+                    key={s.stage}
+                    type="button"
+                    onClick={() => onSelectStage(s.stage)}
+                    className={`flex items-center justify-between gap-3 min-h-11 px-1 py-1.5 border-b border-[var(--chrome-line)] last:border-b-0 ${
+                      s.active ? 'bg-[var(--accent-blue-soft)] rounded-xl border-b-transparent' : ''
+                    }`}
+                    data-stage={s.stage}
+                    title={`View ${s.stage} leads`}
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.dashClass}`} aria-hidden />
+                      <span className="text-sm font-medium text-[var(--graphite)] truncate">{s.stage}</span>
+                    </span>
+                    <span className="text-sm font-semibold tabular-nums text-[var(--graphite)]">{s.count}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 mt-4 pt-4 border-t border-[var(--glass-border)]">
+                <div className="text-center px-2">
+                  <div className="text-xl font-semibold tabular-nums text-zinc-900">{totalJobs}</div>
+                  <div className="text-[0.6875rem] font-medium uppercase tracking-wide text-[var(--steel)] mt-0.5">
+                    total jobs
+                  </div>
                 </div>
-                <div className="text-[0.6875rem] font-medium uppercase tracking-wide text-zinc-400 mt-0.5">
-                  active job{totalActiveLeads === 1 ? '' : 's'}
+                <div className="text-center px-2 border-l border-[var(--glass-border)]">
+                  <div className="text-xl font-semibold tabular-nums text-[var(--accent-green)]">
+                    ${pipelineValue.toLocaleString()}
+                  </div>
+                  <div className="text-[0.6875rem] font-medium uppercase tracking-wide text-[var(--steel)] mt-0.5">
+                    pipeline value
+                  </div>
                 </div>
               </div>
-              <div className="pl-4 border-l border-[var(--glass-border)]">
-                <div className="text-xl font-semibold tabular-nums text-[var(--accent-green)]">
-                  ${pipelineValue.toLocaleString()}
+            </div>
+            <div className="hidden sm:block">
+              <StageFunnel stageStats={stageStats} onSelectStage={onSelectStage} embedded />
+              <div className="grid grid-cols-2 border-t border-[var(--glass-border)] mt-5 pt-4">
+                <div className="pr-4">
+                  <div className="text-xl font-semibold tabular-nums text-zinc-900">{totalJobs}</div>
+                  <div className="text-[0.6875rem] font-medium uppercase tracking-wide text-zinc-400 mt-0.5">
+                    total jobs
+                  </div>
                 </div>
-                <div className="text-[0.6875rem] font-medium uppercase tracking-wide text-zinc-400 mt-0.5">
-                  pipeline value
+                <div className="pl-4 border-l border-[var(--glass-border)]">
+                  <div className="text-xl font-semibold tabular-nums text-[var(--accent-green)]">
+                    ${pipelineValue.toLocaleString()}
+                  </div>
+                  <div className="text-[0.6875rem] font-medium uppercase tracking-wide text-zinc-400 mt-0.5">
+                    pipeline value
+                  </div>
                 </div>
               </div>
             </div>

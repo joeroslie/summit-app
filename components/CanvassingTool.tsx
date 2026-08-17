@@ -14,6 +14,8 @@ import AddressAutocomplete, {
 } from '@/components/AddressAutocomplete';
 import CanvassMap from '@/components/CanvassMap';
 import {
+  CANVASS_PINS_STORAGE_KEY,
+  CANVASS_TALLIES_STORAGE_KEY,
   DISPOSITIONS,
   dispositionStyle,
   isMissingTableError,
@@ -43,9 +45,6 @@ import {
   type StormReportsResponse,
   type StormWindow,
 } from '@/lib/weather';
-
-const PINS_STORAGE_KEY = 'summitCanvassPins';
-const TALLIES_STORAGE_KEY = 'summitCanvassTallies';
 
 function loadLocal<T>(key: string): T[] {
   if (typeof window === 'undefined') return [];
@@ -130,6 +129,8 @@ type CanvassingToolProps = {
   showToast: (message: string) => void;
   /** Return to Tools — same exit affordance as every other full workspace. */
   onBack: () => void;
+  /** Select this pin after load (header search). */
+  focusPinId?: number | null;
 };
 
 export default function CanvassingTool({
@@ -137,6 +138,7 @@ export default function CanvassingTool({
   onOpenLead,
   showToast,
   onBack,
+  focusPinId = null,
 }: CanvassingToolProps) {
   const supabase = useMemo(() => getSupabase(), []);
   const supabaseEnabled = isSupabaseConfigured() && supabase != null;
@@ -198,7 +200,7 @@ export default function CanvassingTool({
         if (pinsRes.error) {
           console.warn('canvass_pins unavailable, using local storage:', pinsRes.error.message);
           pinsOk = false;
-          nextPins = loadLocal<CanvassPin>(PINS_STORAGE_KEY);
+          nextPins = loadLocal<CanvassPin>(CANVASS_PINS_STORAGE_KEY);
         } else {
           nextPins = (pinsRes.data || []) as CanvassPin[];
         }
@@ -206,13 +208,13 @@ export default function CanvassingTool({
         if (talliesRes.error) {
           console.warn('canvass_tallies unavailable, using local storage:', talliesRes.error.message);
           talliesOk = false;
-          nextTallies = loadLocal<TallyEntry>(TALLIES_STORAGE_KEY);
+          nextTallies = loadLocal<TallyEntry>(CANVASS_TALLIES_STORAGE_KEY);
         } else {
           nextTallies = (talliesRes.data || []) as TallyEntry[];
         }
       } else {
-        nextPins = loadLocal<CanvassPin>(PINS_STORAGE_KEY);
-        nextTallies = loadLocal<TallyEntry>(TALLIES_STORAGE_KEY);
+        nextPins = loadLocal<CanvassPin>(CANVASS_PINS_STORAGE_KEY);
+        nextTallies = loadLocal<TallyEntry>(CANVASS_TALLIES_STORAGE_KEY);
       }
 
       if (cancelled) return;
@@ -236,16 +238,28 @@ export default function CanvassingTool({
 
   // Mirror to localStorage whenever a table is running in local (non-Supabase) mode.
   useEffect(() => {
-    if (loaded && !pinsRemote) saveLocal(PINS_STORAGE_KEY, pins);
+    if (loaded && !pinsRemote) saveLocal(CANVASS_PINS_STORAGE_KEY, pins);
   }, [pins, loaded, pinsRemote]);
   useEffect(() => {
-    if (loaded && !talliesRemote) saveLocal(TALLIES_STORAGE_KEY, tallies);
+    if (loaded && !talliesRemote) saveLocal(CANVASS_TALLIES_STORAGE_KEY, tallies);
   }, [tallies, loaded, talliesRemote]);
 
   const selectedPin = useMemo(
     () => pins.find((p) => p.id === selectedId) || null,
     [pins, selectedId]
   );
+
+  const [appliedFocusPinId, setAppliedFocusPinId] = useState<number | null>(
+    null
+  );
+  if (loaded && focusPinId != null && appliedFocusPinId !== focusPinId) {
+    const pin = pins.find((p) => p.id === focusPinId);
+    if (pin) {
+      setAppliedFocusPinId(focusPinId);
+      setSelectedId(pin.id);
+      setFlyTo({ lat: pin.lat, lng: pin.lng });
+    }
+  }
 
   const patchPin = useCallback(
     async (id: number, patch: Partial<CanvassPin>) => {

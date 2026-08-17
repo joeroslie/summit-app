@@ -2,6 +2,9 @@
 
 import type { PinStormLookup } from '@/lib/weather';
 
+export const CANVASS_PINS_STORAGE_KEY = 'summitCanvassPins';
+export const CANVASS_TALLIES_STORAGE_KEY = 'summitCanvassTallies';
+
 export type Disposition =
   | 'not_contacted'
   | 'not_home'

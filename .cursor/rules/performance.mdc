@@ -11,4 +11,4 @@ alwaysApply: false
 
 ## Files
 
-- `app/page.tsx` — `activeTab === 'leads'` rollup passed into `PipelineBoard` (active jobs, estimates, pipeline value, avg estimate above stage chips)
+- `app/page.tsx` — `activeTab === 'leads'` rollup passed into `PipelineBoard` (total jobs, estimates, pipeline value, avg estimate above stage chips)

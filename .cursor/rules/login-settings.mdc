@@ -7,7 +7,7 @@ alwaysApply: false
 # Login & Settings
 
 **Chat name:** `Login & Settings`  
-**Sidebar label:** Profile settings (`activeTab: settings`; profile menu, not primary sidebar)  
+**Sidebar label:** Profile settings (`activeTab: settings`; profile menu on desktop, phone tab bar rightmost slot)  
 **Agent starter:** `.cursor/agents/login-settings.md`  
 **Status:** Joe-only auth is live (email/password, Google/Microsoft buttons, cookie session, company RLS). Apple, extra-user onboarding, and Stripe are still backlog.
 

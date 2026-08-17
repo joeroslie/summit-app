@@ -28,6 +28,7 @@ alwaysApply: false
 - `lib/app-settings-sync.ts` — Settings, Calendar, Tasks
 - `lib/geocode.ts`
 - `lib/phone.ts`
+- `lib/phone-nav.ts` — phone edge-swipe Back / Forward
 
 ## Config
 
@@ -50,6 +51,6 @@ alwaysApply: false
 | `weather` | Tools → Weather | `Weather` |
 | `settings` | Profile settings | `Login & Settings` |
 
-Phone bottom bar (not the sidebar): Home · Pipeline · Calendar · Tasks · Tools. Swipe up More → Documents. See `.cursor/rules/phone-pwa.mdc`.
+Phone bottom bar (not the sidebar): Pipeline · Calendar · Tasks · Tools · Profile. Header logo → Home. Swipe up More → Documents. See `.cursor/rules/phone-pwa.mdc`.
 
 Chat roster: `.cursor/rules/agent-roster.mdc`

@@ -34,17 +34,17 @@ export default function CompanyPricing({
   return (
     <div className={documentWorkspaceClass}>
       <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-24">
-        <div className="sticky top-0 z-10 -mx-4 sm:-mx-6 px-4 sm:px-6 py-4 mb-6 bg-zinc-50/95 backdrop-blur border-b border-zinc-200/70">
+        <div className="sticky top-0 z-10 -mx-4 sm:-mx-6 px-4 sm:px-6 py-4 mb-6 bg-[var(--surface)]/95 backdrop-blur border-b border-[var(--chrome-line)]">
           <button
             type="button"
             onClick={() => exitLeadDocumentWorkspace()}
-            className="text-sm text-zinc-500 hover:text-zinc-800 mb-3 inline-flex items-center gap-1"
+            className="text-sm text-[var(--steel)] hover:text-[var(--graphite)] mb-3 inline-flex items-center gap-1 min-h-11"
           >
             ← Back
           </button>
           <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
             <h1 className="page-title">Company pricing</h1>
-            <div className="inline-flex rounded-2xl border border-zinc-200 bg-white p-1 shadow-sm">
+            <div className="inline-flex rounded-2xl border border-[var(--chrome-line)] bg-[var(--surface-raised)] p-1">
               {(
                 [
                   ['labor', 'Labor'],
@@ -55,10 +55,10 @@ export default function CompanyPricing({
                   key={id}
                   type="button"
                   onClick={() => setCompanyPricingPane(id)}
-                  className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${
+                  className={`px-4 py-2 min-h-11 rounded-xl text-sm font-semibold transition-colors ${
                     companyPricingPane === id
-                      ? 'bg-zinc-900 text-white'
-                      : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-50'
+                      ? 'bg-[var(--graphite)] text-[var(--metal-ink)]'
+                      : 'text-[var(--steel)] hover:text-[var(--graphite)] hover:bg-black/[0.04]'
                   }`}
                 >
                   {label}
@@ -75,17 +75,17 @@ export default function CompanyPricing({
               return (
               <section
                 key={section.title}
-                className="rounded-3xl border border-zinc-200/80 bg-white overflow-hidden shadow-sm"
+                className="glass list-card-flush"
               >
                 <button
                   type="button"
                   onClick={() => togglePricingSection(section.title)}
-                  className="w-full px-5 py-4 border-b border-zinc-100 flex items-center justify-between gap-3 bg-gradient-to-r from-zinc-50 to-white hover:from-zinc-100 transition-colors text-left"
+                  className="w-full px-5 py-4 border-b border-[var(--chrome-line)] flex items-center justify-between gap-3 hover:bg-black/[0.03] transition-colors text-left"
                   aria-expanded={expanded}
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
                     <svg
-                      className={`w-4 h-4 text-zinc-400 shrink-0 transition-transform duration-200 ${
+                      className={`w-4 h-4 text-[var(--steel)] shrink-0 transition-transform duration-200 ${
                         expanded ? 'rotate-90' : ''
                       }`}
                       viewBox="0 0 24 24"
@@ -100,13 +100,13 @@ export default function CompanyPricing({
                         d="M9 6l6 6-6 6"
                       />
                     </svg>
-                    <h2 className="text-base font-semibold text-zinc-900 truncate">
+                    <h2 className="text-base font-semibold text-[var(--graphite)] truncate">
                       {section.title}
                     </h2>
                   </div>
                   {(section.supplier === 'Miller' ||
                     section.supplier === 'SRS') && (
-                    <span className="text-[11px] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-full shrink-0 bg-[var(--chrome-soft)] text-[var(--graphite)] ring-1 ring-[var(--chrome-line)]">
+                    <span className="text-xs font-semibold uppercase tracking-wide px-2.5 py-1 rounded-full shrink-0 bg-[var(--chrome-soft)] text-[var(--graphite)] ring-1 ring-[var(--chrome-line)]">
                       {section.supplier}
                     </span>
                   )}
@@ -116,7 +116,7 @@ export default function CompanyPricing({
                   style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
                 >
                   <div className="overflow-hidden">
-                <div className="divide-y divide-zinc-100">
+                <div className="divide-y divide-[var(--chrome-line)]">
                   {section.rows.map((row, idx) => {
                     const live =
                       row.key && priceSheet && priceSheet[row.key] != null
@@ -195,8 +195,6 @@ export default function CompanyPricing({
                       ? 'Material'
                       : 'Cost';
                     const hasCost = liveCost > 0;
-                    // Horizontal "stack" of region figures within one stat card
-                    // (e.g. Cost | All-in | Sell), given room to breathe.
                     const regionStack = (
                       entries: Array<[string, number]>
                     ) => (
@@ -208,10 +206,10 @@ export default function CompanyPricing({
                               key={reg}
                               className="whitespace-nowrap text-sm tabular-nums"
                             >
-                              <span className="text-[10px] text-zinc-400 mr-1">
+                              <span className="text-xs text-[var(--steel)] mr-1">
                                 {reg}
                               </span>
-                              <span className="font-semibold text-zinc-900">
+                              <span className="font-semibold text-[var(--graphite)]">
                                 {fmt(v, 0)}
                               </span>
                             </span>
@@ -221,28 +219,28 @@ export default function CompanyPricing({
                     return (
                       <div
                         key={`${section.title}-${idx}`}
-                        className="px-5 py-5 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-5 hover:bg-zinc-50/60 transition-colors"
+                        className="px-5 py-5 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-5 hover:bg-black/[0.02] transition-colors"
                       >
                         <div className="min-w-0 sm:w-48 md:w-56 sm:shrink-0">
-                          <div className="text-sm font-medium text-zinc-900 leading-snug">
+                          <div className="text-sm font-medium text-[var(--graphite)] leading-snug">
                             {row.label}
                           </div>
                           {row.note && (
-                            <div className="text-[11px] text-zinc-400 leading-snug mt-0.5">
+                            <div className="text-xs text-[var(--steel)] leading-snug mt-0.5">
                               {row.note}
                             </div>
                           )}
                         </div>
                         <div className="flex-1 flex flex-wrap items-stretch gap-3">
                           {hasCost && (
-                            <div className="flex-1 min-w-[130px] rounded-2xl bg-zinc-50 px-4 py-3 flex flex-col justify-center gap-1.5">
-                              <span className="text-[9px] font-semibold uppercase tracking-wider text-zinc-400 whitespace-nowrap">
+                            <div className="flex-1 min-w-[130px] rounded-2xl bg-[var(--chrome-soft)] px-4 py-3 flex flex-col justify-center gap-1.5">
+                              <span className="text-xs font-semibold uppercase tracking-wider text-[var(--steel)] whitespace-nowrap">
                                 {costLabel}
                               </span>
-                              <span className="whitespace-nowrap text-sm tabular-nums font-semibold text-zinc-900">
+                              <span className="whitespace-nowrap text-sm tabular-nums font-semibold text-[var(--graphite)]">
                                 {fmt(liveCost)}
                                 {unit ? (
-                                  <span className="text-[10px] font-normal text-zinc-400 ml-1">
+                                  <span className="text-xs font-normal text-[var(--steel)] ml-1">
                                     {unit}
                                   </span>
                                 ) : null}
@@ -250,8 +248,8 @@ export default function CompanyPricing({
                             </div>
                           )}
                           {isShinglePackageRow && hasCost && (
-                            <div className="flex-[1.6] min-w-[210px] rounded-2xl bg-zinc-50 px-4 py-3 flex flex-col justify-center gap-1.5">
-                              <span className="text-[9px] font-semibold uppercase tracking-wider text-zinc-400 whitespace-nowrap">
+                            <div className="flex-[1.6] min-w-[210px] rounded-2xl bg-[var(--chrome-soft)] px-4 py-3 flex flex-col justify-center gap-1.5">
+                              <span className="text-xs font-semibold uppercase tracking-wider text-[var(--steel)] whitespace-nowrap">
                                 All-in (mat + labor)
                               </span>
                               {regionStack([
@@ -262,8 +260,8 @@ export default function CompanyPricing({
                             </div>
                           )}
                           {hasSell && (
-                            <div className="flex-[1.6] min-w-[210px] rounded-2xl bg-zinc-50 px-4 py-3 flex flex-col justify-center gap-1.5">
-                              <span className="text-[9px] font-semibold uppercase tracking-wider text-zinc-400 whitespace-nowrap">
+                            <div className="flex-[1.6] min-w-[210px] rounded-2xl bg-[var(--chrome-soft)] px-4 py-3 flex flex-col justify-center gap-1.5">
+                              <span className="text-xs font-semibold uppercase tracking-wider text-[var(--steel)] whitespace-nowrap">
                                 Sell
                               </span>
                               {regionStack([

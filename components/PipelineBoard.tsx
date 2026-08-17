@@ -8,6 +8,7 @@ import {
   normalizePipelineStage,
   type PipelineStage,
 } from '@/lib/pipeline';
+import PipelineSwipeRow from '@/components/PipelineSwipeRow';
 
 export type PipelineBoardLead = {
   id: number;
@@ -53,6 +54,7 @@ export type PipelineRollup = {
   pipelineValue: number;
   avgEstimate: number;
   closedCount: number;
+  totalJobs: number;
   stageValue: Record<PipelineStage, number>;
 };
 
@@ -96,7 +98,10 @@ export default function PipelineBoard({
 }: PipelineBoardProps) {
   const [dragLeadId, setDragLeadId] = useState<number | null>(null);
   const [dragOverStage, setDragOverStage] = useState<PipelineStage | null>(null);
+  const [phoneStage, setPhoneStage] = useState<PipelineStage | 'all'>('all');
   const suppressCardClickRef = useRef(false);
+
+  const phoneView: PipelineStage | 'all' = pipelineFilter ?? phoneStage;
 
   const visibleLeads = pipelineFilter
     ? leads.filter(
@@ -109,7 +114,7 @@ export default function PipelineBoard({
     : PIPELINE_STAGES;
 
   const renderActions = () => (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               <button
                 type="button"
                 onClick={() => {
@@ -120,24 +125,132 @@ export default function PipelineBoard({
                     setLeadsView('trash');
                   }
                 }}
-                className="min-h-11 px-4 py-2 text-sm text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 rounded-xl transition-colors border border-transparent hover:border-zinc-200"
+                className="min-h-11 min-w-11 px-2 sm:px-4 py-2 text-sm text-[var(--steel)] hover:text-[var(--graphite)] rounded-full transition-colors"
+                aria-label={
+                  leadsView === 'trash'
+                    ? 'Back to board'
+                    : `Trash (${trash.length})`
+                }
               >
-                {leadsView === 'trash' ? 'Back to Board' : `Trash (${trash.length})`}
+                <span className="md:hidden inline-flex items-center gap-1">
+                  {leadsView === 'trash' ? (
+                    'Back'
+                  ) : (
+                    <>
+                      <svg
+                        width="18"
+                        height="18"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        aria-hidden
+                      >
+                        <path
+                          d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"
+                          stroke="currentColor"
+                          strokeWidth="1.75"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                      {trash.length > 0 && (
+                        <span className="tabular-nums text-xs font-semibold">
+                          {trash.length}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </span>
+                <span className="hidden md:inline">
+                  {leadsView === 'trash'
+                    ? 'Back to Board'
+                    : `Trash (${trash.length})`}
+                </span>
               </button>
               <button
                 type="button"
                 onClick={onCreateLead}
-                className="btn-primary min-h-11 px-6 py-3 rounded-3xl font-medium"
+                className="pl-add md:hidden"
+                aria-label="New Lead"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+                  <path
+                    d="M12 5v14M5 12h14"
+                    stroke="currentColor"
+                    strokeWidth="1.75"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={onCreateLead}
+                className="btn-primary hidden md:inline-flex min-h-11 px-6 py-3 rounded-3xl font-medium"
               >
                 New Lead
               </button>
             </div>
           );
 
+          const jumpToPhoneStage = (next: PipelineStage | 'all') => {
+            setPhoneStage(next);
+            if (next === 'all') {
+              if (pipelineFilter != null) setPipelineFilter(null);
+              return;
+            }
+            if (pipelineFilter != null) setPipelineFilter(next);
+          };
+
+          const renderPhoneJump = () => (
+            <div
+              className="pl-jump"
+              role="tablist"
+              aria-label="Pipeline stages"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={phoneView === 'all'}
+                className={`pl-jump-chip ${
+                  phoneView === 'all' ? 'is-active' : ''
+                }`}
+                onClick={() => jumpToPhoneStage('all')}
+              >
+                All
+                <span className="pl-jump-count tabular-nums">
+                  {leads.length}
+                </span>
+              </button>
+              {PIPELINE_STAGES.map((stage) => {
+                const count = leads.filter(
+                  (l) => normalizePipelineStage(l.category) === stage
+                ).length;
+                const styles = PIPELINE_STAGE_STYLES[stage];
+                const active = phoneView === stage;
+                return (
+                  <button
+                    key={stage}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    className={`pl-jump-chip ${active ? 'is-active' : ''}`}
+                    onClick={() => jumpToPhoneStage(stage)}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full shrink-0 ${styles.dash}`}
+                      aria-hidden
+                    />
+                    {stage}
+                    <span className="pl-jump-count tabular-nums">{count}</span>
+                  </button>
+                );
+              })}
+            </div>
+          );
+
           const renderChips = (variant: string, className = '') =>
             leadsView === 'active' && (
               <div
-                className={`stage-funnel-chips flex flex-wrap items-center gap-2 ${className}`.trim()}
+                className={`stage-funnel-chips pl-chips flex flex-wrap items-center gap-2 ${className}`.trim()}
               >
                 <button
                   type="button"
@@ -360,6 +473,94 @@ export default function PipelineBoard({
                   </div>
                 ) : (
                   <div className="w-full">
+                    <div className="md:hidden">
+                      {(() => {
+                        const mailStages =
+                          phoneView === 'all'
+                            ? PIPELINE_STAGES
+                            : ([phoneView] as PipelineStage[]);
+                        const groups = mailStages
+                          .map((stage) => ({
+                            stage,
+                            leads: leads
+                              .filter(
+                                (l) =>
+                                  normalizePipelineStage(l.category) === stage
+                              )
+                              .sort((a, b) => b.id - a.id),
+                          }))
+                          .filter((g) =>
+                            phoneView === 'all' ? g.leads.length > 0 : true
+                          );
+                        const emptyFiltered =
+                          phoneView !== 'all' &&
+                          groups.every((g) => g.leads.length === 0);
+                        return (
+                          <div className="pl-mail">
+                            {renderPhoneJump()}
+                            {emptyFiltered ? (
+                              <div className="text-center py-16 text-[var(--steel)]">
+                                <p className="font-medium text-[var(--graphite)]">
+                                  No jobs in {phoneView}
+                                </p>
+                              </div>
+                            ) : (
+                              <div className="space-y-6">
+                                {groups.map((group) => {
+                                  const stageValue =
+                                    rollup.stageValue[group.stage] ?? 0;
+                                  const styles =
+                                    PIPELINE_STAGE_STYLES[group.stage];
+                                  return (
+                                    <section
+                                      key={`mail-${group.stage}`}
+                                      className="pl-mail-section"
+                                    >
+                                      {phoneView === 'all' && (
+                                        <header className="flex items-baseline justify-between gap-3 mb-2 px-0.5">
+                                          <h2 className="font-semibold text-sm text-[var(--graphite)] flex items-center gap-1.5 min-w-0">
+                                            <span
+                                              className={`w-1.5 h-1.5 rounded-full shrink-0 ${styles.dash}`}
+                                              aria-hidden
+                                            />
+                                            <span className="truncate">
+                                              {group.stage}
+                                            </span>
+                                          </h2>
+                                          <span
+                                            className={`text-sm font-semibold tabular-nums tracking-tight ${
+                                              stageValue === 0
+                                                ? 'text-[var(--steel)]'
+                                                : 'text-[var(--graphite)]'
+                                            }`}
+                                          >
+                                            ${stageValue.toLocaleString()}
+                                          </span>
+                                        </header>
+                                      )}
+                                      <div className="space-y-2">
+                                        {group.leads.map((lead) => (
+                                          <PipelineSwipeRow
+                                            key={`mail-${lead.id}`}
+                                            lead={lead}
+                                            showStage={false}
+                                            onOpen={() => onOpenLead(lead.id)}
+                                            onMoveToStage={(next) =>
+                                              onMoveLeadToStage(lead.id, next)
+                                            }
+                                          />
+                                        ))}
+                                      </div>
+                                    </section>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                    <div className="hidden md:block">
                     <div
                       className={`kanban-board ${
                         pipelineFilter ? 'kanban-board--single' : ''
@@ -506,6 +707,7 @@ export default function PipelineBoard({
                         );
                       })}
                     </div>
+                    </div>
                   </div>
                 )}
               </>
@@ -535,14 +737,18 @@ export default function PipelineBoard({
                   )}
                 </div>
                 <div>
-                  <span className="pl-stat-label">Jobs</span>
-                  <b className="pl-stat-num">{leads.length}</b>
+                  <span className="pl-stat-label">Total jobs</span>
+                  <b className="pl-stat-num">{rollup.totalJobs}</b>
                 </div>
               </div>
             )}
             <div className="pl-toolbar-actions">{renderActions()}</div>
           </div>
-          {renderChips('board', 'mb-6')}
+          {leadsView === 'active' && (
+            <div className="hidden md:block">
+              {renderChips('board', 'mb-6')}
+            </div>
+          )}
           {renderBoard('board')}
         </div>
   );
