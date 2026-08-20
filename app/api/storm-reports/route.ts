@@ -7,10 +7,12 @@ import {
   DEFAULT_NEAR_RADIUS_MILES,
   haversineMiles,
   isLiveStormWindow,
+  isStormDayTodayAtOffset,
   isStormWindow,
   layerIdForWindow,
   mergeStormReports,
   newestStormReport,
+  normalizeStormDayRange,
   parseStormDayFormat,
   STORM_DAY_LOOKBACK_YEARS,
   STORM_LATEST_FALLBACK_WINDOWS,
@@ -44,6 +46,11 @@ export const maxDuration = 30;
  *
  * Optional `day=YYYY-MM-DD` (with `tzOffset` minutes from the client) fetches
  * that local calendar day from IEM instead of a rolling window.
+ * Optional `dayEnd=YYYY-MM-DD` (inclusive) extends the bounds through that day.
+ * Weather uses calendar day/range only. Home/Canvassing still pass `window`.
+ *
+ * Live merge (NOAA MapServer + IEM) is only for a single calendar day that is
+ * today. A range that includes today uses IEM for the whole range.
  *
  * `latest=1` (Home storm card): also return the newest nearby report, looking
  * past the requested window up to 2 years when the live window is empty.
@@ -524,8 +531,18 @@ function collectReports(
 
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
+  const tzOffset = parseTzOffsetMinutes(searchParams.get('tzOffset'));
   const requestedDay = parseStormDayFormat(searchParams.get('day'));
-  const day = requestedDay && dayIsWithinArchive(requestedDay) ? requestedDay : null;
+  const requestedEnd = parseStormDayFormat(searchParams.get('dayEnd'));
+  const range =
+    requestedDay && dayIsWithinArchive(requestedDay)
+      ? normalizeStormDayRange(
+          requestedDay,
+          requestedEnd && dayIsWithinArchive(requestedEnd) ? requestedEnd : requestedDay
+        )
+      : null;
+  const day = range?.start ?? null;
+  const dayEnd = range && range.end !== range.start ? range.end : null;
   const windowParam = searchParams.get('window');
   const stormWindow: StormWindow = day
     ? 'day'
@@ -535,9 +552,10 @@ export async function GET(req: NextRequest) {
   const stateParam = cleanStr(searchParams.get('state'))?.toUpperCase() || null;
   const origin = parseLatLng(searchParams.get('lat'), searchParams.get('lng'));
   const radiusMiles = parseRadiusMiles(searchParams.get('radius'));
-  const live = !day && isLiveStormWindow(stormWindow);
+  const liveToday = Boolean(day && !dayEnd && isStormDayTodayAtOffset(day, tzOffset));
+  const live = liveToday || (!day && isLiveStormWindow(stormWindow));
   const dayRange = day
-    ? stormDayUtcBounds(day, parseTzOffsetMinutes(searchParams.get('tzOffset')))
+    ? stormDayUtcBounds(day, tzOffset, dayEnd || day)
     : undefined;
 
   const rangeStart = dayRange ? new Date(dayRange.sts).getTime() : null;
@@ -555,9 +573,33 @@ export async function GET(req: NextRequest) {
   let source: StormReportsResponse['source'] = live ? 'noaa-lsr' : 'iem-lsr';
   const warningOpts = { stormWindow, state: stateParam, dayRange };
 
-  if (live) {
-    // NOAA's MapServer lags IEM by minutes to hours. Home and the Weather map
-    // both need the same live picture, so merge IEM for the same hour window.
+  if (liveToday) {
+    const [noaa, iem, sbw] = await Promise.all([
+      fetchNoaaLive({ stormWindow: '24h', state: stateParam, origin, radiusMiles }),
+      fetchIemHistorical({
+        stormWindow: 'day',
+        state: stateParam,
+        origin,
+        radiusMiles,
+        dayRange,
+      }),
+      fetchIemWarnings(warningOpts),
+    ]);
+    if (!noaa && !iem) {
+      return NextResponse.json(
+        { error: 'NOAA storm report service is unavailable right now — try again shortly.' },
+        { status: 502 }
+      );
+    }
+    reports = mergeStormReports([
+      collectReports(iem, mapIemFeature, collectOpts),
+      collectReports(noaa, mapNoaaFeature, collectOpts),
+    ]);
+    warnings = collectWarnings(sbw, { origin, radiusMiles });
+    source = iem ? 'iem-lsr' : 'noaa-lsr';
+  } else if (live) {
+    // NOAA's MapServer lags IEM by minutes to hours. Home still uses rolling
+    // 24/48/72h windows, so merge IEM for the same hour window.
     const [noaa, iem, sbw] = await Promise.all([
       fetchNoaaLive({ stormWindow, state: stateParam, origin, radiusMiles }),
       fetchIemHistorical({ stormWindow, state: stateParam, origin, radiusMiles }),
@@ -624,6 +666,7 @@ export async function GET(req: NextRequest) {
     fetchedAt: new Date().toISOString(),
     window: stormWindow,
     day,
+    dayEnd,
     count: reports.length,
     source,
     ...(wantLatest ? { latest } : {}),

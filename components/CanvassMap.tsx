@@ -2,6 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { dispositionStyle, type CanvassPin } from '@/lib/canvassing';
+import {
+  attachPhoneMapEdgeYield,
+  phonePointerYieldsEdgeNav,
+} from '@/lib/phone-nav';
 
 type LatLngPoint = { lat: number; lng: number };
 
@@ -100,7 +104,7 @@ export default function CanvassMap({
       const isSelected = pin.id === selectedId;
       const marker = L.circleMarker([pin.lat, pin.lng], {
         radius: isSelected ? 12 : 9,
-        color: isSelected ? '#111827' : style.markerStroke,
+        color: isSelected ? 'var(--graphite)' : style.markerStroke,
         weight: isSelected ? 3 : 2,
         fillColor: style.marker,
         fillOpacity: 0.95,
@@ -126,6 +130,7 @@ export default function CanvassMap({
     let cancelled = false;
     let map: import('leaflet').Map | null = null;
     let resizeObs: ResizeObserver | null = null;
+    let yieldEdge: (() => void) | undefined;
     let tileErrorCount = 0;
     const timers: number[] = [];
 
@@ -214,6 +219,7 @@ export default function CanvassMap({
         return;
       }
       map = created;
+      yieldEdge = attachPhoneMapEdgeYield(created, created.getContainer());
 
       if (cancelled || initGen.current !== gen) {
         created.remove();
@@ -336,6 +342,8 @@ export default function CanvassMap({
 
       created.on('click', (e: import('leaflet').LeafletMouseEvent) => {
         if (!mapRef.current) return;
+        const orig = e.originalEvent as MouseEvent | undefined;
+        if (orig && phonePointerYieldsEdgeNav(orig.clientX, orig)) return;
         onMapDropRef.current({ lat: e.latlng.lat, lng: e.latlng.lng });
       });
 
@@ -354,6 +362,11 @@ export default function CanvassMap({
       cancelled = true;
       timers.forEach((id) => window.clearTimeout(id));
       resizeObs?.disconnect();
+      try {
+        yieldEdge?.();
+      } catch {
+        /* ignore */
+      }
       try {
         map?.off();
         map?.remove();

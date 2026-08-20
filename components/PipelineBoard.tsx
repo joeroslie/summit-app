@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import './stage-funnel.css';
 import {
   PIPELINE_STAGES,
@@ -9,6 +9,7 @@ import {
   type PipelineStage,
 } from '@/lib/pipeline';
 import PipelineSwipeRow from '@/components/PipelineSwipeRow';
+import PhonePullToRefresh from '@/components/PhonePullToRefresh';
 
 export type PipelineBoardLead = {
   id: number;
@@ -78,6 +79,7 @@ type PipelineBoardProps = {
   onEmptyTrash: () => void;
   onRestoreFromTrash: (id: string) => void;
   onPermanentlyDelete: (id: string) => void;
+  onRefresh?: () => void | Promise<void>;
 };
 
 export default function PipelineBoard({
@@ -95,13 +97,22 @@ export default function PipelineBoard({
   onEmptyTrash,
   onRestoreFromTrash,
   onPermanentlyDelete,
+  onRefresh,
 }: PipelineBoardProps) {
   const [dragLeadId, setDragLeadId] = useState<number | null>(null);
   const [dragOverStage, setDragOverStage] = useState<PipelineStage | null>(null);
-  const [phoneStage, setPhoneStage] = useState<PipelineStage | 'all'>('all');
   const suppressCardClickRef = useRef(false);
+  const jumpActiveRef = useRef<HTMLButtonElement | null>(null);
 
-  const phoneView: PipelineStage | 'all' = pipelineFilter ?? phoneStage;
+  const phoneView: PipelineStage | 'all' = pipelineFilter ?? 'all';
+
+  useEffect(() => {
+    jumpActiveRef.current?.scrollIntoView({
+      inline: 'center',
+      block: 'nearest',
+      behavior: 'smooth',
+    });
+  }, [phoneView]);
 
   const visibleLeads = pipelineFilter
     ? leads.filter(
@@ -192,16 +203,12 @@ export default function PipelineBoard({
           );
 
           const jumpToPhoneStage = (next: PipelineStage | 'all') => {
-            setPhoneStage(next);
-            if (next === 'all') {
-              if (pipelineFilter != null) setPipelineFilter(null);
-              return;
-            }
-            if (pipelineFilter != null) setPipelineFilter(next);
+            setPipelineFilter(next === 'all' ? null : next);
           };
 
           const renderPhoneJump = () => (
             <div
+              data-phone-chip-strip
               className="pl-jump"
               role="tablist"
               aria-label="Pipeline stages"
@@ -209,6 +216,7 @@ export default function PipelineBoard({
               <button
                 type="button"
                 role="tab"
+                ref={phoneView === 'all' ? jumpActiveRef : undefined}
                 aria-selected={phoneView === 'all'}
                 className={`pl-jump-chip ${
                   phoneView === 'all' ? 'is-active' : ''
@@ -231,6 +239,7 @@ export default function PipelineBoard({
                     key={stage}
                     type="button"
                     role="tab"
+                    ref={active ? jumpActiveRef : undefined}
                     aria-selected={active}
                     className={`pl-jump-chip ${active ? 'is-active' : ''}`}
                     onClick={() => jumpToPhoneStage(stage)}
@@ -545,9 +554,6 @@ export default function PipelineBoard({
                                             lead={lead}
                                             showStage={false}
                                             onOpen={() => onOpenLead(lead.id)}
-                                            onMoveToStage={(next) =>
-                                              onMoveLeadToStage(lead.id, next)
-                                            }
                                           />
                                         ))}
                                       </div>
@@ -714,7 +720,7 @@ export default function PipelineBoard({
             );
 
   return (
-        <div className="w-full pb-4">
+        <PhonePullToRefresh onRefresh={() => onRefresh?.()} className="w-full pb-4">
           <div className="pl-toolbar">
             <h1 className="page-title">Pipeline</h1>
             {leadsView === 'active' && (
@@ -750,6 +756,6 @@ export default function PipelineBoard({
             </div>
           )}
           {renderBoard('board')}
-        </div>
+        </PhonePullToRefresh>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
+import PhonePullToRefresh from '@/components/PhonePullToRefresh';
 import './stage-funnel.css';
 import {
   eventOccursOnDay,
@@ -93,6 +94,7 @@ type HomeDashboardProps = {
   onOpenLead: (id: number) => void;
   onOpenCanvassing: () => void;
   onOpenWeather: () => void;
+  onRefresh?: () => void | Promise<void>;
 };
 
 type GlimpseCardProps = {
@@ -685,7 +687,9 @@ export default function HomeDashboard({
   onOpenLead,
   onOpenCanvassing,
   onOpenWeather,
+  onRefresh,
 }: HomeDashboardProps) {
+  const [refreshEpoch, setRefreshEpoch] = useState(0);
   // --- Today's schedule (reuses the calendar's own day/time helpers) ---
   const { todaysEvents, todaysEventsTotal } = useMemo(() => {
     const todayIso = toLocalIsoDate(new Date());
@@ -803,7 +807,7 @@ export default function HomeDashboard({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshEpoch]);
 
   const latestReport = latestNearby ?? newestStormReport(stormReports);
 
@@ -872,12 +876,16 @@ export default function HomeDashboard({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshEpoch]);
 
   return (
-
-
-    <div className="pb-8 w-full">
+    <PhonePullToRefresh
+      onRefresh={async () => {
+        setRefreshEpoch((n) => n + 1);
+        await onRefresh?.();
+      }}
+      className="pb-8 w-full"
+    >
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-5 mb-6">
         <h1 className="page-title">
           {greeting}, {firstName}
@@ -1089,7 +1097,7 @@ export default function HomeDashboard({
           </GlimpseCard>
         </div>
       </div>
-    </div>
+    </PhonePullToRefresh>
 
 
   );

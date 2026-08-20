@@ -12,9 +12,10 @@ alwaysApply: false
 
 ## Files
 
-- `components/PipelineBoard.tsx` — kanban board, stage chips, trash list, New Lead header; phone jump chips + all-stages list
-- `components/PipelineSwipeRow.tsx` — phone job card: swipe right next stage, swipe left previous (leaves 48px left edge for Back; right edge too when Forward is armed)
+- `components/PipelineBoard.tsx` — kanban board, stage chips, trash list, New Lead header; jump chips (All → Lead → … → Closed). Finger swipe on iPhone/iPad = tap those chips; cards tap-to-open only
+- `components/PipelineSwipeRow.tsx` — phone job card: tap to open (stage changes on the lead Pipeline tab; desktop kanban drag unchanged)
 - `lib/pipeline.ts` — `PipelineStage`, `PIPELINE_STAGES`, `PIPELINE_VALUE_STAGES`, `PIPELINE_STAGE_STYLES`, `normalizePipelineStage`, `adjacentPipelineStage`
+- `lib/phone-nav.ts` — `PIPELINE_BOARD_PAGER` / `pipelineBoardPagerStep` (finger pager; Phone chat)
 - `app/page.tsx` — `activeTab === 'leads'` wires `PipelineBoard` (stats + Home-twin stage chips above the board); lead CRUD + lead profile tabs still live here
 - `components/AddressAutocomplete.tsx` — shared (see App Shell)
 - `components/PhoneInput.tsx` — shared (see App Shell)

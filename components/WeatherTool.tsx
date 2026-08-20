@@ -1,28 +1,39 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { createPortal } from 'react-dom';
+import PhonePullToRefresh from '@/components/PhonePullToRefresh';
 import StormMap from '@/components/StormMap';
 import {
   STORM_CATEGORIES,
-  STORM_WINDOWS,
+  STORM_DAY_RANGE_MAX_DAYS,
   US_STATES,
   directionsUrl,
   eventStyle,
   formatMagnitude,
+  formatStormDateControlLabel,
   formatStormDayLabel,
+  formatStormDayRangeLabel,
   haversineMiles,
-  isLiveStormWindow,
   localDateInputValue,
   parseStormDay,
+  parseStormDayFormat,
   readStoredNearRadiusMiles,
   relativeTimeFrom,
+  stormDayInclusiveCount,
   stormDayMinValue,
+  stormMonthCells,
   writeStoredNearRadiusMiles,
   type StormEventCategory,
   type StormReport,
   type StormReportsResponse,
   type StormWarning,
-  type StormWindow,
 } from '@/lib/weather';
 import {
   CLUSTER_SEVERITY_STYLES,
@@ -76,8 +87,8 @@ function readBrowserLocation(): Promise<LatLngPoint | null> {
 }
 
 export default function WeatherTool({ showToast }: WeatherToolProps) {
-  const [timeWindow, setTimeWindow] = useState<StormWindow>('24h');
-  const [selectedDay, setSelectedDay] = useState('');
+  const [dayStart, setDayStart] = useState(localDateInputValue);
+  const [dayEnd, setDayEnd] = useState(localDateInputValue);
   const [locationKey, setLocationKey] = useState<LocationKey>('near');
   const [radiusMiles, setRadiusMiles] = useState(readStoredNearRadiusMiles);
   const [radiusPreview, setRadiusPreview] = useState(readStoredNearRadiusMiles);
@@ -91,10 +102,8 @@ export default function WeatherTool({ showToast }: WeatherToolProps) {
   const [reports, setReports] = useState<StormReport[]>([]);
   const [warnings, setWarnings] = useState<StormWarning[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fetchedAt, setFetchedAt] = useState<string | null>(null);
-  const [autoRefresh, setAutoRefresh] = useState(true);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [flyTo, setFlyTo] = useState<LatLngPoint | null>(null);
@@ -128,13 +137,11 @@ export default function WeatherTool({ showToast }: WeatherToolProps) {
       const silent = opts?.silent ?? false;
       const seq = ++requestSeq.current;
       const params = new URLSearchParams();
-      const day = parseStormDay(selectedDay);
-      if (day) {
-        params.set('day', day);
-        params.set('tzOffset', String(new Date().getTimezoneOffset()));
-      } else {
-        params.set('window', timeWindow);
-      }
+      const day = parseStormDay(dayStart) || localDateInputValue();
+      const end = parseStormDay(dayEnd) || day;
+      params.set('day', day);
+      if (end !== day) params.set('dayEnd', end);
+      params.set('tzOffset', String(new Date().getTimezoneOffset()));
       if (locationKey === 'near' && origin) {
         params.set('lat', String(origin.lat));
         params.set('lng', String(origin.lng));
@@ -147,8 +154,7 @@ export default function WeatherTool({ showToast }: WeatherToolProps) {
           cache: 'no-store',
         });
         if (seq !== requestSeq.current) return;
-        if (silent) setRefreshing(true);
-        else setLoading(true);
+        if (!silent) setLoading(true);
         setError(null);
         const data = (await res.json()) as StormReportsResponse & { error?: string };
         if (seq !== requestSeq.current) return;
@@ -165,11 +171,10 @@ export default function WeatherTool({ showToast }: WeatherToolProps) {
       } finally {
         if (seq === requestSeq.current) {
           setLoading(false);
-          setRefreshing(false);
         }
       }
     },
-    [timeWindow, selectedDay, locationKey, userLocation, radiusMiles]
+    [dayStart, dayEnd, locationKey, userLocation, radiusMiles]
   );
 
   useEffect(() => {
@@ -214,14 +219,17 @@ export default function WeatherTool({ showToast }: WeatherToolProps) {
     };
   }, [geoReady, loadReports, locationKey, userLocation]);
 
+  const liveToday =
+    dayStart === dayEnd && dayStart === localDateInputValue();
+
   useEffect(() => {
-    if (!autoRefresh || selectedDay || !isLiveStormWindow(timeWindow)) return;
+    if (!liveToday) return;
     const id = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return;
       void loadReports({ silent: true });
     }, AUTO_REFRESH_MS);
     return () => window.clearInterval(id);
-  }, [autoRefresh, loadReports, timeWindow, selectedDay]);
+  }, [loadReports, liveToday]);
 
   const counts = useMemo(() => {
     const c: Record<StormEventCategory, number> = { hail: 0, wind: 0, tornado: 0 };
@@ -363,32 +371,27 @@ export default function WeatherTool({ showToast }: WeatherToolProps) {
   }, [showWeatherOverlay, loadRadarFrames]);
 
   return (
-    <div className="page-shell page-fade">
+    <PhonePullToRefresh
+      onRefresh={() => loadReports({ silent: true })}
+      className="page-shell page-fade"
+    >
       <div className="mb-8 flex items-center justify-between gap-3 flex-wrap">
         <h1 className="page-title">Weather</h1>
-        <div className="flex items-center gap-3">
-          {lastUpdatedLabel && (
-            <span className="text-xs text-zinc-400 tabular-nums">
-              {lastUpdatedLabel}
-              {refreshing ? ' · refreshing…' : ''}
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={() => void loadReports()}
-            disabled={loading || refreshing}
-            className="btn-primary px-4 py-2 rounded-2xl text-sm font-semibold disabled:opacity-50"
-          >
-            {loading ? 'Loading…' : 'Refresh'}
-          </button>
-        </div>
+        {lastUpdatedLabel ? (
+          <span className="text-xs text-zinc-400 tabular-nums">
+            {lastUpdatedLabel}
+          </span>
+        ) : null}
       </div>
 
       <StormTrackerView
-        timeWindow={timeWindow}
-        setTimeWindow={setTimeWindow}
-        selectedDay={selectedDay}
-        setSelectedDay={setSelectedDay}
+        dayStart={dayStart}
+        dayEnd={dayEnd}
+        onDayRange={(start, end) => {
+          setDayStart(start);
+          setDayEnd(end);
+        }}
+        showToast={showToast}
         locationKey={locationKey}
         locating={locating}
         userLocation={userLocation}
@@ -396,8 +399,6 @@ export default function WeatherTool({ showToast }: WeatherToolProps) {
         editingRadius={editingRadius}
         saveDistance={saveDistance}
         startChangeDistance={startChangeDistance}
-        autoRefresh={autoRefresh}
-        setAutoRefresh={setAutoRefresh}
         goToMyLocation={goToMyLocation}
         error={error}
         loadReports={loadReports}
@@ -426,15 +427,303 @@ export default function WeatherTool({ showToast }: WeatherToolProps) {
         listReports={listReports}
         loading={loading}
       />
-    </div>
+    </PhonePullToRefresh>
+  );
+}
+
+const WEEKDAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+function StormDayControl({
+  start,
+  end,
+  onChange,
+  onRangeTooLong,
+}: {
+  start: string;
+  end: string;
+  onChange: (start: string, end: string) => void;
+  onRangeTooLong: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [rangeAnchor, setRangeAnchor] = useState<string | null>(null);
+  const [view, setView] = useState(() => monthFromDay(start));
+  const [desktop, setDesktop] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const openedRef = useRef(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)');
+    const sync = () => setDesktop(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      openedRef.current = false;
+      return;
+    }
+    if (!openedRef.current) {
+      openedRef.current = true;
+      setRangeAnchor(null);
+      setView(monthFromDay(start));
+    }
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open, start]);
+
+  const updatePos = useCallback(() => {
+    const el = buttonRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const width = 320;
+    const left = Math.min(Math.max(8, r.left), window.innerWidth - width - 8);
+    setPos({ top: r.bottom + 8, left });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePos();
+    window.addEventListener('resize', updatePos);
+    window.addEventListener('scroll', updatePos, true);
+    return () => {
+      window.removeEventListener('resize', updatePos);
+      window.removeEventListener('scroll', updatePos, true);
+    };
+  }, [open, updatePos]);
+
+  const minDay = stormDayMinValue();
+  const maxDay = localDateInputValue();
+  const prevLast = localDateInputValue(new Date(view.year, view.month, 0));
+  const nextFirst = localDateInputValue(new Date(view.year, view.month + 1, 1));
+  const canPrev = prevLast >= minDay;
+  const canNext = nextFirst <= maxDay;
+  const cells = stormMonthCells(view.year, view.month);
+  const lo = start <= end ? start : end;
+  const hi = start <= end ? end : start;
+  const monthTitle = new Date(view.year, view.month, 1).toLocaleDateString(undefined, {
+    month: 'long',
+    year: 'numeric',
+  });
+
+  const pickDay = (day: string) => {
+    if (!parseStormDay(day)) return;
+    if (rangeAnchor == null) {
+      onChange(day, day);
+      setRangeAnchor(day);
+      return;
+    }
+    if (day === rangeAnchor) {
+      onChange(day, day);
+      setRangeAnchor(null);
+      return;
+    }
+    if (stormDayInclusiveCount(rangeAnchor, day) > STORM_DAY_RANGE_MAX_DAYS) {
+      onRangeTooLong();
+      return;
+    }
+    const nextLo = day < rangeAnchor ? day : rangeAnchor;
+    const nextHi = day < rangeAnchor ? rangeAnchor : day;
+    onChange(nextLo, nextHi);
+    setRangeAnchor(null);
+  };
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-label="Storm dates"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full lg:w-auto inline-flex items-center justify-between gap-2 rounded-2xl border border-zinc-200 px-4 py-2.5 text-sm text-zinc-900 whitespace-nowrap focus:outline-none focus:ring-2 focus:ring-zinc-300"
+      >
+        <span>{formatStormDateControlLabel(start, end)}</span>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" className="shrink-0 text-zinc-400">
+          <path d="M4 6.5 8 10.5 12 6.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      <StormDayCalendarPortal
+        open={open}
+        onClose={() => setOpen(false)}
+        desktop={desktop}
+        pos={pos}
+        monthTitle={monthTitle}
+        canPrev={canPrev}
+        canNext={canNext}
+        onPrev={() => setView({ year: view.month === 0 ? view.year - 1 : view.year, month: view.month === 0 ? 11 : view.month - 1 })}
+        onNext={() => setView({ year: view.month === 11 ? view.year + 1 : view.year, month: view.month === 11 ? 0 : view.month + 1 })}
+        cells={cells}
+        lo={lo}
+        hi={hi}
+        maxDay={maxDay}
+        minDay={minDay}
+        pickDay={pickDay}
+      />
+    </>
+  );
+}
+
+function monthFromDay(day: string): { year: number; month: number } {
+  const parsed = parseStormDayFormat(day) || localDateInputValue();
+  const [y, m] = parsed.split('-').map(Number);
+  return { year: y, month: m - 1 };
+}
+
+function StormDayCalendarPortal({
+  open,
+  onClose,
+  desktop,
+  pos,
+  monthTitle,
+  canPrev,
+  canNext,
+  onPrev,
+  onNext,
+  cells,
+  lo,
+  hi,
+  maxDay,
+  minDay,
+  pickDay,
+}: {
+  open: boolean;
+  onClose: () => void;
+  desktop: boolean;
+  pos: { top: number; left: number } | null;
+  monthTitle: string;
+  canPrev: boolean;
+  canNext: boolean;
+  onPrev: () => void;
+  onNext: () => void;
+  cells: Array<string | null>;
+  lo: string;
+  hi: string;
+  maxDay: string;
+  minDay: string;
+  pickDay: (day: string) => void;
+}) {
+  if (!open || typeof document === 'undefined') return null;
+
+  return createPortal(
+    <div className="weather-day-cal fixed inset-0 z-[70] overscroll-contain">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/40 md:bg-transparent"
+        aria-label="Close"
+        onClick={onClose}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Storm dates"
+        className="absolute bg-white border border-zinc-200 shadow-[0_18px_40px_-16px_rgba(17,17,17,0.22)] p-5 inset-x-0 bottom-0 rounded-t-3xl pb-[max(1.25rem,env(safe-area-inset-bottom))] md:inset-auto md:rounded-3xl md:w-[320px] md:pb-5"
+        style={
+          desktop
+            ? pos
+              ? { top: pos.top, left: pos.left }
+              : { visibility: 'hidden' }
+            : undefined
+        }
+      >
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <button
+            type="button"
+            aria-label="Previous month"
+            disabled={!canPrev}
+            onClick={onPrev}
+            className="h-11 w-11 rounded-2xl border border-zinc-200 text-zinc-800 disabled:opacity-30 flex items-center justify-center"
+          >
+            <MonthChevron dir="prev" />
+          </button>
+          <div className="text-sm font-semibold text-zinc-900">{monthTitle}</div>
+          <button
+            type="button"
+            aria-label="Next month"
+            disabled={!canNext}
+            onClick={onNext}
+            className="h-11 w-11 rounded-2xl border border-zinc-200 text-zinc-800 disabled:opacity-30 flex items-center justify-center"
+          >
+            <MonthChevron dir="next" />
+          </button>
+        </div>
+        <div className="grid grid-cols-7 text-center text-[11px] font-medium uppercase tracking-wide text-zinc-400 mb-1">
+          {WEEKDAY_LABELS.map((d, i) => (
+            <div key={`${d}-${i}`} className="py-1">
+              {d}
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7">
+          {cells.map((day, i) => {
+            if (!day) {
+              return <div key={`e-${i}`} className="h-11" />;
+            }
+            const disabled = day > maxDay || day < minDay;
+            const inRange = day >= lo && day <= hi;
+            const isEdge = day === lo || day === hi;
+            return (
+              <button
+                key={day}
+                type="button"
+                disabled={disabled}
+                aria-pressed={inRange}
+                onClick={() => pickDay(day)}
+                className={`h-11 w-full rounded-full text-sm font-medium disabled:opacity-30 disabled:pointer-events-none ${
+                  isEdge
+                    ? 'bg-[var(--accent-blue)] text-white'
+                    : inRange
+                      ? 'bg-[var(--accent-blue-soft)] text-[var(--accent-blue-ink)]'
+                      : 'text-zinc-900 hover:bg-zinc-50'
+                }`}
+              >
+                {Number(day.slice(8))}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function MonthChevron({ dir }: { dir: 'prev' | 'next' }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path
+        d={dir === 'prev' ? 'M10 3.5 5.5 8 10 12.5' : 'M6 3.5 10.5 8 6 12.5'}
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
 function StormTrackerView({
-  timeWindow,
-  setTimeWindow,
-  selectedDay,
-  setSelectedDay,
+  dayStart,
+  dayEnd,
+  onDayRange,
+  showToast,
   locationKey,
   locating,
   userLocation,
@@ -442,8 +731,6 @@ function StormTrackerView({
   editingRadius,
   saveDistance,
   startChangeDistance,
-  autoRefresh,
-  setAutoRefresh,
   goToMyLocation,
   error,
   loadReports,
@@ -472,10 +759,10 @@ function StormTrackerView({
   listReports,
   loading,
 }: {
-  timeWindow: StormWindow;
-  setTimeWindow: (w: StormWindow) => void;
-  selectedDay: string;
-  setSelectedDay: (v: string) => void;
+  dayStart: string;
+  dayEnd: string;
+  onDayRange: (start: string, end: string) => void;
+  showToast: (message: string) => void;
   locationKey: LocationKey;
   locating: boolean;
   userLocation: LatLngPoint | null;
@@ -483,8 +770,6 @@ function StormTrackerView({
   editingRadius: boolean;
   saveDistance: () => void;
   startChangeDistance: () => void;
-  autoRefresh: boolean;
-  setAutoRefresh: (fn: (v: boolean) => boolean) => void;
   goToMyLocation: () => void;
   error: string | null;
   loadReports: () => Promise<void>;
@@ -543,43 +828,11 @@ function StormTrackerView({
 
       <div className="rounded-3xl border border-zinc-200 bg-white p-5 sm:p-6 mb-6">
         <div className="flex flex-col lg:flex-row lg:items-center gap-4">
-          <select
-            aria-label="Time range"
-            value={selectedDay ? 'day' : timeWindow}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v === 'day') return;
-              setSelectedDay('');
-              setTimeWindow(v as StormWindow);
-            }}
-            className="rounded-2xl border border-zinc-200 px-4 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-300"
-          >
-            {selectedDay ? (
-              <option value="day">{formatStormDayLabel(selectedDay)}</option>
-            ) : null}
-            {STORM_WINDOWS.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.label}
-              </option>
-            ))}
-          </select>
-
-          <input
-            type="date"
-            aria-label="Calendar day"
-            value={selectedDay}
-            min={stormDayMinValue()}
-            max={localDateInputValue()}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (!v) {
-                setSelectedDay('');
-                return;
-              }
-              const parsed = parseStormDay(v);
-              if (parsed) setSelectedDay(parsed);
-            }}
-            className="rounded-2xl border border-zinc-200 px-4 py-2.5 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-300"
+          <StormDayControl
+            start={dayStart}
+            end={dayEnd}
+            onChange={onDayRange}
+            onRangeTooLong={() => showToast('Range can’t be more than 31 days')}
           />
 
           <select
@@ -620,20 +873,6 @@ function StormTrackerView({
           ) : null}
 
           <div className="flex-1" />
-
-          {isLiveStormWindow(timeWindow) && !selectedDay && (
-            <button
-              type="button"
-              onClick={() => setAutoRefresh((v) => !v)}
-              className={`px-3.5 py-2 rounded-xl text-xs font-medium border transition-colors ${
-                autoRefresh
-                  ? 'border-[var(--accent-green)] bg-[var(--accent-green-soft)] text-[var(--accent-green-ink)]'
-                  : 'border-zinc-200 text-zinc-500'
-              }`}
-            >
-              Auto-refresh {autoRefresh ? 'on' : 'off'}
-            </button>
-          )}
 
           <button
             type="button"
@@ -762,9 +1001,9 @@ function StormTrackerView({
             <div className="text-sm text-zinc-500 py-6 text-center">
               No hail, wind, or tornado reports
               {locationKey === 'near' ? ' near you' : locationKey === 'anywhere' ? '' : ` in ${locationKey}`}
-              {selectedDay
-                ? ` on ${formatStormDayLabel(selectedDay)}`
-                : ' in this window'}
+              {dayStart === dayEnd
+                ? ` on ${formatStormDayLabel(dayStart)}`
+                : ` ${formatStormDayRangeLabel(dayStart, dayEnd)}`}
             </div>
           ) : (
             <div className="space-y-2 max-h-[560px] overflow-y-auto -mx-1 px-1">

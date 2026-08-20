@@ -1,6 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  attachPhoneMapEdgeYield,
+  phonePointerYieldsEdgeNav,
+} from '@/lib/phone-nav';
 import type { LatLngPoint } from '@/lib/roof-geometry';
 import {
   DEFAULT_SNAP_MODE,
@@ -126,9 +130,9 @@ export default function RoofTracer({
       const isClose = s.kind === 'close' || s.kind === 'close-rect';
       L.circleMarker([s.point.lat, s.point.lng], {
         radius: isClose ? 9 : 7,
-        color: isClose ? '#6ba6ff' : '#64748b',
+        color: isClose ? 'var(--accent-blue)' : 'var(--steel)',
         weight: 2,
-        fillColor: isClose ? '#6ba6ff' : '#e2e8f0',
+        fillColor: isClose ? 'var(--accent-blue)' : 'var(--metal-1)',
         fillOpacity: 0.85,
         dashArray: '2 2',
       })
@@ -150,9 +154,9 @@ export default function RoofTracer({
     pts.forEach((p, i) => {
       L.circleMarker([p.lat, p.lng], {
         radius: 7,
-        color: '#141618',
+        color: 'var(--graphite)',
         weight: 2,
-        fillColor: '#7bc9a6',
+        fillColor: 'var(--accent-green)',
         fillOpacity: 1,
       })
         .bindTooltip(String(i + 1), { permanent: false, direction: 'top' })
@@ -161,16 +165,16 @@ export default function RoofTracer({
     if (pts.length >= 2) {
       L.polyline(
         pts.map((p) => [p.lat, p.lng] as [number, number]),
-        { color: '#7bc9a6', weight: 3, opacity: 0.92 }
+        { color: 'var(--accent-green)', weight: 3, opacity: 0.92 }
       ).addTo(group);
     }
     if (pts.length >= 3) {
       L.polygon(
         pts.map((p) => [p.lat, p.lng] as [number, number]),
         {
-          color: '#134e4a',
+          color: 'var(--graphite)',
           weight: 2,
-          fillColor: '#2dd4bf', // soft teal wash
+          fillColor: 'var(--accent-green)',
           fillOpacity: 0.18,
         }
       ).addTo(group);
@@ -224,6 +228,7 @@ export default function RoofTracer({
     let cancelled = false;
     let map: import('leaflet').Map | null = null;
     let resizeObs: ResizeObserver | null = null;
+    let yieldEdge: (() => void) | undefined;
     let tileErrorCount = 0;
     const timers: number[] = [];
 
@@ -312,6 +317,7 @@ export default function RoofTracer({
         return;
       }
       map = created;
+      yieldEdge = attachPhoneMapEdgeYield(created, created.getContainer());
 
       if (cancelled || initGen.current !== gen) {
         created.remove();
@@ -467,6 +473,8 @@ export default function RoofTracer({
 
       created.on('click', (e: import('leaflet').LeafletMouseEvent) => {
         if (!mapRef.current) return;
+        const orig = e.originalEvent as MouseEvent | undefined;
+        if (orig && phonePointerYieldsEdgeNav(orig.clientX, orig)) return;
         commitPoint({ lat: e.latlng.lat, lng: e.latlng.lng });
       });
 
@@ -485,6 +493,11 @@ export default function RoofTracer({
       cancelled = true;
       timers.forEach((id) => window.clearTimeout(id));
       resizeObs?.disconnect();
+      try {
+        yieldEdge?.();
+      } catch {
+        /* ignore */
+      }
       try {
         map?.off();
         map?.remove();

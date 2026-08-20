@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { attachPhoneMapEdgeYield } from '@/lib/phone-nav';
 import {
   bearingDegrees,
   clampNearRadiusMiles,
@@ -323,7 +324,7 @@ export default function StormMap({
       const size = radius * 2 + (isSelected ? 6 : 0);
       const icon = L.divIcon({
         className: '',
-        html: `<div class="storm-marker${isSelected ? ' storm-marker--selected' : ''}" style="width:${size}px;height:${size}px;background:${style.marker};border-color:${isSelected ? '#111827' : style.markerStroke};font-size:${Math.max(9, size * 0.42)}px;">${style.shortLabel}</div>`,
+        html: `<div class="storm-marker${isSelected ? ' storm-marker--selected' : ''}" style="width:${size}px;height:${size}px;background:${style.marker};border-color:${isSelected ? 'var(--graphite)' : style.markerStroke};font-size:${Math.max(9, size * 0.42)}px;">${style.shortLabel}</div>`,
         iconSize: [size, size],
         iconAnchor: [size / 2, size / 2],
       });
@@ -473,6 +474,7 @@ export default function StormMap({
     let cancelled = false;
     let map: import('leaflet').Map | null = null;
     let resizeObs: ResizeObserver | null = null;
+    let yieldEdge: (() => void) | undefined;
     let tileErrorCount = 0;
     const timers: number[] = [];
 
@@ -565,6 +567,7 @@ export default function StormMap({
         return;
       }
       map = created;
+      yieldEdge = attachPhoneMapEdgeYield(created, created.getContainer());
 
       if (cancelled || initGen.current !== gen) {
         created.remove();
@@ -716,6 +719,11 @@ export default function StormMap({
       cancelled = true;
       timers.forEach((id) => window.clearTimeout(id));
       resizeObs?.disconnect();
+      try {
+        yieldEdge?.();
+      } catch {
+        /* ignore */
+      }
       try {
         map?.off();
         map?.remove();

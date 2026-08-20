@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useLayoutEffect, useRef, useMemo, type CSSProperties } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, type CSSProperties, type TouchEvent as ReactTouchEvent } from 'react';
 import dynamic from 'next/dynamic';
 import jsPDF from 'jspdf';
 import {
@@ -124,10 +124,16 @@ import {
   toE164US,
 } from '@/lib/phone';
 import {
+  LEAD_PROFILE_PAGER,
   PHONE_NAV_COMMIT_PX,
   PHONE_NAV_LOCK_PX,
+  PHONE_NAV_MAP_SEL,
+  PHONE_NAV_SKIP_SEL,
   type PhoneForwardRestore,
+  leadProfilePagerStep,
+  pipelineBoardPagerStep,
   phoneEdgeNavZone,
+  pulsePhonePagerRubber,
   setPhoneForwardFlag,
   setPhoneBackFlag,
 } from '@/lib/phone-nav';
@@ -139,6 +145,10 @@ import HomeDashboard from '@/components/HomeDashboard';
 import HeaderSearch from '@/components/HeaderSearch';
 import '@/components/stage-funnel.css';
 import PipelineBoard from '@/components/PipelineBoard';
+import PhoneChipStrip from '@/components/PhoneChipStrip';
+import PhonePullToRefresh from '@/components/PhonePullToRefresh';
+import CircledPlus, { useFinePointer } from '@/components/CircledPlus';
+import LeadActionSheet from '@/components/LeadActionSheet';
 import RoofSystemPicker, {
   roofSystemLabel,
 } from '@/components/RoofSystemPicker';
@@ -4879,6 +4889,14 @@ export default function SummitApp() {
   const [activeTab, setActiveTab] = useState<AppTab>('home');
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const skipUnsavedMarkRef = useRef(false);
+  const skipLeadAutosaveRef = useRef(true);
+  const leadAutosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const leadSaveGenRef = useRef(0);
+  const [leadSaveStatus, setLeadSaveStatus] = useState<
+    'saved' | 'saving' | 'error'
+  >('saved');
   /**
    * Lead we opened the estimator from — used to return without losing context.
    * Draft lead data is persisted before leaving the profile.
@@ -5080,7 +5098,9 @@ export default function SummitApp() {
   const [showTracer, setShowTracer] = useState(false);
   const [solarMeasuring, setSolarMeasuring] = useState(false);
   const [humanOrdering, setHumanOrdering] = useState(false);
-  const [measureMoreOpen, setMeasureMoreOpen] = useState(false);
+  const [measureAddOpen, setMeasureAddOpen] = useState(false);
+  const [photoAddOpen, setPhotoAddOpen] = useState(false);
+  const finePointer = useFinePointer();
   const [humanOrders, setHumanOrders] = useState<
     Array<{
       id: string;
@@ -5416,27 +5436,43 @@ export default function SummitApp() {
   const [tasksTrashOpen, setTasksTrashOpen] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  /** Phone More sheet: Documents lives here, not as a full tab. */
+  const [phoneMoreDocs, setPhoneMoreDocs] = useState(false);
+  const lastPhoneTabRef = useRef<AppTab>('leads');
+  const phoneMoreScrollRef = useRef<HTMLDivElement>(null);
+  const phoneMoreSwipeRef = useRef({
+    x: 0,
+    y: 0,
+    locked: null as 'h' | 'v' | null,
+  });
   /** Laptop (1024+): icon rail vs full labels. Phone uses bottom tabs; iPad is always rail. */
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const phoneBackRef = useRef<() => boolean>(() => false);
   const phoneForwardRef = useRef<() => boolean>(() => false);
   const phoneForwardRestoreRef = useRef<PhoneForwardRestore | null>(null);
   const phoneCanGoBackRef = useRef(false);
+  const phoneCanGoForwardRef = useRef(false);
   const phoneNavGestureRef = useRef(false);
-  const pendingForwardAfterLeaveRef = useRef<PhoneForwardRestore | null>(null);
+  const leadPagerRef = useRef<HTMLDivElement>(null);
+  const pipelineBoardPagerRef = useRef<HTMLDivElement>(null);
+  const phonePagerStateRef = useRef({
+    isEditingLead: false,
+    currentLeadId: null as number | null,
+    profileTab: 'overview' as string,
+    pipelineFilter: null as PipelineStage | null,
+    leadsView: 'active' as 'active' | 'trash',
+    activeTab: 'home' as AppTab,
+  });
   const armPhoneForward = (entry: PhoneForwardRestore | null) => {
     phoneForwardRestoreRef.current = entry;
     setPhoneForwardFlag(entry != null);
   };
-  const armForwardAfterEstimatorLeave = () => {
-    const restore = pendingForwardAfterLeaveRef.current;
-    pendingForwardAfterLeaveRef.current = null;
-    if (!restore) return;
-    phoneNavGestureRef.current = true;
-    armPhoneForward(restore);
-  };
   const phoneTabSwipeRef = useRef({ y: 0, swiped: false });
   const [isLaptopNav, setIsLaptopNav] = useState(false);
+  const [isPhoneNav, setIsPhoneNav] = useState(() =>
+    typeof window !== 'undefined' &&
+    window.matchMedia('(max-width: 767px)').matches
+  );
   const sidebarDocPrevCollapsed = useRef<boolean | null>(null);
   /** True once launched from the home-screen icon (standalone display mode). */
   const [isStandaloneApp, setIsStandaloneApp] = useState(false);
@@ -12362,6 +12398,13 @@ export default function SummitApp() {
     };
   }, [sidebarOpen]);
 
+  // Phone: Documents is the More sheet, never a full tab.
+  useEffect(() => {
+    if (!isPhoneNav || activeTab !== 'documents') return;
+    setSidebarOpen(true);
+    setPhoneMoreDocs(true);
+  }, [isPhoneNav, activeTab]);
+
   // Restore desktop sidebar collapse preference
   useEffect(() => {
     try {
@@ -12378,84 +12421,140 @@ export default function SummitApp() {
   useLayoutEffect(() => {
     const laptop = window.matchMedia('(min-width: 1024px)');
     const tablet = window.matchMedia('(min-width: 768px)');
+    const phone = window.matchMedia('(max-width: 767px)');
     const sync = () => {
       setIsLaptopNav(laptop.matches);
-      if (tablet.matches) setSidebarOpen(false);
+      setIsPhoneNav(phone.matches);
+      if (tablet.matches) {
+        setSidebarOpen(false);
+        setPhoneMoreDocs(false);
+      }
     };
     sync();
     laptop.addEventListener('change', sync);
     tablet.addEventListener('change', sync);
+    phone.addEventListener('change', sync);
     return () => {
       laptop.removeEventListener('change', sync);
       tablet.removeEventListener('change', sync);
+      phone.removeEventListener('change', sync);
     };
   }, []);
 
-  // Phone: left-edge swipe → Back, right-edge swipe → Forward (undo last Back).
+  // Finger pager (iPhone + iPad): full-width swipe. Gate on TouchEvent, not 767px.
+  // Maps keep leftover edges so pan still works. Mouse / trackpad never hit these listeners.
   useEffect(() => {
-    const phone = window.matchMedia('(max-width: 767px)');
     let startX = 0;
     let startY = 0;
     let tracking = false;
-    let edge: 'back' | 'forward' | null = null;
+    let locked: 'h' | 'v' | null = null;
+    let allowBack = false;
+    let allowForward = false;
+    let suppressClick = false;
     const reset = () => {
       tracking = false;
-      edge = null;
+      locked = null;
+      allowBack = false;
+      allowForward = false;
     };
     const onStart = (e: TouchEvent) => {
-      if (!phone.matches) return;
+      if (e.touches.length !== 1) return;
       const t = e.touches[0];
       if (!t) return;
       const target = e.target as HTMLElement | null;
-      if (target?.closest?.('input, textarea, select, [contenteditable="true"]'))
-        return;
-      const zone = phoneEdgeNavZone(t.clientX, window.innerWidth);
-      if (zone === 'back' && phoneCanGoBackRef.current) edge = 'back';
-      else if (zone === 'forward' && phoneForwardRestoreRef.current) edge = 'forward';
-      else return;
+      if (target?.closest?.(PHONE_NAV_SKIP_SEL)) return;
+      const canBack = phoneCanGoBackRef.current;
+      const canForward = phoneCanGoForwardRef.current;
+      if (!canBack && !canForward) return;
+      const onMap = Boolean(target?.closest?.(PHONE_NAV_MAP_SEL));
+      if (onMap) {
+        const edge = phoneEdgeNavZone(t.clientX, window.innerWidth);
+        if (edge === 'back' && canBack) {
+          allowBack = true;
+          allowForward = false;
+        } else if (edge === 'forward' && canForward) {
+          allowBack = false;
+          allowForward = true;
+        } else {
+          return;
+        }
+      } else {
+        allowBack = canBack;
+        allowForward = canForward;
+      }
       tracking = true;
+      locked = null;
       startX = t.clientX;
       startY = t.clientY;
     };
     const onMove = (e: TouchEvent) => {
       if (!tracking) return;
+      if (e.touches.length !== 1) {
+        reset();
+        return;
+      }
       const t = e.touches[0];
       if (!t) return;
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
-      const horizontal = Math.abs(dx) > Math.abs(dy);
-      if (
-        horizontal &&
-        ((edge === 'back' && dx > PHONE_NAV_LOCK_PX) ||
-          (edge === 'forward' && dx < -PHONE_NAV_LOCK_PX))
-      ) {
-        e.preventDefault();
+      if (!locked) {
+        if (
+          Math.abs(dx) < PHONE_NAV_LOCK_PX &&
+          Math.abs(dy) < PHONE_NAV_LOCK_PX
+        )
+          return;
+        locked = Math.abs(dx) > Math.abs(dy) ? 'h' : 'v';
+        if (locked === 'v') {
+          tracking = false;
+          return;
+        }
       }
+      if (locked !== 'h') return;
+      e.preventDefault();
     };
     const onEnd = (e: TouchEvent) => {
       if (!tracking) return;
-      const going = edge;
+      const backOk = allowBack;
+      const forwardOk = allowForward;
+      const wasH = locked === 'h';
       reset();
       const t = e.changedTouches[0];
-      if (!t || !going) return;
+      if (!t || !wasH) return;
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
       if (Math.abs(dx) <= Math.abs(dy) * 1.2) return;
-      if (going === 'back' && dx > PHONE_NAV_COMMIT_PX) {
-        phoneBackRef.current();
-      } else if (going === 'forward' && dx < -PHONE_NAV_COMMIT_PX) {
-        phoneForwardRef.current();
+      let committed = false;
+      if (backOk && dx > PHONE_NAV_COMMIT_PX) {
+        committed = phoneBackRef.current();
+      } else if (forwardOk && dx < -PHONE_NAV_COMMIT_PX) {
+        committed = phoneForwardRef.current();
+      }
+      if (committed) {
+        e.preventDefault();
+        suppressClick = true;
+        window.setTimeout(() => {
+          suppressClick = false;
+        }, 450);
       }
     };
-    document.addEventListener('touchstart', onStart, { passive: true });
-    document.addEventListener('touchmove', onMove, { passive: false });
-    document.addEventListener('touchend', onEnd, { passive: true });
-    document.addEventListener('touchcancel', reset, { passive: true });
+    const onClick = (e: Event) => {
+      if (!suppressClick) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const optsMove = { capture: true, passive: false } as const;
+    const optsStart = { capture: true, passive: true } as const;
+    document.addEventListener('touchstart', onStart, optsStart);
+    document.addEventListener('touchmove', onMove, optsMove);
+    document.addEventListener('touchend', onEnd, optsMove);
+    document.addEventListener('touchcancel', reset, optsStart);
+    document.addEventListener('click', onClick, true);
     return () => {
-      document.removeEventListener('touchstart', onStart);
-      document.removeEventListener('touchmove', onMove);
-      document.removeEventListener('touchend', onEnd);
-      document.removeEventListener('touchcancel', reset);
+      document.removeEventListener('touchstart', onStart, true);
+      document.removeEventListener('touchmove', onMove, true);
+      document.removeEventListener('touchend', onEnd, true);
+      document.removeEventListener('touchcancel', reset, true);
+      document.removeEventListener('click', onClick, true);
     };
   }, []);
 
@@ -12464,8 +12563,12 @@ export default function SummitApp() {
     isEditingLead,
     currentLeadId,
     profileTab,
+    isPhoneNav ? 'phone' : 'wide',
+    pipelineFilter ?? 'all',
+    leadsView,
     systemDocWorkspace,
     sidebarOpen,
+    phoneMoreDocs,
     showUserMenu,
     headerSearch,
     measurementPdfUrl ? 'pdf' : '',
@@ -12476,13 +12579,9 @@ export default function SummitApp() {
 
   useEffect(() => {
     setPhoneBackFlag(phoneCanGoBackRef.current);
+    setPhoneForwardFlag(phoneCanGoForwardRef.current);
     if (phoneNavGestureRef.current) {
       phoneNavGestureRef.current = false;
-      return;
-    }
-    if (phoneForwardRestoreRef.current) {
-      phoneForwardRestoreRef.current = null;
-      setPhoneForwardFlag(false);
     }
   }, [phonePlace]);
 
@@ -12611,7 +12710,58 @@ export default function SummitApp() {
     window.setTimeout(() => setToastMessage(null), 5000);
   };
 
-  const persistLeads = (updated: Lead[]) => {
+  const refreshLeadsFromCloud = async () => {
+    if (!supabaseEnabled || !supabase || !signedInRef.current) return;
+    try {
+      const { data: leadRows, error: leadErr } = await supabase
+        .from('leads')
+        .select('*')
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false });
+      if (leadErr || !leadRows) return;
+      const fromDb = leadRows.map((row) =>
+        mapDbLeadToApp(row as Record<string, unknown>)
+      );
+      setLeads((prev) => {
+        if (fromDb.length === 0 && prev.length > 0) return prev;
+        const prevByKey = new Map(
+          prev.map((l) => [l.supabaseId?.trim() || String(l.id), l])
+        );
+        for (const lead of fromDb) {
+          const prevLead = prevByKey.get(
+            lead.supabaseId?.trim() || String(lead.id)
+          );
+          if (!prevLead) continue;
+          if (
+            !(lead.estimates && lead.estimates.length) &&
+            prevLead.estimates?.length
+          ) {
+            lead.estimates = prevLead.estimates;
+          }
+          if (!(lead.photos && lead.photos.length) && prevLead.photos?.length) {
+            lead.photos = prevLead.photos;
+          }
+          if (
+            !(lead.documents && lead.documents.length) &&
+            prevLead.documents?.length
+          ) {
+            lead.documents = prevLead.documents;
+          }
+        }
+        const safeFromDb = sanitizeLeads(fromDb);
+        try {
+          localStorage.setItem('summitLeads', JSON.stringify(safeFromDb));
+        } catch {
+          /* ignore */
+        }
+        return safeFromDb;
+      });
+    } catch (e) {
+      console.error('Leads refresh failed:', e);
+    }
+  };
+
+  const persistLeads = (updated: Lead[]): Promise<boolean> => {
     const safe = sanitizeLeads(updated);
     setLeads(safe);
     try {
@@ -12620,28 +12770,39 @@ export default function SummitApp() {
       /* ignore quota */
     }
 
+    const db = supabase;
+    if (!(supabaseEnabled && db)) {
+      return Promise.resolve(true);
+    }
+
+    const trackedId = currentLeadId;
+
     // Best-effort cloud write: leads (+ new estimates only)
-    if (supabaseEnabled && supabase) {
-      void (async () => {
-        for (const lead of safe) {
-          try {
+    return (async () => {
+      let trackedOk = true;
+      for (const lead of safe) {
+        try {
             const payload = mapAppLeadToDb(lead);
             let cloudLeadId = lead.supabaseId?.trim() || '';
 
             if (cloudLeadId) {
-              const { error } = await supabase
+              const { error } = await db
                 .from('leads')
                 .update(payload)
                 .eq('id', cloudLeadId);
-              if (error) console.error('Supabase lead update error:', error);
+              if (error) {
+                console.error('Supabase lead update error:', error);
+                if (lead.id === trackedId) trackedOk = false;
+              }
             } else {
-              const { data, error } = await supabase
+              const { data, error } = await db
                 .from('leads')
                 .insert(payload)
                 .select('id')
                 .single();
               if (error) {
                 console.error('Supabase lead insert error:', error);
+                if (lead.id === trackedId) trackedOk = false;
                 continue;
               }
               if (data?.id) {
@@ -12685,7 +12846,7 @@ export default function SummitApp() {
                 estimateSyncInFlightRef.current.add(syncKey);
                 dirtyEstimateKeysRef.current.delete(dirtyKey);
                 try {
-                  const { error: estErr } = await supabase
+                  const { error: estErr } = await db
                     .from('estimates')
                     .update(estPayload)
                     .eq('id', est.supabaseId);
@@ -12708,7 +12869,7 @@ export default function SummitApp() {
               estimateSyncInFlightRef.current.add(syncKey);
               dirtyEstimateKeysRef.current.delete(dirtyKey);
               try {
-                const { data: estRow, error: estErr } = await supabase
+                const { data: estRow, error: estErr } = await db
                   .from('estimates')
                   .insert(estPayload)
                   .select('id')
@@ -12754,10 +12915,11 @@ export default function SummitApp() {
             }
           } catch (err) {
             console.error('Supabase persist error:', err);
+            if (lead.id === trackedId) trackedOk = false;
           }
         }
+        return trackedOk;
       })();
-    }
   };
 
   const refreshGcalStatus = async () => {
@@ -14746,6 +14908,8 @@ export default function SummitApp() {
   };
 
   const applyLeadFields = (lead: Lead) => {
+    skipLeadAutosaveRef.current = true;
+    setLeadSaveStatus('saved');
     setClientFirstName(lead.clientFirstName || '');
     setClientLastName(lead.clientLastName || '');
     setClientAddress(lead.clientAddress || '');
@@ -14827,7 +14991,10 @@ export default function SummitApp() {
   }, [leads, isEditingLead, currentLeadId]);
 
   const closeLeadProfile = () => {
-    // Auto draft-save so closing the profile never drops in-progress edits
+    if (leadAutosaveTimerRef.current) {
+      clearTimeout(leadAutosaveTimerRef.current);
+      leadAutosaveTimerRef.current = null;
+    }
     if (currentLeadId != null) {
       saveLeadDraft({ silent: true });
     }
@@ -14835,6 +15002,12 @@ export default function SummitApp() {
     setLightboxPhoto(null);
     setProfileTab('overview');
     setEditingEstimateId(null);
+    setMeasureAddOpen(false);
+    setPhotoAddOpen(false);
+    setDocAddMenuOpen(false);
+    setPipelineFilter(null);
+    setLeadsView('active');
+    setActiveTab('leads');
   };
 
   /** Next job number: PREFIX-YEAR#### e.g. S-20260001 (prefix from app_settings) */
@@ -16478,16 +16651,6 @@ export default function SummitApp() {
     moveLeadToStage(currentLeadId, next, options);
   };
 
-  const advanceJobMilestone = () => {
-    const idx = PIPELINE_STAGES.indexOf(leadCategory);
-    if (idx < 0 || idx >= PIPELINE_STAGES.length - 1) {
-      showToast('Job is already at Closed');
-      return;
-    }
-    const next = PIPELINE_STAGES[idx + 1];
-    setLeadMilestone(next);
-  };
-
   /** Snapshot current form fields onto a lead (draft or full save). */
   const buildLeadFormPatch = (): Partial<Lead> => ({
     clientFirstName,
@@ -16536,6 +16699,7 @@ export default function SummitApp() {
     category: leadCategory,
     adjustmentDate: adjustmentDate || '',
     adjustmentTime: adjustmentTime || '',
+    takeoff: normalizeTakeoff(takeoffForm),
   });
 
   /**
@@ -16551,10 +16715,87 @@ export default function SummitApp() {
     const updatedLeads = leads.map((lead) =>
       lead.id === id ? { ...lead, ...buildLeadFormPatch() } : lead
     );
-    persistLeads(updatedLeads);
+    const gen = ++leadSaveGenRef.current;
+    setLeadSaveStatus('saving');
+    void persistLeads(updatedLeads).then(
+      (ok) => {
+        if (gen !== leadSaveGenRef.current) return;
+        setLeadSaveStatus(ok ? 'saved' : 'error');
+      },
+      () => {
+        if (gen !== leadSaveGenRef.current) return;
+        setLeadSaveStatus('error');
+      }
+    );
     if (!opts?.silent) showToast('Lead draft saved');
     return true;
   };
+
+  useEffect(() => {
+    if (!isEditingLead || currentLeadId == null || profileTab === 'estimator') {
+      return;
+    }
+    if (skipLeadAutosaveRef.current) {
+      skipLeadAutosaveRef.current = false;
+      return;
+    }
+    setLeadSaveStatus('saving');
+    if (leadAutosaveTimerRef.current) {
+      clearTimeout(leadAutosaveTimerRef.current);
+    }
+    leadAutosaveTimerRef.current = setTimeout(() => {
+      leadAutosaveTimerRef.current = null;
+      saveLeadDraft({ silent: true });
+    }, 450);
+    return () => {
+      if (leadAutosaveTimerRef.current) {
+        clearTimeout(leadAutosaveTimerRef.current);
+        leadAutosaveTimerRef.current = null;
+      }
+    };
+    // Field snapshot — not saveLeadDraft itself
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    isEditingLead,
+    currentLeadId,
+    profileTab,
+    clientFirstName,
+    clientLastName,
+    clientAddress,
+    clientCity,
+    clientState,
+    clientZip,
+    clientPhone,
+    clientEmail,
+    additionalContacts,
+    financialWorksheet,
+    leadCompany,
+    clientJobNumber,
+    mailingSameAsBilling,
+    billingAddress,
+    billingCity,
+    billingState,
+    billingZip,
+    jobCategory,
+    hasHOA,
+    hoaInfo,
+    leadSource,
+    referralName,
+    insuranceCompany,
+    damageLocation,
+    dateOfLoss,
+    claimFiled,
+    adjusterName,
+    adjusterPhone,
+    adjusterEmail,
+    metAdjuster,
+    claimNumber,
+    policyNumber,
+    leadCategory,
+    adjustmentDate,
+    adjustmentTime,
+    takeoffForm,
+  ]);
 
   // Approved job value always follows worksheet line grand total
   useEffect(() => {
@@ -16567,18 +16808,85 @@ export default function SummitApp() {
   }, [financialWorksheet.sections, isEditingLead]);
 
   const switchProfileTab = (tab: ProfileTab) => {
+    if (tab === profileTab) return;
     if (currentLeadId != null && isEditingLead) {
       saveLeadDraft({ silent: true });
     }
+    setMeasureAddOpen(false);
+    setPhotoAddOpen(false);
+    setDocAddMenuOpen(false);
     setProfileTab(tab);
   };
 
-  const saveLeadProfile = () => {
-    if (!saveLeadDraft({ silent: true })) return;
-    // Stay on dedicated full-screen profile after save (AccuLynx-style)
-    setIsEditingLead(true);
-    setActiveTab('leads');
-    showToast('Lead profile saved');
+  const phoneLeadOverlayOpen = () =>
+    sidebarOpen ||
+    showUserMenu ||
+    Boolean(headerSearch) ||
+    Boolean(measurementPdfUrl) ||
+    Boolean(lightboxPhoto) ||
+    showEstimatePicker ||
+    showProfessionalEstimate ||
+    Boolean(systemDocWorkspace) ||
+    (isEditingLead && profileTab === 'estimator');
+
+  if (activeTab !== 'documents') lastPhoneTabRef.current = activeTab;
+
+  phonePagerStateRef.current = {
+    isEditingLead,
+    currentLeadId,
+    profileTab,
+    pipelineFilter,
+    leadsView,
+    activeTab,
+  };
+
+  const pageLeadProfile = (dir: 1 | -1): boolean => {
+    const s = phonePagerStateRef.current;
+    if (!(s.isEditingLead && s.currentLeadId != null)) return false;
+    const step = leadProfilePagerStep(s.profileTab, dir);
+    if (step.kind === 'exit') {
+      s.isEditingLead = false;
+      s.pipelineFilter = null;
+      s.leadsView = 'active';
+      closeLeadProfile();
+      setPipelineFilter(null);
+      setLeadsView('active');
+      return true;
+    }
+    if (step.kind === 'rubber') {
+      pulsePhonePagerRubber(leadPagerRef.current, dir);
+      return true;
+    }
+    s.profileTab = step.id;
+    saveLeadDraft({ silent: true });
+    setProfileTab(step.id as ProfileTab);
+    return true;
+  };
+
+  const pagePipelineBoard = (dir: 1 | -1): boolean => {
+    const s = phonePagerStateRef.current;
+    if (s.isEditingLead || s.activeTab !== 'leads') return false;
+    if (s.leadsView !== 'active') {
+      if (dir < 0) {
+        s.activeTab = 'home';
+        handleTabChange('home');
+        return true;
+      }
+      return false;
+    }
+    const step = pipelineBoardPagerStep(s.pipelineFilter, dir);
+    if (step.kind === 'exit') {
+      s.activeTab = 'home';
+      handleTabChange('home');
+      return true;
+    }
+    if (step.kind === 'rubber') {
+      pulsePhonePagerRubber(pipelineBoardPagerRef.current, dir);
+      return true;
+    }
+    s.pipelineFilter = step.filter;
+    setPipelineFilter(step.filter);
+    return true;
   };
 
   const TAKEOFF_FIELD_LABELS: { key: keyof TakeoffSheet; label: string }[] = [
@@ -17316,7 +17624,6 @@ export default function SummitApp() {
     const leave = pendingLeave;
     setPendingLeave(null);
     if (leave.kind === 'estimator') {
-      armForwardAfterEstimatorLeave();
       completeLeaveEstimator({
         returnToLead: leave.returnToLead,
         targetTab: leave.targetTab,
@@ -17346,7 +17653,6 @@ export default function SummitApp() {
     await saveCurrentEstimate();
     setPendingLeave(null);
     if (leave.kind === 'estimator') {
-      armForwardAfterEstimatorLeave();
       completeLeaveEstimator({
         returnToLead: leave.returnToLead,
         targetTab: leave.targetTab,
@@ -19024,7 +19330,27 @@ export default function SummitApp() {
     headerSearchQuery
   );
 
+  const closePhoneMore = () => {
+    setSidebarOpen(false);
+    setPhoneMoreDocs(false);
+    if (isPhoneNav && activeTab === 'documents') {
+      const fallback = lastPhoneTabRef.current;
+      handleTabChange(fallback === 'documents' ? 'leads' : fallback);
+    }
+  };
+
+  const openPhoneMore = () => {
+    setPhoneMoreDocs(false);
+    setSidebarOpen(true);
+  };
+
   const openNavTab = (tab: AppTab) => {
+    if (isPhoneNav && tab === 'documents') {
+      setPhoneMoreDocs(true);
+      setSidebarOpen(true);
+      return;
+    }
+    setPhoneMoreDocs(false);
     setShowProfessionalEstimate(false);
     setSidebarOpen(false);
     // Leaving a document workspace via nav — return to normal shell
@@ -19220,10 +19546,26 @@ export default function SummitApp() {
       return { kind: 'estimator', leadId: estimatorSourceLeadId ?? currentLeadId };
     }
     if (isEditingLead && currentLeadId != null) {
-      return { kind: 'lead', leadId: currentLeadId, profileTab };
+      return {
+        kind: 'lead',
+        leadId: currentLeadId,
+        profileTab,
+      };
     }
     if (activeTab === 'canvassing' || activeTab === 'weather') {
       return { kind: 'tool', tab: activeTab };
+    }
+    if (activeTab === 'leads') {
+      return { kind: 'board' };
+    }
+    if (
+      activeTab === 'calendar' ||
+      activeTab === 'tasks' ||
+      activeTab === 'tools' ||
+      activeTab === 'documents' ||
+      activeTab === 'settings'
+    ) {
+      return { kind: 'tab', tab: activeTab };
     }
     return null;
   };
@@ -19233,22 +19575,23 @@ export default function SummitApp() {
     if (!restore) return false;
 
     if (restore.kind === 'estimator') {
-      const left = leaveEstimator({ returnToLead: true });
-      if (left) {
-        phoneNavGestureRef.current = true;
-        armPhoneForward(restore);
-      } else {
-        pendingForwardAfterLeaveRef.current = restore;
-      }
+      phoneNavGestureRef.current = true;
+      leaveEstimator({ returnToLead: true });
       return true;
     }
 
     phoneNavGestureRef.current = true;
-    armPhoneForward(restore);
+    if (
+      restore.kind !== 'lead' &&
+      restore.kind !== 'tab' &&
+      restore.kind !== 'board'
+    ) {
+      armPhoneForward(restore);
+    }
 
     switch (restore.kind) {
       case 'sidebar':
-        setSidebarOpen(false);
+        closePhoneMore();
         break;
       case 'userMenu':
         setShowUserMenu(false);
@@ -19273,84 +19616,37 @@ export default function SummitApp() {
         exitLeadDocumentWorkspace();
         break;
       case 'lead':
-        closeLeadProfile();
+        pageLeadProfile(-1);
+        break;
+      case 'board':
+        pagePipelineBoard(-1);
         break;
       case 'tool':
         openNavTab('tools');
+        break;
+      case 'tab':
+        handleTabChange('home');
         break;
     }
     return true;
   };
   phoneBackRef.current = goPhoneBack;
   phoneCanGoBackRef.current = snapshotPhoneForward() != null;
+  phoneCanGoForwardRef.current =
+    !phoneLeadOverlayOpen() &&
+    ((isEditingLead && currentLeadId != null) ||
+      (activeTab === 'leads' && !isEditingLead && leadsView === 'active'));
 
   const goPhoneForward = () => {
-    const restore = phoneForwardRestoreRef.current;
-    if (!restore) return false;
+    if (phoneLeadOverlayOpen()) return false;
     phoneNavGestureRef.current = true;
-    armPhoneForward(null);
-
-    switch (restore.kind) {
-      case 'sidebar':
-        setSidebarOpen(true);
-        break;
-      case 'userMenu':
-        setShowUserMenu(true);
-        break;
-      case 'headerSearch':
-        setHeaderSearch(restore.query);
-        break;
-      case 'pdf':
-        if (restore.file) openHubPdfPreview(restore.file);
-        else openRemotePdfPreview(restore.url, restore.name);
-        break;
-      case 'lightbox':
-        setLightboxPhoto(restore.photo);
-        break;
-      case 'estimatePicker':
-        setShowEstimatePicker(true);
-        setInvoicePickerMode(restore.invoice);
-        break;
-      case 'professionalEstimate':
-        setShowProfessionalEstimate(true);
-        break;
-      case 'docWorkspace':
-        setSystemDocWorkspace(restore.workspace);
-        setSystemDocOrigin(restore.origin);
-        if (restore.origin === 'lead' && restore.leadId != null) {
-          setCurrentLeadId(restore.leadId);
-          setIsEditingLead(true);
-          setActiveTab('leads');
-        } else {
-          setActiveTab('documents');
-        }
-        break;
-      case 'estimator': {
-        const id = restore.leadId;
-        if (id != null) {
-          const lead = leads.find((l) => l.id === id);
-          if (lead) applyLeadFields(lead);
-          setCurrentLeadId(id);
-        }
-        setIsEditingLead(true);
-        setActiveTab('leads');
-        setProfileTab('estimator');
-        break;
-      }
-      case 'lead': {
-        const lead = leads.find((l) => l.id === restore.leadId);
-        if (!lead) break;
-        applyLeadFields(lead);
-        setIsEditingLead(true);
-        setActiveTab('leads');
-        setProfileTab(restore.profileTab as ProfileTab);
-        break;
-      }
-      case 'tool':
-        setActiveTab(restore.tab);
-        break;
+    if (isEditingLead && currentLeadId != null) {
+      return pageLeadProfile(1);
     }
-    return true;
+    if (activeTab === 'leads' && !isEditingLead) {
+      return pagePipelineBoard(1);
+    }
+    return false;
   };
   phoneForwardRef.current = goPhoneForward;
 
@@ -19551,7 +19847,40 @@ export default function SummitApp() {
     </>
   );
 
-  const renderPhoneTabBar = () => (
+  const renderPhoneTabBar = () => {
+    const onMoreStart = (e: ReactTouchEvent) => {
+      const t = e.touches[0];
+      phoneMoreSwipeRef.current = {
+        x: t?.clientX ?? 0,
+        y: t?.clientY ?? 0,
+        locked: null,
+      };
+    };
+    const onMoreMove = (e: ReactTouchEvent) => {
+      const t = e.touches[0];
+      if (!t) return;
+      const s = phoneMoreSwipeRef.current;
+      if (s.locked) return;
+      const dx = t.clientX - s.x;
+      const dy = t.clientY - s.y;
+      if (Math.abs(dx) < PHONE_NAV_LOCK_PX && Math.abs(dy) < PHONE_NAV_LOCK_PX)
+        return;
+      s.locked = Math.abs(dy) > Math.abs(dx) ? 'v' : 'h';
+    };
+    const onMoreEnd = (e: ReactTouchEvent) => {
+      const s = phoneMoreSwipeRef.current;
+      const locked = s.locked;
+      const start = s.y;
+      s.locked = null;
+      if (locked === 'h') return;
+      const end = e.changedTouches[0]?.clientY ?? start;
+      if (end - start < 48) return;
+      if (phoneMoreDocs && (phoneMoreScrollRef.current?.scrollTop ?? 0) > 0)
+        return;
+      closePhoneMore();
+    };
+
+    return (
     <>
       {sidebarOpen && (
         <div
@@ -19560,35 +19889,56 @@ export default function SummitApp() {
           role="dialog"
           aria-modal="true"
           aria-label="More"
+          data-phone-more-sheet
+          onTouchStart={onMoreStart}
+          onTouchMove={onMoreMove}
+          onTouchEnd={onMoreEnd}
         >
           <button
             type="button"
             className="absolute inset-0 bg-black/40"
             aria-label="Close"
-            onClick={() => setSidebarOpen(false)}
+            onClick={closePhoneMore}
           />
           <div
-            className="menu-panel absolute inset-x-0 bottom-0 rounded-t-[2rem] border-x-0 border-b-0 px-3 pt-2 pb-3"
-            onTouchStart={(e) => {
-              phoneTabSwipeRef.current = { y: e.touches[0]?.clientY ?? 0, swiped: false };
-            }}
-            onTouchEnd={(e) => {
-              const start = phoneTabSwipeRef.current.y;
-              const end = e.changedTouches[0]?.clientY ?? start;
-              if (end - start > 36) setSidebarOpen(false);
-            }}
+            className={`menu-panel absolute inset-x-0 bottom-0 rounded-t-[2rem] border-x-0 border-b-0 px-3 pt-2 pb-3 flex flex-col min-h-0 ${
+              phoneMoreDocs ? 'top-0' : ''
+            }`}
           >
             <button
               type="button"
-              className="flex justify-center w-full py-2"
+              className="flex justify-center w-full py-2 shrink-0"
               aria-label="Close"
-              onClick={() => setSidebarOpen(false)}
+              onClick={closePhoneMore}
             >
               <span className="block w-9 h-1 rounded-full bg-[var(--chrome)]" />
             </button>
+            {phoneMoreDocs ? (
+              <div
+                ref={phoneMoreScrollRef}
+                className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-1 pb-2"
+              >
+                <h1 className="page-title mb-6">Documents</h1>
+                <div aria-busy={hubPdfBusy || undefined}>
+                  {SYSTEM_DOCUMENTS.map((doc) => (
+                    <button
+                      key={doc.id}
+                      type="button"
+                      disabled={hubPdfBusy && doc.id !== 'pricing'}
+                      onClick={() => void openHubLibraryDoc(doc.id)}
+                      className="list-row min-h-11 disabled:opacity-50"
+                    >
+                      <div className="text-lg font-semibold text-zinc-900">
+                        {doc.name}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
             <div className="flex flex-col gap-0.5">
               {phoneTabSheet.map((item) => {
-                const active = isSidebarTabActive(item.tab);
+                const active = phoneMoreDocs || isSidebarTabActive(item.tab);
                 return (
                   <button
                     key={item.tab}
@@ -19612,10 +19962,20 @@ export default function SummitApp() {
                 );
               })}
             </div>
+            )}
           </div>
         </div>
       )}
 
+      <div
+        data-phone-nav-shelf
+        aria-hidden="true"
+        className="md:hidden fixed inset-x-0 z-[54] min-h-11"
+        style={{
+          bottom: 'calc(3.75rem + env(safe-area-inset-bottom, 0px))',
+          height: '2.75rem',
+        }}
+      />
       <nav
         className="md:hidden fixed inset-x-0 bottom-0 z-[55] glass glass-strong safe-left pr-[env(safe-area-inset-right,0px)]"
         aria-label="Main"
@@ -19628,7 +19988,7 @@ export default function SummitApp() {
           const end = e.changedTouches[0]?.clientY ?? start;
           if (start - end > 36) {
             phoneTabSwipeRef.current.swiped = true;
-            setSidebarOpen(true);
+            openPhoneMore();
           }
         }}
       >
@@ -19636,7 +19996,7 @@ export default function SummitApp() {
           type="button"
           className="flex justify-center w-full pt-1.5 pb-0.5 min-h-6"
           aria-label="More"
-          onClick={() => setSidebarOpen(true)}
+          onClick={openPhoneMore}
         >
           <span className="block w-9 h-1 rounded-full bg-[var(--chrome)]" />
         </button>
@@ -19670,7 +20030,8 @@ export default function SummitApp() {
         </div>
       </nav>
     </>
-  );
+    );
+  };
 
   /** Top bar: logo (phone), search, user — same on every page */
   const renderAppHeader = () => (
@@ -23050,7 +23411,6 @@ export default function SummitApp() {
               <button
                 type="button"
                 onClick={() => {
-                  pendingForwardAfterLeaveRef.current = null;
                   setPendingLeave(null);
                 }}
                 className="w-full py-3 rounded-2xl font-medium text-sm text-zinc-500 hover:text-zinc-800"
@@ -24829,6 +25189,12 @@ export default function SummitApp() {
               calendarEvents={calendarEvents}
               gcalConnected={gcalConnected}
               tasks={tasks}
+              onRefresh={async () => {
+                await Promise.all([
+                  refreshLeadsFromCloud(),
+                  refreshFromGoogle({ silent: true }),
+                ]);
+              }}
               onSelectStage={(stage) => {
                 setPipelineFilter(stage as PipelineStage);
                 setLeadsView('active');
@@ -24850,7 +25216,7 @@ export default function SummitApp() {
         })()}
 
         {activeTab === 'documents' && (
-          <div className="page-shell page-fade pb-8 w-full">
+          <div className="page-shell page-fade pb-8 w-full hidden md:block">
             <div className="mb-8">
               <h1 className="page-title">Documents</h1>
             </div>
@@ -25149,7 +25515,15 @@ export default function SummitApp() {
           };
 
           return (
-            <div className="page-shell page-fade space-y-6">
+            <PhonePullToRefresh
+              onRefresh={() =>
+                refreshFromGoogle({
+                  silent: true,
+                  cursor: calendarCursor,
+                })
+              }
+              className="page-shell page-fade space-y-6"
+            >
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div>
                   <div className="flex items-center justify-between gap-3">
@@ -25888,7 +26262,7 @@ export default function SummitApp() {
                     </p>
                   )}
               </div>
-            </div>
+            </PhonePullToRefresh>
           );
           } catch (calErr) {
             console.error('Calendar render failed:', calErr);
@@ -25950,7 +26324,15 @@ export default function SummitApp() {
           );
           const trashTasks = listTasks.filter((t) => Boolean(t.deletedAt));
           return (
-            <div className="page-shell page-fade space-y-6">
+            <PhonePullToRefresh
+              onRefresh={() =>
+                syncTasksWithGoogle({
+                  silent: true,
+                  pullOnly: true,
+                })
+              }
+              className="page-shell page-fade space-y-6"
+            >
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div className="flex items-center justify-between gap-3">
                   <h1 className="page-title">
@@ -26421,7 +26803,7 @@ export default function SummitApp() {
                   ) : null}
                 </div>
               ) : null}
-            </div>
+            </PhonePullToRefresh>
           );
           } catch (tasksErr) {
             console.error('Tasks render failed:', tasksErr);
@@ -26471,7 +26853,11 @@ export default function SummitApp() {
           ).length;
 
           return (
-            <div className="page-shell page-fade">
+            <div
+              className="page-shell page-fade"
+              ref={pipelineBoardPagerRef}
+              data-phone-pager
+            >
               <PipelineBoard
                 leads={leads}
                 trash={trash}
@@ -26494,6 +26880,7 @@ export default function SummitApp() {
                 onEmptyTrash={emptyTrash}
                 onRestoreFromTrash={restoreFromTrash}
                 onPermanentlyDelete={permanentlyDelete}
+                onRefresh={() => refreshLeadsFromCloud()}
               />
             </div>
           );
@@ -28873,74 +29260,76 @@ export default function SummitApp() {
                 0,
                 PIPELINE_STAGES.indexOf(leadCategory)
               );
-              const isFinalMilestone = leadCategory === 'Closed';
 
-              const tabs: { id: ProfileTab; label: string }[] = [
-                { id: 'overview', label: 'Overview' },
-                { id: 'pipeline', label: 'Pipeline' },
-                { id: 'measurements', label: 'Measurements' },
-                { id: 'financial', label: 'Financial' },
-                { id: 'insurance', label: 'Insurance' },
-                { id: 'notes', label: 'Messages' },
-                { id: 'estimates', label: 'Estimates' },
-                { id: 'orders', label: 'Orders' },
-                { id: 'photos', label: 'Photos' },
-                { id: 'documents', label: 'Documents' },
-              ];
+              const tabs = [...LEAD_PROFILE_PAGER] as {
+                id: ProfileTab;
+                label: string;
+              }[];
 
               const fieldClass =
-                'w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base bg-white focus:outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-300/50';
+                'w-full border border-zinc-200 rounded-2xl px-4 py-3 text-base bg-white focus:outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-300/50 [touch-action:pan-y_pinch-zoom]';
               const labelClass =
                 'text-xs font-medium uppercase tracking-wide text-zinc-500 mb-1.5';
 
               return (
-                <div className="flex flex-col min-h-0 w-full page-fade">
+                <div
+                  ref={leadPagerRef}
+                  data-phone-pager
+                  className="flex flex-col min-h-0 w-full page-fade"
+                >
                   {/* Lead sub-bar — same rail as header / estimator */}
                   <div className="bg-white border-b border-zinc-200/80">
                     <div className="page-rail py-3 sm:py-3.5">
                       <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-3 min-w-0">
+                        <div className="flex items-center min-w-0 gap-3">
                           <button
                             type="button"
                             onClick={closeLeadProfile}
-                            className="shrink-0 px-3 py-2 rounded-xl text-sm font-medium text-zinc-600 hover:bg-zinc-100 border border-zinc-200 transition-colors"
+                            className="shrink-0 inline-flex items-center justify-center w-11 h-11 rounded-full text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-blue-ring)]"
+                            aria-label="Close job"
                           >
-                            ← Pipeline
+                            <svg
+                              width="18"
+                              height="18"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              aria-hidden
+                            >
+                              <path
+                                d="M6 6l12 12M18 6L6 18"
+                                stroke="currentColor"
+                                strokeWidth="1.75"
+                                strokeLinecap="round"
+                              />
+                            </svg>
                           </button>
                           <h1 className="text-lg sm:text-xl font-semibold text-zinc-900 truncate">
                             {displayName}
                           </h1>
                         </div>
-                        <button
-                          type="button"
-                          onClick={saveLeadProfile}
-                          className="btn-primary shrink-0 px-5 py-2.5 rounded-xl font-semibold text-sm"
-                        >
-                          Save
-                        </button>
+                        {leadSaveStatus === 'error' ? (
+                          <button
+                            type="button"
+                            onClick={() => saveLeadDraft({ silent: true })}
+                            className="shrink-0 min-h-11 px-2 text-sm font-medium text-[var(--danger)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-blue-ring)]"
+                          >
+                            Couldn’t save
+                          </button>
+                        ) : (
+                          <span
+                            className="shrink-0 min-h-11 inline-flex items-center px-2 text-sm font-medium text-zinc-500"
+                            aria-live="polite"
+                          >
+                            {leadSaveStatus === 'saving' ? 'Saving…' : 'Saved'}
+                          </span>
+                        )}
                       </div>
 
-                      <div className="mt-3 -mx-1 overflow-x-auto scrollbar-none">
-                        <div className="flex gap-1 min-w-max px-1 pb-0.5">
-                          {tabs.map((tab) => {
-                            const active = profileTab === tab.id;
-                            return (
-                              <button
-                                key={tab.id}
-                                type="button"
-                                onClick={() => switchProfileTab(tab.id)}
-                                className={`px-3 sm:px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
-                                  active
-                                    ? 'bg-zinc-900 text-white shadow-sm'
-                                    : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900'
-                                }`}
-                              >
-                                {tab.label}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
+                      <PhoneChipStrip
+                        tabs={tabs}
+                        activeId={profileTab}
+                        onSelect={switchProfileTab}
+                      />
                     </div>
                   </div>
 
@@ -29348,32 +29737,15 @@ export default function SummitApp() {
                             >
                               Move to trash
                             </button>
-                            <button
-                              type="button"
-                              onClick={saveLeadProfile}
-                              className="btn-primary px-5 py-2.5 rounded-xl font-semibold text-sm"
-                            >
-                              Save
-                            </button>
                           </div>
                         </div>
                       )}
 
                       {profileTab === 'pipeline' && (
                         <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
-                          <div className="flex items-center justify-between gap-3 mb-3">
-                            <h2 className="text-lg font-semibold text-zinc-900 mb-4">
-                                Pipeline
-                              </h2>
-                            <button
-                              type="button"
-                              onClick={advanceJobMilestone}
-                              disabled={isFinalMilestone}
-                              className="btn-primary inline-flex items-center justify-center px-5 py-3 rounded-2xl text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
-                            >
-                              {isFinalMilestone ? 'Job closed' : 'Advance job'}
-                            </button>
-                          </div>
+                          <h2 className="text-lg font-semibold text-zinc-900 mb-4">
+                            Pipeline
+                          </h2>
 
                           <div className="rounded-2xl bg-zinc-100 border border-zinc-200 px-4 py-3 mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                             <div className="text-sm text-zinc-800 flex items-center gap-2 flex-wrap">
@@ -29489,9 +29861,15 @@ export default function SummitApp() {
 
                         return (
                         <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
-                          <h2 className="text-lg font-semibold text-zinc-900 mb-4">
-                            Measurements
-                          </h2>
+                          <div className="flex items-center justify-between gap-3 mb-3">
+                            <h2 className="text-lg font-semibold text-zinc-900 mb-4">
+                              Measurements
+                            </h2>
+                            <CircledPlus
+                              aria-label="Add measurement"
+                              onClick={() => setMeasureAddOpen(true)}
+                            />
+                          </div>
 
                         <div className="w-full space-y-5">
                           {/* Read-only property address from lead profile */}
@@ -29534,107 +29912,68 @@ export default function SummitApp() {
 
                           
 
-                          {/* Map or start */}
-                          {!showTracer && !geocoding && (
-                            <div className="rounded-3xl bg-zinc-100 border border-zinc-100 px-6 py-12 text-center space-y-5">
-                              <div className="space-y-1">
-                                <p className="text-sm font-medium text-zinc-800">
-                                  Get the roof numbers
-                                </p>
-                                <p className="text-sm text-zinc-500 max-w-md mx-auto">
-                                  {hasProfileAddress
-                                    ? 'Upload an EagleView when you have one. Otherwise auto-measure or trace the roof on the map.'
-                                    : 'Add a property address on Overview first, then measure.'}
-                                </p>
-                              </div>
-
-                              <div className="flex flex-wrap items-center justify-center gap-2">
-                                <input
-                                  ref={measurementFileRef}
-                                  type="file"
-                                  accept="application/pdf,.pdf,image/*"
-                                  className="hidden"
-                                  onChange={(e) => {
-                                    void uploadMeasurementReport(e.target.files);
-                                    e.target.value = '';
-                                  }}
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    measurementFileRef.current?.click()
+                          <input
+                            ref={measurementFileRef}
+                            type="file"
+                            accept="application/pdf,.pdf,image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              void uploadMeasurementReport(e.target.files);
+                              e.target.value = '';
+                            }}
+                          />
+                          <LeadActionSheet
+                            title="Add"
+                            titleId="lead-measure-add-title"
+                            open={measureAddOpen}
+                            onClose={() => setMeasureAddOpen(false)}
+                            items={[
+                              {
+                                id: 'eagleview',
+                                label: 'Upload EagleView',
+                                onSelect: () => {
+                                  window.setTimeout(
+                                    () => measurementFileRef.current?.click(),
+                                    50
+                                  );
+                                },
+                              },
+                              {
+                                id: 'auto',
+                                label: solarMeasuring
+                                  ? 'Measuring…'
+                                  : 'Auto-measure',
+                                disabled: solarMeasuring || !hasProfileAddress,
+                                onSelect: () => {
+                                  void runSolarAutoMeasure();
+                                },
+                              },
+                              {
+                                id: 'trace',
+                                label: 'Trace on map',
+                                onSelect: () => {
+                                  if (!hasProfileAddress) {
+                                    setProfileTab('overview');
+                                    showToast(
+                                      'Add a property address under Overview first'
+                                    );
+                                    return;
                                   }
-                                  className="btn-primary px-7 py-3 rounded-full text-sm font-semibold"
-                                  title="Upload EagleView / Roofr PDF — fills squares, pitch, ridge, hip, eave, rake"
-                                >
-                                  Upload EagleView
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={solarMeasuring || !hasProfileAddress}
-                                  onClick={() => void runSolarAutoMeasure()}
-                                  className="px-7 py-3 rounded-full text-sm font-semibold border border-zinc-200 bg-white text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
-                                  title="Instant Roofer AI (~$1–3) when your key is enabled"
-                                >
-                                  {solarMeasuring ? 'Measuring…' : 'Auto-measure'}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (!hasProfileAddress) {
-                                      setProfileTab('overview');
-                                      showToast(
-                                        'Add a property address under Overview first'
-                                      );
-                                      return;
-                                    }
-                                    void startNewMeasurementOnLead();
-                                  }}
-                                  className="px-7 py-3 rounded-full text-sm font-semibold border border-zinc-200 bg-white text-zinc-800 hover:bg-zinc-50"
-                                >
-                                  {hasProfileAddress
-                                    ? 'Trace on map'
-                                    : 'Add address first'}
-                                </button>
-                              </div>
-
-                              <div className="relative inline-flex justify-center">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setMeasureMoreOpen((o) => !o)
-                                  }
-                                  className="text-sm font-medium text-zinc-500 hover:text-zinc-800 px-3 py-1.5"
-                                >
-                                  More options
-                                </button>
-                                {measureMoreOpen && (
-                                  <div className="absolute top-full mt-1 z-20 min-w-[220px] rounded-2xl border border-zinc-200 bg-white shadow-lg p-1.5 text-left">
-                                    <button
-                                      type="button"
-                                      disabled={
-                                        humanOrdering || !hasProfileAddress
-                                      }
-                                      onClick={() => {
-                                        setMeasureMoreOpen(false);
-                                        void orderHumanCertifiedMeasure();
-                                      }}
-                                      className="w-full text-left px-3 py-2.5 rounded-xl text-sm text-zinc-800 hover:bg-zinc-50 disabled:opacity-50"
-                                      title="Instant Roofer Human Certified (~$10, ~1 hour) — includes ridge/hip/eave/rake"
-                                    >
-                                      {humanOrdering
-                                        ? 'Ordering…'
-                                        : 'Order human report (~$10)'}
-                                    </button>
-                                    <p className="px-3 pb-2 text-[11px] text-zinc-400 leading-snug">
-                                      Optional when you need certified edges and
-                                      don’t have an EagleView.
-                                    </p>
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          )}
+                                  void startNewMeasurementOnLead();
+                                },
+                              },
+                              {
+                                id: 'human',
+                                label: humanOrdering
+                                  ? 'Ordering…'
+                                  : 'Order human report (~$10)',
+                                disabled: humanOrdering || !hasProfileAddress,
+                                onSelect: () => {
+                                  void orderHumanCertifiedMeasure();
+                                },
+                              },
+                            ]}
+                          />
 
                           {humanOrders.length > 0 && (
                             <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-2">
@@ -30723,15 +31062,12 @@ export default function SummitApp() {
                             <h2 className="text-lg font-semibold text-zinc-900 mb-4">
                                 Estimates
                               </h2>
-                            <button
-                              type="button"
+                            <CircledPlus
+                              aria-label="New estimate"
                               onClick={() =>
                                 startNewEstimate({ fromLeadId: currentLeadId })
                               }
-                              className="btn-primary px-4 py-2.5 rounded-2xl text-sm font-semibold"
-                            >
-                              New estimate
-                            </button>
+                            />
                           </div>
                           {profileEstimates.length > 0 ? (
                             <div className="space-y-3">
@@ -30813,15 +31149,67 @@ export default function SummitApp() {
                         })}
 
                       {profileTab === 'photos' && (
-                        <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
+                        <section
+                          className={`bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6 ${
+                            finePointer && photoDragOver
+                              ? 'ring-2 ring-slate-400'
+                              : ''
+                          }`}
+                          onDragEnter={
+                            finePointer
+                              ? (e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setPhotoDragOver(true);
+                                }
+                              : undefined
+                          }
+                          onDragOver={
+                            finePointer
+                              ? (e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setPhotoDragOver(true);
+                                }
+                              : undefined
+                          }
+                          onDragLeave={
+                            finePointer
+                              ? (e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setPhotoDragOver(false);
+                                }
+                              : undefined
+                          }
+                          onDrop={
+                            finePointer
+                              ? (e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setPhotoDragOver(false);
+                                  if (e.dataTransfer.files?.length) {
+                                    void handlePhotoFiles(e.dataTransfer.files);
+                                  }
+                                }
+                              : undefined
+                          }
+                        >
                           <div className="flex items-center justify-between gap-3 mb-3">
                             <h2 className="text-lg font-semibold text-zinc-900 mb-4">Photos</h2>
-                            {profilePhotos.length > 0 && (
-                              <div className="text-sm font-medium text-zinc-500 bg-zinc-100 border border-zinc-200 rounded-xl px-3 py-1.5 self-start">
-                                {profilePhotos.length.toLocaleString()} photo
-                                {profilePhotos.length !== 1 ? 's' : ''}
-                              </div>
-                            )}
+                            <div className="flex items-center gap-2 shrink-0">
+                              {profilePhotos.length > 0 && (
+                                <div className="text-sm font-medium text-zinc-500 bg-zinc-100 border border-zinc-200 rounded-xl px-3 py-1.5 self-start">
+                                  {profilePhotos.length.toLocaleString()} photo
+                                  {profilePhotos.length !== 1 ? 's' : ''}
+                                </div>
+                              )}
+                              <CircledPlus
+                                aria-label="Add photos"
+                                disabled={photosUploading}
+                                onClick={() => setPhotoAddOpen(true)}
+                              />
+                            </div>
                           </div>
 
                           <input
@@ -30850,98 +31238,52 @@ export default function SummitApp() {
                               }
                             }}
                           />
-
-                          <div
-                            role="button"
-                            tabIndex={0}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
-                                e.preventDefault();
-                                if (!photosUploading) photoInputRef.current?.click();
-                              }
-                            }}
-                            onClick={() => {
-                              if (!photosUploading) photoInputRef.current?.click();
-                            }}
-                            onDragEnter={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setPhotoDragOver(true);
-                            }}
-                            onDragOver={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setPhotoDragOver(true);
-                            }}
-                            onDragLeave={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setPhotoDragOver(false);
-                            }}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setPhotoDragOver(false);
-                              if (e.dataTransfer.files?.length) {
-                                void handlePhotoFiles(e.dataTransfer.files);
-                              }
-                            }}
-                            className={`rounded-3xl border-2 border-dashed px-6 py-8 sm:py-12 text-center cursor-pointer transition-colors ${
-                              photoDragOver
-                                ? 'border-slate-400 bg-slate-50/90 ring-1 ring-slate-300/30'
-                                : 'border-zinc-200 bg-zinc-100 hover:border-zinc-300'
-                            } ${photosUploading ? 'opacity-70 pointer-events-none' : ''}`}
-                          >
-                            <div className="font-medium text-zinc-800">
-                              {photosUploading
-                                ? 'Uploading photos...'
-                                : 'Drag and drop photos here'}
-                            </div>
-                            <div className="text-sm text-zinc-500 mt-1">
-                              Select many images at once — grid scales for large albums
-                            </div>
-                            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-                              <button
-                                type="button"
-                                disabled={photosUploading}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (!photosUploading) {
-                                    photoCameraInputRef.current?.click();
-                                  }
-                                }}
-                                className="btn-primary px-8 py-3 rounded-full text-sm font-semibold disabled:opacity-50"
-                              >
-                                {photosUploading ? 'Working…' : 'Take photo'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openPhotoReportBuilder();
-                                }}
-                                className="btn-primary px-8 py-3 rounded-full text-sm font-semibold"
-                              >
-                                Create report
-                              </button>
-                              <button
-                                type="button"
-                                disabled={photosUploading}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  photoInputRef.current?.click();
-                                }}
-                                className="btn-primary px-8 py-3 rounded-full text-sm font-semibold disabled:opacity-50"
-                              >
-                                {photosUploading ? 'Working…' : 'Upload photos'}
-                              </button>
-                            </div>
-                          </div>
+                          <LeadActionSheet
+                            title="Add"
+                            titleId="lead-photo-add-title"
+                            open={photoAddOpen}
+                            onClose={() => setPhotoAddOpen(false)}
+                            items={[
+                              {
+                                id: 'camera',
+                                label: photosUploading ? 'Working…' : 'Take photo',
+                                disabled: photosUploading,
+                                onSelect: () => {
+                                  window.setTimeout(
+                                    () => photoCameraInputRef.current?.click(),
+                                    50
+                                  );
+                                },
+                              },
+                              {
+                                id: 'upload',
+                                label: photosUploading
+                                  ? 'Working…'
+                                  : 'Upload photos',
+                                disabled: photosUploading,
+                                onSelect: () => {
+                                  window.setTimeout(
+                                    () => photoInputRef.current?.click(),
+                                    50
+                                  );
+                                },
+                              },
+                              {
+                                id: 'report',
+                                label: 'Create report',
+                                onSelect: () => openPhotoReportBuilder(),
+                              },
+                            ]}
+                          />
 
                           {profilePhotos.length > 0 ? (
-                            <div className="mt-6">
+                            <PhonePullToRefresh
+                              onRefresh={() => refreshLeadsFromCloud()}
+                              scrollParent="self"
+                              className="mt-6 max-h-[min(70vh,720px)] overflow-y-auto overscroll-contain p-0.5 rounded-2xl"
+                            >
                               {/* Dense grid so hundreds of thumbs stay browsable */}
-                              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-1.5 sm:gap-2 max-h-[min(70vh,720px)] overflow-y-auto overscroll-contain p-0.5 rounded-2xl">
+                              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-1.5 sm:gap-2">
                                 {profilePhotos.map((photo) => (
                                   <div
                                     key={photo.id}
@@ -30970,7 +31312,7 @@ export default function SummitApp() {
                                   </div>
                                 ))}
                               </div>
-                            </div>
+                            </PhonePullToRefresh>
                           ) : (
                             <div className="mt-6 text-zinc-400 py-8 text-center text-sm">
                               No photos yet.
@@ -30980,6 +31322,10 @@ export default function SummitApp() {
                       )}
 
                       {profileTab === 'documents' && (
+                        <PhonePullToRefresh
+                          onRefresh={() => refreshLeadsFromCloud()}
+                          className="flex flex-col min-h-[calc(100dvh-var(--header-h)-10rem)]"
+                        >
                         <section className="flex flex-col min-h-[calc(100dvh-var(--header-h)-10rem)]">
                           <input
                             ref={docInputRef}
@@ -31029,14 +31375,11 @@ export default function SummitApp() {
                                   : 'Documents'}
                               </h2>
                             </div>
-                            <button
-                              type="button"
+                            <CircledPlus
+                              aria-label="Add document"
                               disabled={docsUploading}
                               onClick={() => openLeadDocAdd()}
-                              className="inline-flex items-center justify-center btn-primary px-8 py-3 rounded-full text-sm font-semibold disabled:opacity-50 shrink-0"
-                            >
-                              {docsUploading ? 'Uploading…' : '+ Add'}
-                            </button>
+                            />
                           </div>
 
                           {docAddMenuOpen && (
@@ -31262,6 +31605,7 @@ export default function SummitApp() {
                             })()
                           )}
                         </section>
+                        </PhonePullToRefresh>
                       )}
 
                       {profileTab === 'takeoff' && (
@@ -31308,17 +31652,6 @@ export default function SummitApp() {
                       )}
 
                     </div>
-                  </div>
-
-                  {/* Mobile sticky save — sits under app header chrome */}
-                  <div className="safe-bottom sm:hidden sticky bottom-0 bg-white/95 backdrop-blur border-t border-zinc-200 p-3 z-20">
-                    <button
-                      type="button"
-                      onClick={saveLeadProfile}
-                      className="btn-primary w-full py-3.5 rounded-2xl font-semibold"
-                    >
-                      Save
-                    </button>
                   </div>
 
       {photoReportOpen && currentLeadId != null && (() => {

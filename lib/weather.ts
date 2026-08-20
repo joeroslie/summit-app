@@ -65,8 +65,10 @@ export type StormReportsResponse = {
   warnings: StormWarning[];
   fetchedAt: string;
   window: StormWindow;
-  /** Set when the request was for one calendar day (`YYYY-MM-DD`). */
+  /** Set when the request was for a calendar day or range (`YYYY-MM-DD`). */
   day: string | null;
+  /** Inclusive end of a calendar range. Null when `day` is a single day or unset. */
+  dayEnd: string | null;
   count: number;
   source: 'noaa-lsr' | 'iem-lsr';
   /**
@@ -124,6 +126,8 @@ export const MAX_NEAR_RADIUS_MILES = 250;
 export const NEAR_RADIUS_OPTIONS_MILES = [10, 25, 50, 75, 100, 150, 250] as const;
 export const WEATHER_NEAR_RADIUS_STORAGE_KEY = 'summitWeatherNearRadius';
 export const STORM_DAY_LOOKBACK_YEARS = 2;
+/** Inclusive cap for Weather calendar ranges (first tap + second tap). */
+export const STORM_DAY_RANGE_MAX_DAYS = 31;
 
 export function clampNearRadiusMiles(n: number): number {
   if (!Number.isFinite(n)) return DEFAULT_NEAR_RADIUS_MILES;
@@ -208,24 +212,97 @@ export function parseStormDayFormat(raw: string | null | undefined): string | nu
   return `${m[1]}-${m[2]}-${m[3]}`;
 }
 
+function ymdFromUtcParts(y: number, mo: number, d: number): string {
+  return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+function stormDayUtcMidnightMs(day: string, tzOffsetMinutes: number): number {
+  const [y, mo, d] = day.split('-').map(Number);
+  return Date.UTC(y, mo - 1, d) + tzOffsetMinutes * 60_000;
+}
+
 /**
- * Local-calendar midnight → next midnight, as UTC ISO strings for IEM `sts`/`ets`.
+ * Local-calendar midnight of `day` → midnight after `dayEnd` (inclusive),
+ * as UTC ISO strings for IEM `sts`/`ets`.
  * `tzOffsetMinutes` is `Date#getTimezoneOffset()` (minutes to add to local to get UTC).
+ * Omit `dayEnd` (or pass the same day) for a single local calendar day.
  */
 export function stormDayUtcBounds(
   day: string,
-  tzOffsetMinutes = 0
+  tzOffsetMinutes = 0,
+  dayEnd?: string | null
 ): { sts: string; ets: string } {
-  const [y, mo, d] = day.split('-').map(Number);
-  const startMs = Date.UTC(y, mo - 1, d) + tzOffsetMinutes * 60_000;
+  const end = dayEnd && dayEnd > day ? dayEnd : day;
+  const startMs = stormDayUtcMidnightMs(day, tzOffsetMinutes);
+  const endMidnightMs = stormDayUtcMidnightMs(end, tzOffsetMinutes);
   return {
     sts: new Date(startMs).toISOString(),
-    ets: new Date(startMs + 24 * 60 * 60 * 1000).toISOString(),
+    ets: new Date(endMidnightMs + 24 * 60 * 60 * 1000).toISOString(),
   };
 }
 
+/** Client local `YYYY-MM-DD` for an instant, using `Date#getTimezoneOffset()` minutes. */
+export function localDateAtTzOffset(tzOffsetMinutes: number, at = Date.now()): string {
+  const shifted = new Date(at - tzOffsetMinutes * 60_000);
+  return ymdFromUtcParts(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth() + 1,
+    shifted.getUTCDate()
+  );
+}
+
+export function isStormDayTodayAtOffset(
+  day: string,
+  tzOffsetMinutes: number,
+  at = Date.now()
+): boolean {
+  return day === localDateAtTzOffset(tzOffsetMinutes, at);
+}
+
+export function addStormDays(day: string, deltaDays: number): string {
+  const [y, mo, d] = day.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, mo - 1, d + deltaDays));
+  return ymdFromUtcParts(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate());
+}
+
+export function stormDayInclusiveCount(a: string, b: string): number {
+  const lo = a <= b ? a : b;
+  const hi = a <= b ? b : a;
+  const [y1, m1, d1] = lo.split('-').map(Number);
+  const [y2, m2, d2] = hi.split('-').map(Number);
+  return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86_400_000) + 1;
+}
+
+export function normalizeStormDayRange(
+  start: string,
+  end?: string | null
+): { start: string; end: string } | null {
+  const a = parseStormDayFormat(start);
+  if (!a) return null;
+  const b = parseStormDayFormat(end) || a;
+  const lo = a <= b ? a : b;
+  const hi = a <= b ? b : a;
+  if (stormDayInclusiveCount(lo, hi) <= STORM_DAY_RANGE_MAX_DAYS) {
+    return { start: lo, end: hi };
+  }
+  return { start: lo, end: addStormDays(lo, STORM_DAY_RANGE_MAX_DAYS - 1) };
+}
+
+/** Sunday-first month cells for the Weather date control. */
+export function stormMonthCells(year: number, monthIndex: number): Array<string | null> {
+  const firstWeekday = new Date(year, monthIndex, 1).getDay();
+  const lastDate = new Date(year, monthIndex + 1, 0).getDate();
+  const cells: Array<string | null> = [];
+  for (let i = 0; i < firstWeekday; i += 1) cells.push(null);
+  for (let d = 1; d <= lastDate; d += 1) {
+    cells.push(localDateInputValue(new Date(year, monthIndex, d)));
+  }
+  while (cells.length % 7 !== 0) cells.push(null);
+  return cells;
+}
+
 export function formatStormDayLabel(day: string): string {
-  const parsed = parseStormDay(day);
+  const parsed = parseStormDayFormat(day) || parseStormDay(day);
   if (!parsed) return day;
   const [y, mo, d] = parsed.split('-').map(Number);
   const dt = new Date(y, mo - 1, d);
@@ -234,6 +311,62 @@ export function formatStormDayLabel(day: string): string {
     day: 'numeric',
     year: 'numeric',
   });
+}
+
+/**
+ * Closed Weather date-control label.
+ * One day: `formatStormDayLabel`, or "Today" when that day is today.
+ * Range: "Aug 12–14" (year if it spans years or isn't this year).
+ */
+export function formatStormDateControlLabel(start: string, end?: string | null): string {
+  const a = parseStormDayFormat(start);
+  const b = parseStormDayFormat(end || start) || a;
+  if (!a) return start;
+  if (a === b) {
+    if (a === localDateInputValue()) return 'Today';
+    return formatStormDayLabel(a);
+  }
+  return formatStormDayRangeLabel(a, b!);
+}
+
+/** Range copy for empty lists: "Aug 12–14". Single day uses `formatStormDayLabel`. */
+export function formatStormDayRangeLabel(start: string, end: string): string {
+  const a = parseStormDayFormat(start);
+  const b = parseStormDayFormat(end);
+  if (!a || !b) return start;
+  const lo = a <= b ? a : b;
+  const hi = a <= b ? b : a;
+  if (lo === hi) return formatStormDayLabel(lo);
+
+  const thisYear = new Date().getFullYear();
+  const [ly, lm, ld] = lo.split('-').map(Number);
+  const [hy, hm, hd] = hi.split('-').map(Number);
+  const startDt = new Date(ly, lm - 1, ld);
+  const endDt = new Date(hy, hm - 1, hd);
+  const spansYears = ly !== hy;
+  const notThisYear = ly !== thisYear || hy !== thisYear;
+
+  if (spansYears) {
+    return `${startDt.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    })}–${endDt.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    })}`;
+  }
+
+  const startMd = startDt.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+  const endMd =
+    lm === hm
+      ? String(hd)
+      : endDt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return notThisYear ? `${startMd}–${endMd}, ${ly}` : `${startMd}–${endMd}`;
 }
 
 export type GeoBBox = { west: number; east: number; south: number; north: number };
