@@ -92,14 +92,16 @@ export function newSummitTaskListId(): string {
   return `list_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
+/** Stable timestamps so a placeholder default cannot beat a real cloud row. */
+const PLACEHOLDER_LIST_AT = '2020-01-01T00:00:00.000Z';
+
 export function createDefaultTaskList(): SummitTaskList {
-  const now = new Date().toISOString();
   return {
     id: DEFAULT_TASK_LIST_ID,
     title: DEFAULT_TASK_LIST_TITLE,
     googleListId: '@default',
-    createdAt: now,
-    updatedAt: now,
+    createdAt: PLACEHOLDER_LIST_AT,
+    updatedAt: PLACEHOLDER_LIST_AT,
   };
 }
 
@@ -535,4 +537,212 @@ export function mergeGoogleListsIntoLocal(
   });
 
   return { lists: next, imported, updated };
+}
+
+/** Parse updatedAt for last-write-wins (0 if missing / invalid). */
+export function taskUpdatedMs(
+  t: Pick<SummitTask, 'updatedAt'> | undefined
+): number {
+  if (!t?.updatedAt) return 0;
+  const n = Date.parse(t.updatedAt);
+  return Number.isFinite(n) ? n : 0;
+}
+
+export function taskListUpdatedMs(
+  l: Pick<SummitTaskList, 'updatedAt'> | undefined
+): number {
+  if (!l?.updatedAt) return 0;
+  const n = Date.parse(l.updatedAt);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Linked to Google Tasks — Google pull owns these while connected. */
+export function isGooglePullOwnedTask(t: SummitTask): boolean {
+  return Boolean(t?.googleTaskId) || t?.source === 'google';
+}
+
+export type MergeCloudTasksSnapshotResult = {
+  tasks: SummitTask[];
+  lists: SummitTaskList[];
+  activeListId: string;
+  /** True when this device kept a newer local row or an unsaved create/delete */
+  keptLocalNewer: boolean;
+};
+
+function sortMergedSummitTasks(tasks: SummitTask[]): SummitTask[] {
+  return [...tasks].sort((a, b) => {
+    if (Boolean(a.deletedAt) !== Boolean(b.deletedAt)) {
+      return a.deletedAt ? 1 : -1;
+    }
+    if (a.completed !== b.completed) return a.completed ? 1 : -1;
+    const ad = a.dueDate || '9999';
+    const bd = b.dueDate || '9999';
+    if (ad !== bd) return ad.localeCompare(bd);
+    return a.title.localeCompare(b.title);
+  });
+}
+
+function sortMergedSummitLists(lists: SummitTaskList[]): SummitTaskList[] {
+  return [...lists].sort((a, b) => {
+    if (a.id === DEFAULT_TASK_LIST_ID) return -1;
+    if (b.id === DEFAULT_TASK_LIST_ID) return 1;
+    return a.title.localeCompare(b.title);
+  });
+}
+
+/**
+ * Cloud is source of truth for Summit tasks. Device cache is a scratch pad.
+ *
+ * - Same id: newer updatedAt wins (stale phone copy cannot hide a newer save).
+ * - Cloud-only row: take it (created on another device).
+ * - Local-only row: keep only if dirty/unsaved or newer than the cloud bundle.
+ * - Google-imported: Google pull owns them while connected. Cloud may seed
+ *   before the first pull; never resurrect imported rows while disconnected.
+ */
+export function mergeCloudTasksSnapshot(
+  localTasks: SummitTask[],
+  cloudTasks: SummitTask[],
+  localLists: SummitTaskList[],
+  cloudLists: SummitTaskList[],
+  opts: {
+    cloudUpdatedAt?: string | null;
+    googleLinked: boolean;
+    googlePullRan: boolean;
+    retainLocalTaskIds?: Set<string>;
+    deletedTaskIds?: Set<string>;
+    retainLocalListIds?: Set<string>;
+    deletedListIds?: Set<string>;
+    localActiveListId?: string;
+    cloudActiveListId?: string;
+    retainActiveListId?: boolean;
+  }
+): MergeCloudTasksSnapshotResult {
+  const localTaskSafe = Array.isArray(localTasks) ? localTasks : [];
+  const cloudTaskSafe = Array.isArray(cloudTasks) ? cloudTasks : [];
+  const localListSafe = Array.isArray(localLists) ? localLists : [];
+  const cloudListSafe = Array.isArray(cloudLists) ? cloudLists : [];
+  const retainTasks = opts.retainLocalTaskIds || new Set<string>();
+  const deletedTasks = opts.deletedTaskIds || new Set<string>();
+  const retainLists = opts.retainLocalListIds || new Set<string>();
+  const deletedLists = opts.deletedListIds || new Set<string>();
+  const googleLinked = Boolean(opts.googleLinked);
+  const googlePullRan = Boolean(opts.googlePullRan);
+  const googleOwnsLinked = googleLinked && googlePullRan;
+  const cloudBundleMs = opts.cloudUpdatedAt
+    ? Date.parse(opts.cloudUpdatedAt) || 0
+    : 0;
+
+  const localTaskById = new Map<string, SummitTask>();
+  for (const t of localTaskSafe) {
+    if (t?.id) localTaskById.set(t.id, t);
+  }
+
+  const nextTasks = new Map<string, SummitTask>();
+  let keptLocalNewer = false;
+
+  if (googleOwnsLinked) {
+    for (const t of localTaskSafe) {
+      if (!t?.id || !isGooglePullOwnedTask(t)) continue;
+      nextTasks.set(t.id, t);
+    }
+  }
+
+  for (const t of cloudTaskSafe) {
+    if (!t?.id || deletedTasks.has(t.id)) continue;
+    if (isGoogleSourcedTask(t) && !googleLinked) continue;
+    if (isGooglePullOwnedTask(t) && googleOwnsLinked) continue;
+
+    const loc = localTaskById.get(t.id);
+    if (loc && !(isGoogleSourcedTask(loc) && !googleLinked)) {
+      if (taskUpdatedMs(loc) > taskUpdatedMs(t)) {
+        nextTasks.set(loc.id, loc);
+        keptLocalNewer = true;
+        continue;
+      }
+    }
+    nextTasks.set(t.id, t);
+  }
+
+  for (const t of localTaskSafe) {
+    if (!t?.id || nextTasks.has(t.id)) continue;
+    if (deletedTasks.has(t.id)) continue;
+    if (isGoogleSourcedTask(t) && !googleLinked) continue;
+    if (isGooglePullOwnedTask(t) && googleOwnsLinked) continue;
+    const newerThanBundle =
+      taskUpdatedMs(t) >= cloudBundleMs && cloudBundleMs > 0;
+    if (retainTasks.has(t.id) || newerThanBundle) {
+      nextTasks.set(t.id, t);
+      keptLocalNewer = true;
+    }
+  }
+
+  if (deletedTasks.size > 0) keptLocalNewer = true;
+
+  const localListById = new Map<string, SummitTaskList>();
+  for (const l of localListSafe) {
+    if (l?.id) localListById.set(l.id, l);
+  }
+
+  const nextLists = new Map<string, SummitTaskList>();
+
+  if (googleOwnsLinked) {
+    for (const l of localListSafe) {
+      if (!l?.id || !l.googleListId) continue;
+      nextLists.set(l.id, l);
+    }
+  }
+
+  for (const l of cloudListSafe) {
+    if (!l?.id || deletedLists.has(l.id)) continue;
+    if (l.googleListId && googleOwnsLinked) continue;
+    const loc = localListById.get(l.id);
+    if (loc && taskListUpdatedMs(loc) > taskListUpdatedMs(l)) {
+      nextLists.set(loc.id, loc);
+      keptLocalNewer = true;
+      continue;
+    }
+    nextLists.set(l.id, l);
+  }
+
+  for (const l of localListSafe) {
+    if (!l?.id || nextLists.has(l.id)) continue;
+    if (deletedLists.has(l.id)) continue;
+    if (l.googleListId && googleOwnsLinked) continue;
+    const newerThanBundle =
+      taskListUpdatedMs(l) >= cloudBundleMs && cloudBundleMs > 0;
+    if (retainLists.has(l.id) || newerThanBundle) {
+      nextLists.set(l.id, l);
+      keptLocalNewer = true;
+    }
+  }
+
+  if (deletedLists.size > 0) keptLocalNewer = true;
+
+  let lists = sortMergedSummitLists(Array.from(nextLists.values()));
+  if (lists.length === 0) {
+    lists = [createDefaultTaskList()];
+  }
+
+  const listIds = new Set(lists.map((l) => l.id));
+  let activeListId =
+    (opts.retainActiveListId && opts.localActiveListId
+      ? opts.localActiveListId
+      : opts.cloudActiveListId || opts.localActiveListId || '') ||
+    DEFAULT_TASK_LIST_ID;
+  if (opts.retainActiveListId) {
+    const localId = (opts.localActiveListId || '').trim();
+    const cloudId = (opts.cloudActiveListId || '').trim();
+    if (localId && localId !== cloudId) keptLocalNewer = true;
+    if (localId) activeListId = localId;
+  }
+  if (!listIds.has(activeListId)) {
+    activeListId = lists[0]?.id || DEFAULT_TASK_LIST_ID;
+  }
+
+  return {
+    tasks: sortMergedSummitTasks(Array.from(nextTasks.values())),
+    lists,
+    activeListId,
+    keptLocalNewer,
+  };
 }

@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
+import { cancelChipGlide, glideChipCenter } from '@/lib/phone-nav';
 
 type Chip<T extends string> = { id: T; label: string };
 
@@ -16,20 +17,23 @@ export default function PhoneChipStrip<T extends string>({
   activeId,
   onSelect,
 }: Props<T>) {
+  const stripRef = useRef<HTMLDivElement | null>(null);
   const activeRef = useRef<HTMLButtonElement | null>(null);
+  const chipGlideRafRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    activeRef.current?.scrollIntoView({
-      inline: 'center',
-      block: 'nearest',
-      behavior: 'smooth',
-    });
+  useLayoutEffect(() => {
+    const strip = stripRef.current;
+    const chip = activeRef.current;
+    if (!strip || !chip) return;
+    glideChipCenter(strip, chip, chipGlideRafRef);
+    return () => cancelChipGlide(strip, chipGlideRafRef);
   }, [activeId]);
 
   return (
     <div
+      ref={stripRef}
       data-phone-chip-strip
-      className="mt-3 -mx-1 overflow-x-auto overscroll-x-none scrollbar-none [touch-action:pan-y_pinch-zoom]"
+      className="mt-3 -mx-1 overflow-x-auto overscroll-x-none scrollbar-none [scroll-behavior:auto] [touch-action:pan-y_pinch-zoom]"
     >
       <div className="flex gap-1 min-w-max px-1 pb-0.5">
         {tabs.map((tab) => {

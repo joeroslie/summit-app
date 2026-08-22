@@ -1,3 +1,7 @@
+/**
+ * Legacy httpOnly cookie helpers. New connections live in user_google_oauth.
+ * Disconnect still clears leftover cookies from older builds.
+ */
 import { cookies } from 'next/headers';
 import {
   GCAL_COOKIE,

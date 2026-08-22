@@ -10,6 +10,12 @@ alwaysApply: false
 **Sidebar label:** Documents  
 **Agent starter:** `.cursor/agents/documents.md`
 
+## Sync
+
+- Photos, PDFs, photo reports, and mitigation invoices on a lead are one system.
+- Cloud / Storage (`lead-photos`, `lead-docs`) is source of truth. Device cache is a scratch pad.
+- Refresh when opening the lead Photos or Documents tab and when the app comes back. Pull-to-refresh stays as backup.
+
 ## Files
 
 - `app/page.tsx` — `activeTab === 'documents'` (~L22465); photo reports, lead-photos/lead-docs Storage, PDF generation

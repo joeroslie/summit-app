@@ -31,4 +31,5 @@ alwaysApply: false
 - `supabase/company_user_settings_sync.sql`
 - `supabase/harden_rls_step1.sql`
 - `supabase/enable_rls_pricing_open.sql`
+- `supabase/migrations/20260821152200_user_google_oauth.sql` — Calendar-owned; encrypted Google refresh token, authenticated RLS (not app_settings)
 - `supabase/calendar_tasks_settings_sync.sql`

@@ -12,7 +12,7 @@ alwaysApply: false
 
 ## Files
 
-- `app/page.tsx` — lead-profile Orders tab; `profileOrdersStep` material | labor; `renderOrdersFlow`
+- `app/page.tsx` — lead-profile Orders tab; `profileOrdersStep` material | labor; `renderOrdersFlow`; `lead.orderDraft` (started) + `material_orders` (submitted). Cloud is source of truth; device cache is a scratch pad.
 - `lib/pricingGuide.ts` — shared; material/labor cost lookups
 - `lib/instant-roofer-orders.ts` — shared; human measure orders
 - `supabase/material_orders.sql`

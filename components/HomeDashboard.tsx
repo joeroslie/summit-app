@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase';
 import PhonePullToRefresh from '@/components/PhonePullToRefresh';
+import CircledPlus from '@/components/CircledPlus';
 import './stage-funnel.css';
 import {
   eventOccursOnDay,
@@ -12,9 +13,8 @@ import {
 } from '@/lib/summit-calendar';
 import { isActiveSummitTask, type SummitTask } from '@/lib/google-tasks';
 import {
-  localDateKey,
-  type CanvassPin,
-  type TallyEntry,
+  fetchCanvassCloud,
+  todayCanvassTotals,
   type TallyType,
 } from '@/lib/canvassing';
 import {
@@ -27,21 +27,6 @@ import {
   type StormReportsResponse,
 } from '@/lib/weather';
 import { severityForReport } from '@/lib/storm-clusters';
-
-const PINS_STORAGE_KEY = 'summitCanvassPins';
-const TALLIES_STORAGE_KEY = 'summitCanvassTallies';
-
-function loadLocalArray<T>(key: string): T[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as T[]) : [];
-  } catch {
-    return [];
-  }
-}
 
 /** Local YYYY-MM-DD, matching the calendar's own day-boundary logic. */
 function toLocalIsoDate(d: Date): string {
@@ -828,53 +813,42 @@ export default function HomeDashboard({
     return { hail, wind, tornado, last24h: stormReports.length };
   }, [stormReports]);
 
-  // --- Canvassing tally (self-fetched, mirrors CanvassingTool's load + today stats) ---
+  // Same cloud pins/tallies as Canvassing — never this-device storage.
   const [canvassStats, setCanvassStats] = useState<Record<TallyType, number> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    let seq = 0;
+    const load = async () => {
+      const thisSeq = ++seq;
       const supabase = getSupabase();
-      const supabaseEnabled = isSupabaseConfigured() && supabase != null;
-      let pins: CanvassPin[] = [];
-      let tallies: TallyEntry[] = [];
-      if (supabaseEnabled && supabase) {
-        const [pinsRes, talliesRes] = await Promise.all([
-          supabase.from('canvass_pins').select('*'),
-          supabase.from('canvass_tallies').select('*'),
-        ]);
-        pins = pinsRes.error
-          ? loadLocalArray<CanvassPin>(PINS_STORAGE_KEY)
-          : ((pinsRes.data || []) as CanvassPin[]);
-        tallies = talliesRes.error
-          ? loadLocalArray<TallyEntry>(TALLIES_STORAGE_KEY)
-          : ((talliesRes.data || []) as TallyEntry[]);
-      } else {
-        pins = loadLocalArray<CanvassPin>(PINS_STORAGE_KEY);
-        tallies = loadLocalArray<TallyEntry>(TALLIES_STORAGE_KEY);
+      if (!isSupabaseConfigured() || !supabase) {
+        if (!cancelled && thisSeq === seq) {
+          setCanvassStats({ door: 0, conversation: 0, signed: 0 });
+        }
+        return;
       }
-      if (cancelled) return;
-      const todayKey = localDateKey();
-      const doorsAuto = pins.filter((p) => localDateKey(p.created_at) === todayKey).length;
-      const conversationsAuto = pins.filter(
-        (p) =>
-          localDateKey(p.status_changed_at) === todayKey &&
-          p.disposition !== 'not_contacted' &&
-          p.disposition !== 'not_home'
-      ).length;
-      const signedAuto = pins.filter(
-        (p) => localDateKey(p.status_changed_at) === todayKey && p.disposition === 'signed'
-      ).length;
-      const manualCount = (type: TallyType) =>
-        tallies.filter((t) => t.type === type && localDateKey(t.created_at) === todayKey).length;
-      setCanvassStats({
-        door: doorsAuto + manualCount('door'),
-        conversation: conversationsAuto + manualCount('conversation'),
-        signed: signedAuto + manualCount('signed'),
-      });
-    })();
+      const result = await fetchCanvassCloud(supabase);
+      if (cancelled || thisSeq !== seq) return;
+      if (!result.pins || !result.tallies) {
+        setCanvassStats((prev) => prev ?? { door: 0, conversation: 0, signed: 0 });
+        return;
+      }
+      setCanvassStats(todayCanvassTotals(result.pins, result.tallies));
+    };
+    void load();
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void load();
+    };
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) void load();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('pageshow', onPageShow);
     return () => {
       cancelled = true;
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('pageshow', onPageShow);
     };
   }, [refreshEpoch]);
 
@@ -886,17 +860,11 @@ export default function HomeDashboard({
       }}
       className="pb-8 w-full"
     >
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-5 mb-6">
+      <div className="flex items-center justify-between gap-3 mb-6">
         <h1 className="page-title">
           {greeting}, {firstName}
         </h1>
-        <button
-          type="button"
-          onClick={onCreateLead}
-          className="btn-primary px-6 py-3 rounded-3xl font-medium shrink-0"
-        >
-          New Lead
-        </button>
+        <CircledPlus aria-label="New Lead" onClick={onCreateLead} />
       </div>
 
       <HomeLeadPeak recentLead={recentLead} onOpenLead={onOpenLead} />

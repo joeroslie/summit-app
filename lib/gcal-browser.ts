@@ -1,10 +1,12 @@
 /**
- * Browser-side Google Calendar + Tasks via Google Identity Services (GIS).
- * Needs only NEXT_PUBLIC_GOOGLE_CLIENT_ID — no client secret.
+ * Browser Google Calendar + Tasks.
  *
- * Tokens persist in localStorage on this device (survive tab/browser restart).
- * Access tokens still expire (~1h); we silent-refresh when possible.
- * Safe for single-tenant local CRM — not a multi-user vault.
+ * Source of truth when GOOGLE_CLIENT_SECRET is set: encrypted refresh token
+ * on the signed-in Summit user (server code flow). One Connect follows the
+ * login across phone / iPad / laptop. Disconnect on any device drops all.
+ *
+ * GIS popup is local-only fallback when the server secret is not configured.
+ * Production HTTPS, PWA, and Safari always use the server flow.
  */
 
 import {
@@ -47,6 +49,96 @@ let silentRefreshInFlight: Promise<BrowserGcalSession | null> | null = null;
 /** After a blocked popup, skip retries until this time. */
 let silentRefreshCooldownUntil = 0;
 const SILENT_REFRESH_COOLDOWN_MS = 15 * 60 * 1000;
+
+/** In-memory access token from the user-store session (not localStorage). */
+let serverMemorySession: BrowserGcalSession | null = null;
+let serverLinked = false;
+let serverOAuthConfigured = false;
+let serverSessionInFlight: Promise<BrowserGcalSession | null> | null = null;
+
+export type ServerGcalStatus = {
+  configured?: boolean;
+  serverOAuth?: boolean;
+  encryption?: boolean;
+  signedIn?: boolean;
+  connected?: boolean;
+  email?: string | null;
+  name?: string | null;
+  scopes?: string | null;
+  accessToken?: string | null;
+  expiresAt?: number | null;
+};
+
+/** GIS popup is OK on local Chrome/desktop only — not Safari, PWA, or HTTPS prod. */
+export function gisPopupAllowed(): boolean {
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname;
+  const isLoopback = host === 'localhost' || host === '127.0.0.1';
+  const nav = window.navigator as Navigator & { standalone?: boolean };
+  const standalone =
+    window.matchMedia('(display-mode: standalone)').matches ||
+    Boolean(nav.standalone);
+  const ua = nav.userAgent || '';
+  const isSafari =
+    /Safari/i.test(ua) && !/Chrome|Chromium|CriOS|Android/i.test(ua);
+  if (standalone || isSafari) return false;
+  return isLoopback;
+}
+
+/**
+ * Server code flow when the client secret is configured.
+ * GIS is only the local fallback without a secret.
+ */
+export function shouldUseServerGcalOAuth(serverOAuth: boolean): boolean {
+  return Boolean(serverOAuth);
+}
+
+export function markGcalServerLink(opts: {
+  linked: boolean;
+  serverOAuth: boolean;
+}) {
+  serverOAuthConfigured = opts.serverOAuth;
+  serverLinked = opts.linked;
+  if (!opts.linked) {
+    serverMemorySession = null;
+    if (opts.serverOAuth) clearBrowserGcalSession();
+  }
+}
+
+function applyServerSession(data: ServerGcalStatus): BrowserGcalSession | null {
+  markGcalServerLink({
+    linked: Boolean(data.connected),
+    serverOAuth: Boolean(data.serverOAuth),
+  });
+  if (!data.connected || !data.accessToken) return null;
+  const expiresAt =
+    typeof data.expiresAt === 'number' && Number.isFinite(data.expiresAt)
+      ? data.expiresAt
+      : Date.now() + 50 * 60 * 1000;
+  serverMemorySession = {
+    accessToken: data.accessToken,
+    expiresAt,
+    email: data.email || undefined,
+    scopes: data.scopes || undefined,
+  };
+  return serverMemorySession;
+}
+
+export async function fetchServerGcalSession(): Promise<ServerGcalStatus | null> {
+  try {
+    const res = await fetch('/api/google/calendar/session', {
+      cache: 'no-store',
+    });
+    if (res.status === 401) {
+      markGcalServerLink({ linked: false, serverOAuth: serverOAuthConfigured });
+      return { signedIn: false, connected: false };
+    }
+    if (!res.ok) return null;
+    return (await res.json()) as ServerGcalStatus;
+  } catch {
+    return null;
+  }
+}
 
 export function getBrowserGcalAuthEpoch(): number {
   return browserGcalAuthEpoch;
@@ -179,6 +271,17 @@ function readRawBrowserGcalSession(): BrowserGcalSession | null {
 }
 
 export function readBrowserGcalSession(): BrowserGcalSession | null {
+  if (
+    serverMemorySession &&
+    serverMemorySession.expiresAt > Date.now() + 30_000
+  ) {
+    return serverMemorySession;
+  }
+  if (serverOAuthConfigured) {
+    return serverMemorySession && serverMemorySession.expiresAt > Date.now()
+      ? serverMemorySession
+      : null;
+  }
   const session = readRawBrowserGcalSession();
   if (!session) return null;
   if (session.expiresAt < Date.now() + 30_000) return null;
@@ -186,11 +289,14 @@ export function readBrowserGcalSession(): BrowserGcalSession | null {
 }
 
 /**
- * True when a browser GIS token exists (fresh or expired).
+ * True when a usable Google session exists (server user-store or GIS fallback).
  * Profile settings + Calendar tab must share this as the connected-state source of truth.
  */
 export function hasBrowserGcalToken(): boolean {
   if (typeof window === 'undefined') return false;
+  if (serverMemorySession?.accessToken) return true;
+  if (serverLinked) return true;
+  if (serverOAuthConfigured) return false;
   try {
     return Boolean(storageGet(TOKEN_KEY));
   } catch {
@@ -199,11 +305,12 @@ export function hasBrowserGcalToken(): boolean {
 }
 
 /**
- * True when this device has linked Google Calendar (token and/or prior email/scopes).
- * Use for Connected UI so Profile matches Calendar after token expiry / silent-refresh miss.
+ * True when this signed-in user (or this local GIS fallback) has linked Google.
  */
 export function isBrowserGcalLinked(): boolean {
   if (typeof window === 'undefined') return false;
+  if (serverLinked || serverMemorySession) return true;
+  if (serverOAuthConfigured) return false;
   try {
     return Boolean(
       storageGet(TOKEN_KEY) ||
@@ -215,8 +322,9 @@ export function isBrowserGcalLinked(): boolean {
   }
 }
 
-/** Email from last successful connect (survives expired access token). */
+/** Email from last successful connect (server session, then GIS fallback). */
 export function readBrowserGcalEmail(): string | null {
+  if (serverMemorySession?.email) return serverMemorySession.email;
   try {
     return storageGet(EMAIL_KEY);
   } catch {
@@ -326,7 +434,8 @@ export const GOOGLE_TASKS_API_CONSOLE_STEPS = [
   'APIs & Services → Library → search “Google Tasks API” → Enable',
   'Also confirm Google Calendar API is Enabled',
   'APIs & Services → OAuth consent screen → Edit app → Scopes → Add https://www.googleapis.com/auth/tasks → Save',
-  'Credentials → your Web client → Authorized JavaScript origins includes http://localhost:3000 (and your prod origin)',
+  'Credentials → your Web client → Authorized JavaScript origins includes http://localhost:3001 AND your production HTTPS origin (no trailing slash)',
+  'Authorized redirect URIs must include https://YOUR-PRODUCTION-HOST/api/google/calendar/callback (plus localhost:3001 for local)',
   'In Summit: Disconnect Google, then Connect / Reconnect for Tasks',
   'On Google’s consent screen, leave Tasks checked (granular consent can uncheck it)',
   'Wait ~1 minute after enabling the API if you just turned it on',
@@ -680,62 +789,84 @@ export async function connectGoogleCalendarBrowser(opts?: {
 }
 
 /**
- * Return a usable access token: reuse if fresh, else silent GIS refresh.
- * On silent refresh failure, keeps the stored token so UI still shows Connected
- * (Profile + Calendar share hasBrowserGcalToken). User can Reconnect.
- *
- * GIS `prompt: ''` still opens a popup when cookies can't refresh the token.
- * Without a user gesture the browser blocks it and Next.js reports 7 host
- * issues (status + calendar + tasks × Strict Mode). Skip until a click.
+ * Return a usable access token: server user-store first (all devices), then GIS local.
+ * Server refresh happens on the API so production/PWA/Safari do not Reconnect every ~1h.
  */
 export async function ensureBrowserGcalSession(): Promise<BrowserGcalSession | null> {
-  const fresh = readBrowserGcalSession();
-  if (fresh) return fresh;
-
-  const raw = readRawBrowserGcalSession();
-  // Only attempt silent refresh if we previously connected on this device
-  if (!raw && !hasBrowserGcalToken() && !storageGet(EMAIL_KEY) && !storageGet(SCOPES_KEY)) {
-    return null;
+  if (
+    serverMemorySession &&
+    serverMemorySession.expiresAt > Date.now() + 30_000
+  ) {
+    return serverMemorySession;
   }
 
-  if (Date.now() < silentRefreshCooldownUntil) return null;
-  if (typeof navigator !== 'undefined' && !navigator.userActivation?.isActive) {
-    return null;
-  }
-  if (silentRefreshInFlight) return silentRefreshInFlight;
+  if (serverSessionInFlight) return serverSessionInFlight;
 
   const epochAtStart = browserGcalAuthEpoch;
-  silentRefreshInFlight = (async () => {
+  serverSessionInFlight = (async () => {
     try {
-      const session = await connectGoogleCalendarBrowser({ silent: true });
+      const data = await fetchServerGcalSession();
       if (epochAtStart !== browserGcalAuthEpoch) return null;
-      return session;
-    } catch {
-      silentRefreshCooldownUntil = Date.now() + SILENT_REFRESH_COOLDOWN_MS;
-      // Do not clearBrowserGcalSession — that made Profile say "not connected"
-      // while Calendar still showed pulled Google events.
-      // Return null so callers don't hit APIs with a dead token; UI uses
-      // hasBrowserGcalToken() / isBrowserGcalLinked() for Connected state.
-      return null;
+      if (data) {
+        const fromServer = applyServerSession(data);
+        if (fromServer) return fromServer;
+        if (shouldUseServerGcalOAuth(Boolean(data.serverOAuth))) {
+          return null;
+        }
+      }
+
+      const fresh = readBrowserGcalSession();
+      if (fresh) return fresh;
+
+      const raw = readRawBrowserGcalSession();
+      if (
+        !raw &&
+        !hasBrowserGcalToken() &&
+        !storageGet(EMAIL_KEY) &&
+        !storageGet(SCOPES_KEY)
+      ) {
+        return null;
+      }
+
+      if (Date.now() < silentRefreshCooldownUntil) return null;
+      if (typeof navigator !== 'undefined' && !navigator.userActivation?.isActive) {
+        return null;
+      }
+      if (silentRefreshInFlight) return silentRefreshInFlight;
+
+      silentRefreshInFlight = (async () => {
+        try {
+          const session = await connectGoogleCalendarBrowser({ silent: true });
+          if (epochAtStart !== browserGcalAuthEpoch) return null;
+          return session;
+        } catch {
+          silentRefreshCooldownUntil = Date.now() + SILENT_REFRESH_COOLDOWN_MS;
+          return null;
+        } finally {
+          silentRefreshInFlight = null;
+        }
+      })();
+      return silentRefreshInFlight;
     } finally {
-      silentRefreshInFlight = null;
+      serverSessionInFlight = null;
     }
   })();
 
-  return silentRefreshInFlight;
+  return serverSessionInFlight;
 }
 
 /**
- * Intentional Disconnect: bump auth epoch (kills in-flight silent refresh),
- * revoke GIS token best-effort, clear ALL local Google auth keys.
+ * Intentional Disconnect: bump auth epoch, clear GIS leftover, drop memory.
+ * Caller must also POST /api/google/calendar/disconnect so every device drops.
  */
 export function disconnectGoogleCalendarBrowser() {
   browserGcalAuthEpoch += 1;
   silentRefreshCooldownUntil = 0;
+  serverMemorySession = null;
+  serverLinked = false;
   const session =
     readBrowserGcalSession() || readRawBrowserGcalSession();
   const token = session?.accessToken;
-  // Clear first so UI / hasBrowserGcalToken / isBrowserGcalLinked flip immediately
   clearBrowserGcalSession();
   if (token && typeof window !== 'undefined') {
     try {

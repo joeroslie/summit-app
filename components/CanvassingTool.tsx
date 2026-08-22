@@ -17,9 +17,12 @@ import {
   CANVASS_PINS_STORAGE_KEY,
   CANVASS_TALLIES_STORAGE_KEY,
   DISPOSITIONS,
+  canvassCloudErrorMessage,
   dispositionStyle,
-  isMissingTableError,
+  fetchCanvassCloud,
   localDateKey,
+  mergePinStormData,
+  todayCanvassBreakdown,
   type CanvassPin,
   type CreatedLeadInfo,
   type Disposition,
@@ -141,18 +144,31 @@ export default function CanvassingTool({
   focusPinId = null,
 }: CanvassingToolProps) {
   const supabase = useMemo(() => getSupabase(), []);
-  const supabaseEnabled = isSupabaseConfigured() && supabase != null;
+  const cloud = isSupabaseConfigured() && supabase != null;
 
   const [pins, setPins] = useState<CanvassPin[]>([]);
   const [tallies, setTallies] = useState<TallyEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
-  // Whether pins/tallies currently read+write through Supabase. Flips to
-  // false (session-only) the moment either table proves unavailable — e.g.
-  // the setup SQL hasn't been run yet — so the tool keeps working offline
-  // instead of silently failing to save.
-  const [pinsRemote, setPinsRemote] = useState(supabaseEnabled);
-  const [talliesRemote, setTalliesRemote] = useState(supabaseEnabled);
-  const warnedSetupRef = useRef(false);
+  const loadWarnedRef = useRef(false);
+  const writesInFlightRef = useRef(0);
+  const pendingReloadRef = useRef(false);
+  const loadSeqRef = useRef(0);
+  const loadCanvassRef = useRef<(silent?: boolean) => Promise<void>>(
+    async () => {}
+  );
+
+  const beginWrite = () => {
+    writesInFlightRef.current += 1;
+    // Drop in-flight reloads so they cannot overwrite this write with a stale list.
+    loadSeqRef.current += 1;
+  };
+  const endWrite = () => {
+    writesInFlightRef.current = Math.max(0, writesInFlightRef.current - 1);
+    if (writesInFlightRef.current === 0 && pendingReloadRef.current) {
+      pendingReloadRef.current = false;
+      void loadCanvassRef.current(true);
+    }
+  };
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [flyTo, setFlyTo] = useState<{ lat: number; lng: number } | null>(null);
@@ -174,75 +190,78 @@ export default function CanvassingTool({
     () => new Set()
   );
 
-  // Initial load — Supabase when configured, localStorage otherwise (matches the
-  // rest of the app's offline-first pattern). Falls back per-table if either
-  // canvass_pins or canvass_tallies isn't reachable yet.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      let nextPins: CanvassPin[] = [];
-      let nextTallies: TallyEntry[] = [];
-      let pinsOk = supabaseEnabled;
-      let talliesOk = supabaseEnabled;
+  const showToastRef = useRef(showToast);
+  showToastRef.current = showToast;
 
-      if (supabaseEnabled && supabase) {
-        const [pinsRes, talliesRes] = await Promise.all([
-          supabase
-            .from('canvass_pins')
-            .select('*')
-            .order('created_at', { ascending: false }),
-          supabase
-            .from('canvass_tallies')
-            .select('*')
-            .order('created_at', { ascending: false }),
-        ]);
+  // Cloud is source of truth on the live app. Reload on open and when the
+  // app comes back so a pin/tally from phone, iPad, or desktop shows here.
+  const loadCanvass = useCallback(
+    async (silent = false) => {
+      if (writesInFlightRef.current > 0) {
+        pendingReloadRef.current = true;
+        return;
+      }
+      const seq = ++loadSeqRef.current;
 
-        if (pinsRes.error) {
-          console.warn('canvass_pins unavailable, using local storage:', pinsRes.error.message);
-          pinsOk = false;
-          nextPins = loadLocal<CanvassPin>(CANVASS_PINS_STORAGE_KEY);
-        } else {
-          nextPins = (pinsRes.data || []) as CanvassPin[];
+      if (cloud && supabase) {
+        const result = await fetchCanvassCloud(supabase);
+        if (seq !== loadSeqRef.current) {
+          if (writesInFlightRef.current > 0) pendingReloadRef.current = true;
+          return;
         }
-
-        if (talliesRes.error) {
-          console.warn('canvass_tallies unavailable, using local storage:', talliesRes.error.message);
-          talliesOk = false;
-          nextTallies = loadLocal<TallyEntry>(CANVASS_TALLIES_STORAGE_KEY);
-        } else {
-          nextTallies = (talliesRes.data || []) as TallyEntry[];
+        const err = result.pinsError || result.talliesError;
+        if (err) {
+          console.warn('canvass cloud load failed:', err);
+          if (!silent && !loadWarnedRef.current) {
+            loadWarnedRef.current = true;
+            showToastRef.current(canvassCloudErrorMessage(err, 'load'));
+          }
         }
-      } else {
-        nextPins = loadLocal<CanvassPin>(CANVASS_PINS_STORAGE_KEY);
-        nextTallies = loadLocal<TallyEntry>(CANVASS_TALLIES_STORAGE_KEY);
+        if (result.pins) {
+          setPins((prev) => mergePinStormData(prev, result.pins as CanvassPin[]));
+        }
+        if (result.tallies) setTallies(result.tallies);
+        setLoaded(true);
+        return;
       }
 
-      if (cancelled) return;
-      if (supabaseEnabled && (!pinsOk || !talliesOk) && !warnedSetupRef.current) {
-        warnedSetupRef.current = true;
-        showToast('Canvassing tables not set up yet — tracking on this device for now');
-      }
-      setPins(nextPins);
-      setTallies(nextTallies);
-      setPinsRemote(pinsOk);
-      setTalliesRemote(talliesOk);
+      setPins(loadLocal<CanvassPin>(CANVASS_PINS_STORAGE_KEY));
+      setTallies(loadLocal<TallyEntry>(CANVASS_TALLIES_STORAGE_KEY));
       setLoaded(true);
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // Mount-only: `supabase` is a stable singleton and `showToast` is only used
-    // for a one-time setup notice, not something this effect should re-run for.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    },
+    [cloud, supabase]
+  );
+  loadCanvassRef.current = loadCanvass;
 
-  // Mirror to localStorage whenever a table is running in local (non-Supabase) mode.
   useEffect(() => {
-    if (loaded && !pinsRemote) saveLocal(CANVASS_PINS_STORAGE_KEY, pins);
-  }, [pins, loaded, pinsRemote]);
+    void loadCanvass(false);
+    return () => {
+      loadSeqRef.current += 1;
+    };
+  }, [loadCanvass]);
+
   useEffect(() => {
-    if (loaded && !talliesRemote) saveLocal(CANVASS_TALLIES_STORAGE_KEY, tallies);
-  }, [tallies, loaded, talliesRemote]);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void loadCanvass(true);
+    };
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) void loadCanvass(true);
+    };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('pageshow', onPageShow);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('pageshow', onPageShow);
+    };
+  }, [loadCanvass]);
+
+  // Demo-only: persist when Supabase isn't configured. Live app never writes here.
+  useEffect(() => {
+    if (loaded && !cloud) saveLocal(CANVASS_PINS_STORAGE_KEY, pins);
+  }, [pins, loaded, cloud]);
+  useEffect(() => {
+    if (loaded && !cloud) saveLocal(CANVASS_TALLIES_STORAGE_KEY, tallies);
+  }, [tallies, loaded, cloud]);
 
   const selectedPin = useMemo(
     () => pins.find((p) => p.id === selectedId) || null,
@@ -267,20 +286,26 @@ export default function CanvassingTool({
       setPins((prev) =>
         prev.map((p) => (p.id === id ? { ...p, ...stampedPatch } : p))
       );
-      if (pinsRemote && supabase) {
+      if (cloud && supabase) {
         const { storm_data: _stormData, ...remotePatch } = patch;
         if (Object.keys(remotePatch).length === 0) return;
-        const { error } = await supabase
-          .from('canvass_pins')
-          .update(remotePatch)
-          .eq('id', id);
-        if (error) {
-          console.warn('canvass_pins update error:', error.message);
-          showToast('Update failed — check connection');
+        beginWrite();
+        try {
+          const { error } = await supabase
+            .from('canvass_pins')
+            .update(remotePatch)
+            .eq('id', id);
+          if (error) {
+            console.warn('canvass_pins update error:', error.message);
+            showToast(canvassCloudErrorMessage(error, 'save'));
+            pendingReloadRef.current = true;
+          }
+        } finally {
+          endWrite();
         }
       }
     },
-    [supabase, pinsRemote, showToast]
+    [supabase, cloud, showToast]
   );
 
   const fetchPropertyData = useCallback(
@@ -444,30 +469,25 @@ export default function CanvassingTool({
 
       let pin: CanvassPin | null = null;
 
-      if (pinsRemote && supabase) {
-        const { data, error } = await supabase
-          .from('canvass_pins')
-          .insert(base)
-          .select('*')
-          .single();
-        if (!error && data) {
-          pin = { ...(data as CanvassPin), storm_data: {} };
-        } else {
-          // Cloud write failed (setup SQL not run yet, offline, etc). Drop the
-          // pin locally right now rather than losing it — this is the one flow
-          // Joe called out as a hard blocker, so it must never silently fail.
-          console.warn('canvass_pins insert failed, saving locally:', error?.message);
-          if (isMissingTableError(error) && !warnedSetupRef.current) {
-            warnedSetupRef.current = true;
-            showToast('Canvassing tables not set up yet — tracking on this device for now');
-          } else if (!isMissingTableError(error)) {
-            showToast('Could not reach the cloud — pin saved on this device');
+      if (cloud && supabase) {
+        beginWrite();
+        try {
+          const { data, error } = await supabase
+            .from('canvass_pins')
+            .insert(base)
+            .select('*')
+            .single();
+          if (!error && data) {
+            pin = { ...(data as CanvassPin), storm_data: {} };
+          } else {
+            console.warn('canvass_pins insert failed:', error?.message);
+            showToast(canvassCloudErrorMessage(error, 'save'));
+            return null;
           }
-          setPinsRemote(false);
+        } finally {
+          endWrite();
         }
-      }
-
-      if (!pin) {
+      } else {
         pin = {
           id: newLocalId(),
           created_at: now,
@@ -477,7 +497,9 @@ export default function CanvassingTool({
         };
       }
 
-      setPins((prev) => [pin as CanvassPin, ...prev]);
+      if (!pin) return null;
+
+      setPins((prev) => [pin, ...prev]);
       setSelectedId(pin.id);
       setFlyTo(point);
       // Automatic — no button, no waiting for the panel to open.
@@ -485,7 +507,7 @@ export default function CanvassingTool({
       void runAutoStormLookup(pin);
       return pin;
     },
-    [supabase, pinsRemote, showToast, runAutoPropertyLookup, runAutoStormLookup]
+    [supabase, cloud, showToast, runAutoPropertyLookup, runAutoStormLookup]
   );
 
   const dropPinAt = useCallback(
@@ -572,20 +594,23 @@ export default function CanvassingTool({
       }
       setPins((prev) => prev.filter((p) => p.id !== pin.id));
       setSelectedId((id) => (id === pin.id ? null : id));
-      if (pinsRemote && supabase) {
-        void supabase
-          .from('canvass_pins')
-          .delete()
-          .eq('id', pin.id)
-          .then(({ error }) => {
+      if (cloud && supabase) {
+        beginWrite();
+        void (async () => {
+          try {
+            const { error } = await supabase.from('canvass_pins').delete().eq('id', pin.id);
             if (error) {
               console.warn('canvass_pins delete error:', error.message);
-              showToast('Delete failed — check connection');
+              showToast(canvassCloudErrorMessage(error, 'save'));
+              pendingReloadRef.current = true;
             }
-          });
+          } finally {
+            endWrite();
+          }
+        })();
       }
     },
-    [supabase, pinsRemote, showToast]
+    [supabase, cloud, showToast]
   );
 
   const confirmCreateLead = useCallback(
@@ -622,29 +647,31 @@ export default function CanvassingTool({
   const logTally = useCallback(
     async (type: TallyType) => {
       const now = new Date().toISOString();
-      if (talliesRemote && supabase) {
-        const { data, error } = await supabase
-          .from('canvass_tallies')
-          .insert({ type })
-          .select('*')
-          .single();
-        if (!error && data) {
-          setTallies((prev) => [data as TallyEntry, ...prev]);
-          return;
+      if (cloud && supabase) {
+        beginWrite();
+        try {
+          const { data, error } = await supabase
+            .from('canvass_tallies')
+            .insert({ type })
+            .select('*')
+            .single();
+          if (!error && data) {
+            setTallies((prev) => [data as TallyEntry, ...prev]);
+            return;
+          }
+          console.warn('canvass_tallies insert failed:', error?.message);
+          showToast(canvassCloudErrorMessage(error, 'save'));
+        } finally {
+          endWrite();
         }
-        console.warn('canvass_tallies insert failed, saving locally:', error?.message);
-        if (isMissingTableError(error) && !warnedSetupRef.current) {
-          warnedSetupRef.current = true;
-          showToast('Canvassing tables not set up yet — tracking on this device for now');
-        }
-        setTalliesRemote(false);
+        return;
       }
       setTallies((prev) => [
         { id: newLocalId(), created_at: now, type },
         ...prev,
       ]);
     },
-    [supabase, talliesRemote, showToast]
+    [supabase, cloud, showToast]
   );
 
   const undoTally = useCallback(
@@ -658,17 +685,23 @@ export default function CanvassingTool({
         new Date(t.created_at) > new Date(latest.created_at) ? t : latest
       );
       setTallies((prev) => prev.filter((t) => t.id !== target.id));
-      if (talliesRemote && supabase) {
-        void supabase
-          .from('canvass_tallies')
-          .delete()
-          .eq('id', target.id)
-          .then(({ error }) => {
-            if (error) console.warn('canvass_tallies delete error:', error.message);
-          });
+      if (cloud && supabase) {
+        beginWrite();
+        void (async () => {
+          try {
+            const { error } = await supabase.from('canvass_tallies').delete().eq('id', target.id);
+            if (error) {
+              console.warn('canvass_tallies delete error:', error.message);
+              showToast(canvassCloudErrorMessage(error, 'save'));
+              pendingReloadRef.current = true;
+            }
+          } finally {
+            endWrite();
+          }
+        })();
       }
     },
-    [tallies, talliesRemote, supabase]
+    [tallies, cloud, supabase, showToast]
   );
 
   const handleIncrement = useCallback(
@@ -681,25 +714,10 @@ export default function CanvassingTool({
 
   const todayKey = localDateKey();
 
-  const stats: Record<TallyType, { auto: number; manual: number }> = useMemo(() => {
-    const doorsAuto = pins.filter((p) => localDateKey(p.created_at) === todayKey).length;
-    const conversationsAuto = pins.filter(
-      (p) =>
-        localDateKey(p.status_changed_at) === todayKey &&
-        p.disposition !== 'not_contacted' &&
-        p.disposition !== 'not_home'
-    ).length;
-    const signedAuto = pins.filter(
-      (p) => localDateKey(p.status_changed_at) === todayKey && p.disposition === 'signed'
-    ).length;
-    const manualCount = (type: TallyType) =>
-      tallies.filter((t) => t.type === type && localDateKey(t.created_at) === todayKey).length;
-    return {
-      door: { auto: doorsAuto, manual: manualCount('door') },
-      conversation: { auto: conversationsAuto, manual: manualCount('conversation') },
-      signed: { auto: signedAuto, manual: manualCount('signed') },
-    };
-  }, [pins, tallies, todayKey]);
+  const stats: Record<TallyType, { auto: number; manual: number }> = useMemo(
+    () => todayCanvassBreakdown(pins, tallies, todayKey),
+    [pins, tallies, todayKey]
+  );
 
   const visiblePins = useMemo(() => {
     const base = pinFilter === 'today'

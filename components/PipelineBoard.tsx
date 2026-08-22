@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import './stage-funnel.css';
 import {
   PIPELINE_STAGES,
@@ -10,6 +10,8 @@ import {
 } from '@/lib/pipeline';
 import PipelineSwipeRow from '@/components/PipelineSwipeRow';
 import PhonePullToRefresh from '@/components/PhonePullToRefresh';
+import CircledPlus from '@/components/CircledPlus';
+import { cancelChipGlide, glideChipCenter } from '@/lib/phone-nav';
 
 export type PipelineBoardLead = {
   id: number;
@@ -102,16 +104,18 @@ export default function PipelineBoard({
   const [dragLeadId, setDragLeadId] = useState<number | null>(null);
   const [dragOverStage, setDragOverStage] = useState<PipelineStage | null>(null);
   const suppressCardClickRef = useRef(false);
+  const jumpStripRef = useRef<HTMLDivElement | null>(null);
   const jumpActiveRef = useRef<HTMLButtonElement | null>(null);
+  const chipGlideRafRef = useRef<number | null>(null);
 
   const phoneView: PipelineStage | 'all' = pipelineFilter ?? 'all';
 
-  useEffect(() => {
-    jumpActiveRef.current?.scrollIntoView({
-      inline: 'center',
-      block: 'nearest',
-      behavior: 'smooth',
-    });
+  useLayoutEffect(() => {
+    const strip = jumpStripRef.current;
+    const chip = jumpActiveRef.current;
+    if (!strip || !chip) return;
+    glideChipCenter(strip, chip, chipGlideRafRef);
+    return () => cancelChipGlide(strip, chipGlideRafRef);
   }, [phoneView]);
 
   const visibleLeads = pipelineFilter
@@ -143,7 +147,7 @@ export default function PipelineBoard({
                     : `Trash (${trash.length})`
                 }
               >
-                <span className="md:hidden inline-flex items-center gap-1">
+                <span className="pl-orient-list-flex items-center gap-1">
                   {leadsView === 'trash' ? (
                     'Back'
                   ) : (
@@ -171,34 +175,13 @@ export default function PipelineBoard({
                     </>
                   )}
                 </span>
-                <span className="hidden md:inline">
+                <span className="pl-orient-desk-inline">
                   {leadsView === 'trash'
                     ? 'Back to Board'
                     : `Trash (${trash.length})`}
                 </span>
               </button>
-              <button
-                type="button"
-                onClick={onCreateLead}
-                className="pl-add md:hidden"
-                aria-label="New Lead"
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
-                  <path
-                    d="M12 5v14M5 12h14"
-                    stroke="currentColor"
-                    strokeWidth="1.75"
-                    strokeLinecap="round"
-                  />
-                </svg>
-              </button>
-              <button
-                type="button"
-                onClick={onCreateLead}
-                className="btn-primary hidden md:inline-flex min-h-11 px-6 py-3 rounded-3xl font-medium"
-              >
-                New Lead
-              </button>
+              <CircledPlus aria-label="New Lead" onClick={onCreateLead} />
             </div>
           );
 
@@ -208,6 +191,7 @@ export default function PipelineBoard({
 
           const renderPhoneJump = () => (
             <div
+              ref={jumpStripRef}
               data-phone-chip-strip
               className="pl-jump"
               role="tablist"
@@ -482,7 +466,7 @@ export default function PipelineBoard({
                   </div>
                 ) : (
                   <div className="w-full">
-                    <div className="md:hidden">
+                    <div className="pl-orient-list">
                       {(() => {
                         const mailStages =
                           phoneView === 'all'
@@ -507,6 +491,7 @@ export default function PipelineBoard({
                         return (
                           <div className="pl-mail">
                             {renderPhoneJump()}
+                            <div key={phoneView} className="pl-mail-stage">
                             {emptyFiltered ? (
                               <div className="text-center py-16 text-[var(--steel)]">
                                 <p className="font-medium text-[var(--graphite)]">
@@ -562,11 +547,12 @@ export default function PipelineBoard({
                                 })}
                               </div>
                             )}
+                            </div>
                           </div>
                         );
                       })()}
                     </div>
-                    <div className="hidden md:block">
+                    <div className="pl-orient-desk">
                     <div
                       className={`kanban-board ${
                         pipelineFilter ? 'kanban-board--single' : ''
@@ -751,7 +737,7 @@ export default function PipelineBoard({
             <div className="pl-toolbar-actions">{renderActions()}</div>
           </div>
           {leadsView === 'active' && (
-            <div className="hidden md:block">
+            <div className="pl-orient-desk">
               {renderChips('board', 'mb-6')}
             </div>
           )}

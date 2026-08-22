@@ -5,7 +5,10 @@ import {
   type LeadCalendarPayload,
   type SyncLeadResult,
 } from '@/lib/google-calendar';
-import { getValidGcalTokens } from '@/lib/gcal-cookie';
+import {
+  getValidUserGcalTokens,
+  requireSignedInSummitUser,
+} from '@/lib/gcal-user-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,10 +22,15 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const tokens = await getValidGcalTokens();
+  const auth = await requireSignedInSummitUser();
+  if ('error' in auth) {
+    return NextResponse.json({ error: 'Sign in required' }, { status: 401 });
+  }
+
+  const tokens = await getValidUserGcalTokens(auth);
   if (!tokens?.access_token) {
     return NextResponse.json(
-      { error: 'Not connected. Connect Google Calendar in Settings first.' },
+      { error: 'Not connected. Connect Google Calendar first.' },
       { status: 401 }
     );
   }

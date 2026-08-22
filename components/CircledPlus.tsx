@@ -8,7 +8,7 @@ type Props = {
   disabled?: boolean;
 };
 
-/** 44px circled + — same control at every width (Calendar/Tasks chrome). */
+/** 44px circled + — ring stays (add vs close). Fill matches job Close (X). */
 export default function CircledPlus({
   onClick,
   'aria-label': ariaLabel,
@@ -20,7 +20,7 @@ export default function CircledPlus({
       onClick={onClick}
       disabled={disabled}
       aria-label={ariaLabel}
-      className="inline-flex items-center justify-center w-11 h-11 p-0 border border-[var(--chrome)] rounded-full bg-transparent text-[var(--graphite)] shrink-0 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-blue-ring)]"
+      className="inline-flex items-center justify-center w-11 h-11 p-0 border border-[var(--chrome)] rounded-full bg-transparent text-zinc-600 shrink-0 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-blue-ring)] [@media(hover:hover)_and_(pointer:fine)]:hover:bg-zinc-100 [@media(hover:hover)_and_(pointer:fine)]:hover:text-zinc-900 [@media(pointer:coarse)]:active:bg-zinc-100 [@media(pointer:coarse)]:active:text-zinc-900"
     >
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
         <path

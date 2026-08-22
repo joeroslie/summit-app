@@ -10,10 +10,18 @@ alwaysApply: false
 **Sidebar label:** Tasks  
 **Agent starter:** `.cursor/agents/tasks.md`
 
+## Sync contract
+
+- Cloud (`app_settings.summit_tasks_bundle`) is source of truth. Device localStorage is a scratch pad.
+- Never write the cache to cloud on boot. Last-write-wins by task/list `updatedAt` — a stale phone copy must not hide a newer save or resurrect a delete.
+- Pull cloud when opening Tasks and when the app returns to the foreground. Pull-to-refresh is backup, not the only sync.
+- Google pull stays authoritative for Google-linked tasks while connected. Same Connect / disconnect-all-devices as Calendar (`user_google_oauth`). UI label stays **Connected**. No Google branding in user-facing copy.
+
 ## Files
 
 - `app/page.tsx` — `activeTab === 'tasks'` (~L23571); Google Tasks sync
 - `lib/google-tasks.ts`
 - `lib/app-settings-sync.ts` — shared; `summit_tasks_bundle` cloud backup
-- `lib/gcal-browser.ts` — shared; Google Tasks OAuth scope
+- `lib/gcal-browser.ts` — shared; same Google connection as Calendar
+- `lib/gcal-user-store.ts` — shared; encrypted refresh token on the signed-in user
 - `supabase/calendar_tasks_settings_sync.sql`

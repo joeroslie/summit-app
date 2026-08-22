@@ -1,6 +1,7 @@
 /**
  * Google Calendar helpers for Summit CRM.
- * OAuth tokens live in an httpOnly cookie; event create/update hits Google Calendar API.
+ * OAuth: server code flow stores an encrypted refresh token on the signed-in
+ * Summit user (`user_google_oauth`). GIS popup is local-only fallback.
  */
 
 export const GCAL_SCOPES = [
@@ -20,6 +21,7 @@ export type GcalTokenBundle = {
   expiry_date?: number; // ms epoch
   email?: string;
   name?: string;
+  scopes?: string;
 };
 
 export type LeadCalendarPayload = {
@@ -70,7 +72,52 @@ export function getOAuthRedirectUri(origin: string) {
   return `${origin.replace(/\/$/, '')}/api/google/calendar/callback`;
 }
 
-export function buildAuthUrl(origin: string, state: string) {
+/**
+ * Origin used for Google OAuth redirect_uri (exact match in Cloud Console).
+ * Prefer NEXT_PUBLIC_APP_URL in production so preview hosts don't silently
+ * mint a URI that isn't registered.
+ */
+export function resolveOAuthOrigin(req: {
+  nextUrl: { origin: string };
+  headers: Headers;
+}): string {
+  const host =
+    req.headers.get('x-forwarded-host')?.split(',')[0]?.trim() ||
+    req.headers.get('host')?.split(',')[0]?.trim() ||
+    '';
+  const isLocal =
+    host.startsWith('localhost') ||
+    host.startsWith('127.0.0.1') ||
+    /^192\.168\./.test(host) ||
+    /^10\./.test(host);
+
+  if (!isLocal) {
+    const explicit = (
+      process.env.NEXT_PUBLIC_APP_URL ||
+      process.env.APP_URL ||
+      ''
+    )
+      .trim()
+      .replace(/\/$/, '');
+    if (explicit) return explicit;
+  }
+
+  const proto =
+    req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim() || '';
+  if (host) {
+    const scheme =
+      proto ||
+      (isLocal ? 'http' : 'https');
+    return `${scheme}://${host}`;
+  }
+  return req.nextUrl.origin.replace(/\/$/, '');
+}
+
+export function buildAuthUrl(
+  origin: string,
+  state: string,
+  opts?: { forceConsent?: boolean }
+) {
   const { clientId } = getGoogleClientConfig();
   const params = new URLSearchParams({
     client_id: clientId,
@@ -78,7 +125,7 @@ export function buildAuthUrl(origin: string, state: string) {
     response_type: 'code',
     scope: GCAL_SCOPES,
     access_type: 'offline',
-    prompt: 'consent',
+    prompt: opts?.forceConsent === false ? 'select_account' : 'consent',
     include_granted_scopes: 'true',
     state,
   });
@@ -109,6 +156,7 @@ export async function exchangeCodeForTokens(
     access_token: string;
     refresh_token?: string;
     expires_in?: number;
+    scope?: string;
   };
   return {
     access_token: data.access_token,
@@ -116,6 +164,7 @@ export async function exchangeCodeForTokens(
     expiry_date: data.expires_in
       ? Date.now() + data.expires_in * 1000
       : undefined,
+    scopes: data.scope,
   };
 }
 
@@ -148,6 +197,37 @@ export async function refreshAccessToken(
       ? Date.now() + data.expires_in * 1000
       : undefined,
   };
+}
+
+export async function fetchAccessTokenScopes(
+  accessToken: string
+): Promise<string[]> {
+  try {
+    const res = await fetch(
+      `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${encodeURIComponent(accessToken)}`
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as { scope?: string };
+    return (data.scope || '')
+      .trim()
+      .split(/[\s,+]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+export async function revokeGoogleToken(token: string): Promise<void> {
+  try {
+    await fetch('https://oauth2.googleapis.com/revoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token }),
+    });
+  } catch {
+    /* best-effort */
+  }
 }
 
 export async function fetchGoogleUserEmail(

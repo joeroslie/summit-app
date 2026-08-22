@@ -34,6 +34,7 @@ import {
   DEFAULT_TASK_LIST_ID,
   isActiveSummitTask,
   isGoogleSourcedTask,
+  mergeCloudTasksSnapshot,
   newSummitTaskId,
   newSummitTaskListId,
   type SummitTask,
@@ -41,6 +42,7 @@ import {
 } from '@/lib/google-tasks';
 import {
   safeMergeGoogleCalendarEventsIntoLocal,
+  mergeCloudCalendarSnapshot,
   pullWindowForMonthCursor,
 } from '@/lib/calendar-sync';
 import {
@@ -130,12 +132,16 @@ import {
   PHONE_NAV_MAP_SEL,
   PHONE_NAV_SKIP_SEL,
   type PhoneForwardRestore,
+  freezePhoneChipStrips,
   leadProfilePagerStep,
-  pipelineBoardPagerStep,
+  markPhonePagerGlide,
   phoneEdgeNavZone,
+  phonePagerGlideLocked,
+  pipelineBoardPagerStep,
   pulsePhonePagerRubber,
   setPhoneForwardFlag,
   setPhoneBackFlag,
+  unfreezePhoneChipStrips,
 } from '@/lib/phone-nav';
 import PhoneInput from '@/components/PhoneInput';
 import PasswordField from '@/components/PasswordField';
@@ -207,6 +213,11 @@ const WeatherTool = dynamic(() => import('@/components/WeatherTool'), {
       </div>
     </div>
   ),
+});
+
+const PdfFitViewer = dynamic(() => import('@/components/PdfFitViewer'), {
+  ssr: false,
+  loading: () => <div className="flex-1 w-full min-h-0 bg-zinc-200" />,
 });
 
 /** Chrome/Edge/Android fire this before showing their native "Add to Home Screen" UI. */
@@ -1584,6 +1595,25 @@ function takeoffRoofTypeLabel(value: string): string {
 /** Lead-profile Orders — order type twin of estimate roof system. */
 type MaterialOrderType = 'shingle' | 'tile' | 'flat';
 
+/** In-progress material + labor order on a lead. Cloud (`leads.details`) is source of truth. */
+type LeadOrderDraft = {
+  orderType: MaterialOrderType | null;
+  orderLines: Record<string, TakeoffSkuLine[]>;
+  coverageInputs: Record<string, string>;
+  step: OrdersStep;
+  filledFrom: string | null;
+};
+
+/** Submitted row from `material_orders` — show what was stored, never invent totals. */
+type SubmittedMaterialOrder = {
+  id: number;
+  createdAt: string;
+  orderType: string;
+  crewName: string | null;
+  totalCost: number | null;
+  status: string;
+};
+
 type MaterialOrderSku = {
   key: string;
   label: string;
@@ -2161,6 +2191,165 @@ function newTakeoffSkuLine(skuKey = '', qty = '1'): TakeoffSkuLine {
   };
 }
 
+function emptyOrderDraft(): LeadOrderDraft {
+  return {
+    orderType: null,
+    orderLines: {},
+    coverageInputs: {},
+    step: 'material',
+    filledFrom: null,
+  };
+}
+
+function normalizeOrderSkuLines(raw: unknown): TakeoffSkuLine[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((row) => row && typeof row === 'object')
+    .map((row) => {
+      const line = row as Partial<TakeoffSkuLine>;
+      const id =
+        typeof line.id === 'string' && line.id.trim()
+          ? line.id
+          : newTakeoffSkuLine().id;
+      const skuKey = typeof line.skuKey === 'string' ? line.skuKey : '';
+      const qty =
+        typeof line.qty === 'string'
+          ? line.qty
+          : line.qty != null
+            ? String(line.qty)
+            : '';
+      return { id, skuKey, qty };
+    });
+}
+
+function normalizeOrderDraft(raw: unknown): LeadOrderDraft {
+  if (!raw || typeof raw !== 'object') return emptyOrderDraft();
+  const r = raw as Record<string, unknown>;
+  const t = r.orderType;
+  const orderType: MaterialOrderType | null =
+    t === 'shingle' || t === 'tile' || t === 'flat' ? t : null;
+  const linesRaw =
+    r.orderLines &&
+    typeof r.orderLines === 'object' &&
+    !Array.isArray(r.orderLines)
+      ? (r.orderLines as Record<string, unknown>)
+      : {};
+  const orderLines: Record<string, TakeoffSkuLine[]> = {};
+  for (const [key, value] of Object.entries(linesRaw)) {
+    orderLines[key] = normalizeOrderSkuLines(value);
+  }
+  const covRaw =
+    r.coverageInputs &&
+    typeof r.coverageInputs === 'object' &&
+    !Array.isArray(r.coverageInputs)
+      ? (r.coverageInputs as Record<string, unknown>)
+      : {};
+  const coverageInputs: Record<string, string> = {};
+  for (const [key, value] of Object.entries(covRaw)) {
+    coverageInputs[key] = typeof value === 'string' ? value : String(value ?? '');
+  }
+  const step: OrdersStep = r.step === 'labor' ? 'labor' : 'material';
+  const filledFrom =
+    typeof r.filledFrom === 'string' && r.filledFrom.trim()
+      ? r.filledFrom
+      : null;
+  return { orderType, orderLines, coverageInputs, step, filledFrom };
+}
+
+function orderDraftIsEmpty(draft: LeadOrderDraft): boolean {
+  if (draft.orderType) return false;
+  if (draft.step === 'labor') return false;
+  return true;
+}
+
+function orderDraftFingerprint(draft: LeadOrderDraft | null | undefined): string {
+  return JSON.stringify(normalizeOrderDraft(draft));
+}
+
+function orderDraftFromLead(
+  lead: { orderDraft?: LeadOrderDraft | null } | null | undefined
+): LeadOrderDraft {
+  return normalizeOrderDraft(lead?.orderDraft ?? null);
+}
+
+function mergeOrderDraft(
+  local: LeadOrderDraft | null | undefined,
+  cloud: LeadOrderDraft | null | undefined,
+  keepLocal: boolean
+): LeadOrderDraft | null {
+  const loc = local ? normalizeOrderDraft(local) : null;
+  const cld = cloud ? normalizeOrderDraft(cloud) : null;
+  const pick = keepLocal ? loc : cld;
+  const other = keepLocal ? cld : loc;
+  const pickHas = Boolean(pick && !orderDraftIsEmpty(pick));
+  const otherHas = Boolean(other && !orderDraftIsEmpty(other));
+  if (pickHas && otherHas) return pick;
+  if (pickHas) return pick;
+  if (otherHas) return other;
+  return pick || other;
+}
+
+/** Dirty form wins. Otherwise keep what already lives on the lead (cloud after refresh). */
+function mergeOrderDraftForSave(
+  existing: LeadOrderDraft | null | undefined,
+  form: LeadOrderDraft,
+  formDirty: boolean
+): LeadOrderDraft | null {
+  if (formDirty) {
+    const next = normalizeOrderDraft(form);
+    return orderDraftIsEmpty(next) ? null : next;
+  }
+  if (existing) {
+    const kept = normalizeOrderDraft(existing);
+    return orderDraftIsEmpty(kept) ? null : kept;
+  }
+  const next = normalizeOrderDraft(form);
+  return orderDraftIsEmpty(next) ? null : next;
+}
+
+function submittedOrderTypeLabel(orderType: string): string {
+  if (orderType === 'shingle') return 'Shingle order';
+  if (orderType === 'tile') return 'Tile order';
+  if (orderType === 'low_slope' || orderType === 'flat') return 'Low-slope order';
+  return 'Material order';
+}
+
+function mapMaterialOrderRow(row: Record<string, unknown>): SubmittedMaterialOrder {
+  const total = Number(row.total_cost);
+  const idNum = Number(row.id);
+  return {
+    id: Number.isFinite(idNum) ? idNum : 0,
+    createdAt: typeof row.created_at === 'string' ? row.created_at : '',
+    orderType: typeof row.order_type === 'string' ? row.order_type : '',
+    crewName:
+      typeof row.crew_name === 'string' && row.crew_name.trim()
+        ? row.crew_name.trim()
+        : null,
+    totalCost: Number.isFinite(total) ? total : null,
+    status: typeof row.status === 'string' && row.status.trim()
+      ? row.status
+      : 'submitted',
+  };
+}
+
+async function fetchMaterialOrdersForLead(
+  client: NonNullable<ReturnType<typeof getSupabase>>,
+  leadCloudId: string
+): Promise<SubmittedMaterialOrder[]> {
+  const { data, error } = await client
+    .from('material_orders')
+    .select('id, created_at, order_type, crew_name, total_cost, status')
+    .eq('lead_id', leadCloudId)
+    .order('created_at', { ascending: false });
+  if (error) {
+    console.error('Supabase material_orders fetch error:', error);
+    return [];
+  }
+  return (data || []).map((row) =>
+    mapMaterialOrderRow(row as Record<string, unknown>)
+  );
+}
+
 function newTakeoffSkylightLine(size = '', qty = '1'): TakeoffSkylightLine {
   return {
     id: `sk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
@@ -2656,6 +2845,80 @@ function normalizeTakeoff(raw: unknown): TakeoffSheet {
   };
 }
 
+function takeoffFingerprint(sheet: TakeoffSheet | null | undefined): string {
+  return JSON.stringify(normalizeTakeoff(sheet));
+}
+
+function takeoffSheetHasContent(sheet: TakeoffSheet | null | undefined): boolean {
+  if (!sheet) return false;
+  const s = normalizeTakeoff(sheet);
+  if (s.pipeJackLines.some((l) => l.skuKey.trim() || l.qty.trim())) return true;
+  if (s.ventLines.some((l) => l.skuKey.trim() || l.qty.trim())) return true;
+  if (s.skylightLines.some((l) => l.size.trim() || l.qty.trim())) return true;
+  return Boolean(
+    s.roofType.trim() ||
+      s.roofLayers.trim() ||
+      s.pitch.trim() ||
+      s.stories.trim() ||
+      s.ridgeVent.trim() ||
+      s.roofExhaustCap.trim() ||
+      s.hvacCount.trim() ||
+      s.hvacMount.trim() ||
+      s.chimneyFlashing.trim() ||
+      s.chimneyFlashingSize.trim() ||
+      s.soffitOverhang.trim() ||
+      s.soffitOverhangUnit.trim() ||
+      s.satelliteDishCount.trim() ||
+      s.satelliteDishDr.trim() ||
+      s.electricalMast.trim() ||
+      s.dripEdgeGutterApron.trim() ||
+      s.valleyLiner.trim() ||
+      s.drywallSf.trim() ||
+      s.paintingSf.trim() ||
+      s.ceilingHeight.trim() ||
+      s.ceilingFans.trim() ||
+      s.notes.trim()
+  );
+}
+
+function takeoffFromLead(
+  lead: { takeoff?: TakeoffSheet | null } | null | undefined
+): TakeoffSheet {
+  return lead?.takeoff && typeof lead.takeoff === 'object'
+    ? normalizeTakeoff(lead.takeoff)
+    : emptyTakeoff();
+}
+
+/** Never let an empty scratch-pad form wipe a takeoff that already lives on the lead. */
+function mergeTakeoffForSave(
+  existing: TakeoffSheet | null | undefined,
+  form: TakeoffSheet
+): TakeoffSheet | null {
+  const fromForm = normalizeTakeoff(form);
+  const fromExisting =
+    existing && typeof existing === 'object' ? normalizeTakeoff(existing) : null;
+  if (takeoffSheetHasContent(fromForm)) return fromForm;
+  if (fromExisting && takeoffSheetHasContent(fromExisting)) return fromExisting;
+  return fromExisting;
+}
+
+function mergeLeadTakeoff(
+  local: TakeoffSheet | null | undefined,
+  cloud: TakeoffSheet | null | undefined,
+  keepLocal: boolean
+): TakeoffSheet | null {
+  const loc =
+    local && typeof local === 'object' ? normalizeTakeoff(local) : null;
+  const cld =
+    cloud && typeof cloud === 'object' ? normalizeTakeoff(cloud) : null;
+  const locHas = Boolean(loc && takeoffSheetHasContent(loc));
+  const cldHas = Boolean(cld && takeoffSheetHasContent(cld));
+  if (locHas && cldHas) return keepLocal ? loc : cld;
+  if (locHas) return loc;
+  if (cldHas) return cld;
+  return loc || cld;
+}
+
 function formatTakeoffFieldValue(
   key: keyof TakeoffSheet,
   sheet: TakeoffSheet
@@ -2841,13 +3104,22 @@ function prependLeadDocuments(
   return [...stamped, ...(existing || [])];
 }
 
-/** Soft-deleted lead media on a single lead (legacy; prefer AppTrashItem). */
+/** Soft-deleted items that belong on the lead (syncs with the lead in cloud). */
 type LeadTrashItem = {
   id: string;
-  kind: 'photo' | 'document' | 'measurement';
+  kind:
+    | 'photo'
+    | 'document'
+    | 'measurement'
+    | 'roofMeasurement'
+    | 'estimate'
+    | 'note';
   deletedAt: string;
   photo?: LeadPhoto;
   document?: LeadDocument;
+  measurement?: RoofMeasurement;
+  estimate?: Estimate;
+  note?: LeadNote;
 };
 
 /** App-wide trash: whole leads + media soft-deletes. */
@@ -2898,6 +3170,229 @@ type AppTrashItem =
       leadLabel: string;
       note: LeadNote;
     };
+
+function leadDisplayName(lead: {
+  clientFirstName?: string;
+  clientLastName?: string;
+  clientAddress?: string;
+}): string {
+  return (
+    [lead.clientFirstName, lead.clientLastName].filter(Boolean).join(' ').trim() ||
+    lead.clientAddress ||
+    'Lead'
+  );
+}
+
+function formatTrashTime(raw: string | undefined | null): string {
+  const s = String(raw || '').trim();
+  const ms = Date.parse(s);
+  if (Number.isFinite(ms) && ms > 0) return new Date(ms).toLocaleString();
+  return s || new Date().toLocaleString();
+}
+
+function cloudLeadTrashId(lead: { supabaseId?: string; id: number }): string {
+  const cloudId = lead.supabaseId?.trim();
+  return cloudId ? `lead-cloud-${cloudId}` : `lead-${lead.id}`;
+}
+
+function normalizeLeadTrashItems(raw: unknown): LeadTrashItem[] {
+  if (!Array.isArray(raw)) return [];
+  const out: LeadTrashItem[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const r = item as Partial<LeadTrashItem> & { kind?: string };
+    const kind = r.kind;
+    if (
+      kind !== 'photo' &&
+      kind !== 'document' &&
+      kind !== 'measurement' &&
+      kind !== 'roofMeasurement' &&
+      kind !== 'estimate' &&
+      kind !== 'note'
+    ) {
+      continue;
+    }
+    const id = String(r.id || '').trim() || newClientId('trash');
+    out.push({
+      id,
+      kind,
+      deletedAt: String(r.deletedAt || new Date().toISOString()),
+      photo: r.photo,
+      document: r.document,
+      measurement: r.measurement,
+      estimate: r.estimate,
+      note: r.note,
+    });
+  }
+  return out;
+}
+
+function leadTrashAppId(lead: Lead, item: LeadTrashItem): string {
+  const leadKey = lead.supabaseId?.trim() || String(lead.id);
+  return `media-${leadKey}-${item.kind}-${item.id}`;
+}
+
+function appItemToLeadTrash(item: AppTrashItem): LeadTrashItem | null {
+  if (item.kind === 'lead') return null;
+  if (item.kind === 'photo') {
+    return {
+      id: item.photo.id || item.id,
+      kind: 'photo',
+      deletedAt: item.deletedAt,
+      photo: item.photo,
+    };
+  }
+  if (item.kind === 'roofMeasurement') {
+    return {
+      id: item.measurement.id || item.id,
+      kind: 'roofMeasurement',
+      deletedAt: item.deletedAt,
+      measurement: item.measurement,
+    };
+  }
+  if (item.kind === 'estimate') {
+    return {
+      id: String(item.estimate.id || item.id),
+      kind: 'estimate',
+      deletedAt: item.deletedAt,
+      estimate: item.estimate,
+    };
+  }
+  if (item.kind === 'note') {
+    return {
+      id: item.note.id || item.id,
+      kind: 'note',
+      deletedAt: item.deletedAt,
+      note: item.note,
+    };
+  }
+  return {
+    id: item.document.id || item.id,
+    kind: item.kind,
+    deletedAt: item.deletedAt,
+    document: item.document,
+  };
+}
+
+function mediaAppItemFromLeadTrash(
+  lead: Lead,
+  item: LeadTrashItem
+): AppTrashItem | null {
+  const base = {
+    id: leadTrashAppId(lead, item),
+    deletedAt: formatTrashTime(item.deletedAt),
+    leadId: lead.id,
+    leadLabel: leadDisplayName(lead),
+  };
+  if (item.kind === 'photo' && item.photo) {
+    return { ...base, kind: 'photo', photo: item.photo };
+  }
+  if (item.kind === 'roofMeasurement' && item.measurement) {
+    return { ...base, kind: 'roofMeasurement', measurement: item.measurement };
+  }
+  if (item.kind === 'estimate' && item.estimate) {
+    return { ...base, kind: 'estimate', estimate: item.estimate };
+  }
+  if (item.kind === 'note' && item.note) {
+    return { ...base, kind: 'note', note: item.note };
+  }
+  if (
+    (item.kind === 'document' || item.kind === 'measurement') &&
+    item.document
+  ) {
+    return { ...base, kind: item.kind, document: item.document };
+  }
+  return null;
+}
+
+function assembleAppTrash(
+  activeLeads: Lead[],
+  deletedLeads: Array<{ lead: Lead; deletedAt: string }>
+): AppTrashItem[] {
+  const items: AppTrashItem[] = [];
+  for (const row of deletedLeads) {
+    items.push({
+      id: cloudLeadTrashId(row.lead),
+      kind: 'lead',
+      deletedAt: formatTrashTime(row.deletedAt),
+      lead: row.lead,
+    });
+  }
+  for (const lead of activeLeads) {
+    for (const t of lead.trash || []) {
+      const item = mediaAppItemFromLeadTrash(lead, t);
+      if (item) items.push(item);
+    }
+  }
+  return items.sort(
+    (a, b) =>
+      (Date.parse(b.deletedAt) || 0) - (Date.parse(a.deletedAt) || 0)
+  );
+}
+
+function leadTrashMatchesApp(t: LeadTrashItem, item: AppTrashItem): boolean {
+  if (item.kind === 'lead') return false;
+  if (item.kind === 'photo') {
+    return t.kind === 'photo' && t.photo?.id === item.photo.id;
+  }
+  if (item.kind === 'roofMeasurement') {
+    return (
+      t.kind === 'roofMeasurement' && t.measurement?.id === item.measurement.id
+    );
+  }
+  if (item.kind === 'estimate') {
+    return (
+      t.kind === 'estimate' &&
+      (t.estimate?.id === item.estimate.id ||
+        Boolean(
+          t.estimate?.supabaseId &&
+            item.estimate.supabaseId &&
+            t.estimate.supabaseId === item.estimate.supabaseId
+        ))
+    );
+  }
+  if (item.kind === 'note') {
+    return t.kind === 'note' && t.note?.id === item.note.id;
+  }
+  return (
+    (t.kind === 'document' || t.kind === 'measurement') &&
+    t.document?.id === item.document.id
+  );
+}
+
+/** Move device-only trash items onto the matching lead so they sync. */
+function absorbLocalTrashIntoLeads(
+  leads: Lead[],
+  localTrash: AppTrashItem[]
+): { leads: Lead[]; deletedLeads: Array<{ lead: Lead; deletedAt: string }> } {
+  const next = leads.map((l) => ({
+    ...l,
+    trash: [...(l.trash || [])],
+  }));
+  const byId = new Map(next.map((l) => [l.id, l]));
+  const deletedLeads: Array<{ lead: Lead; deletedAt: string }> = [];
+  for (const item of localTrash) {
+    if (item.kind === 'lead') {
+      deletedLeads.push({ lead: item.lead, deletedAt: item.deletedAt });
+      continue;
+    }
+    const lead = byId.get(item.leadId);
+    if (!lead) continue;
+    if ((lead.trash || []).some((t) => leadTrashMatchesApp(t, item))) continue;
+    const row = appItemToLeadTrash(item);
+    if (!row) continue;
+    lead.trash = [...(lead.trash || []), row];
+  }
+  return { leads: next, deletedLeads };
+}
+
+function cacheTrashLocally(items: AppTrashItem[]) {
+  try {
+    localStorage.setItem('summitTrash', JSON.stringify(items));
+  } catch {
+    /* ignore quota */
+  }
+}
 
 /** Pricing region for multi-area sell rates (price_sheet.region). */
 type PricingRegion = 'central' | 'southern' | 'northern';
@@ -3885,6 +4380,35 @@ function resolveFinancialWorksheet(lead: {
   return emptyFinancialWorksheet();
 }
 
+/** Human Certified measure order copied onto the lead so every device can see it. */
+type LeadHumanMeasureOrder = {
+  id: string;
+  requestId?: string | null;
+  leadId?: string | null;
+  status: string;
+  reportUrl: string | null;
+  address: string | null;
+  createdAt: string;
+  failureReason: string | null;
+};
+
+/** Unsaved measurement session belonging to the lead. */
+type LeadMeasureDraft = {
+  showTracer?: boolean;
+  /** Auto-measure in flight — overlay follows the lead across devices. */
+  solarMeasuring?: boolean;
+  tracePoints?: LatLngPoint[];
+  draftSections?: RoofSection[];
+  sectionKind?: RoofSectionKind;
+  measurePitch?: string;
+  measureWaste?: number;
+  measureWasteAuto?: boolean;
+  measureLabel?: string;
+  measurePitchAuto?: boolean;
+  mapCenter?: LatLngPoint | null;
+  selectedMeasurementId?: string | null;
+};
+
 type Lead = {
   id: number;
   date: string;
@@ -3963,6 +4487,14 @@ type Lead = {
   supabaseId?: string;
   /** Assigned install crew id from CREW_ROSTER (Orders → Labor step) */
   assignedCrew?: string;
+  /** In-progress material + labor order — lives on the lead, not one browser. */
+  orderDraft?: LeadOrderDraft | null;
+  /** Cloud `leads.updated_at` — last-write-wins across devices */
+  updatedAt?: string;
+  /** Instant Roofer Human Certified orders stored on this lead (all devices). */
+  humanMeasureOrders?: LeadHumanMeasureOrder[];
+  /** In-progress map trace / section draft — lives on the lead, not one browser. */
+  measureDraft?: LeadMeasureDraft | null;
 };
 
 /**
@@ -3999,6 +4531,113 @@ function pipelineValueRollup(
     if (v > 0) valuedCount += 1;
   }
   return { pipelineValue, valuedCount, totalJobs };
+}
+
+function humanOrderKey(o: LeadHumanMeasureOrder): string {
+  return o.id || o.requestId || `${o.createdAt}-${o.address || ''}`;
+}
+
+function normalizeHumanMeasureOrders(raw: unknown): LeadHumanMeasureOrder[] {
+  if (!Array.isArray(raw)) return [];
+  const out: LeadHumanMeasureOrder[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const r = item as Record<string, unknown>;
+    const id = String(r.id || r.requestId || '').trim();
+    if (!id) continue;
+    out.push({
+      id,
+      requestId: r.requestId != null ? String(r.requestId) : null,
+      leadId: r.leadId != null ? String(r.leadId) : null,
+      status: String(r.status || 'queued'),
+      reportUrl: r.reportUrl ? String(r.reportUrl) : null,
+      address: r.address != null ? String(r.address) : null,
+      createdAt: String(r.createdAt || ''),
+      failureReason: r.failureReason ? String(r.failureReason) : null,
+    });
+  }
+  return out;
+}
+
+function humanOrderRank(o: LeadHumanMeasureOrder): number {
+  if (o.status === 'completed' && o.reportUrl) return 3;
+  if (o.status === 'failed') return 2;
+  if (o.status === 'queued') return 1;
+  return 0;
+}
+
+function mergeHumanMeasureOrders(
+  a?: LeadHumanMeasureOrder[],
+  b?: LeadHumanMeasureOrder[]
+): LeadHumanMeasureOrder[] {
+  const map = new Map<string, LeadHumanMeasureOrder>();
+  for (const o of [...(a || []), ...(b || [])]) {
+    const k = humanOrderKey(o);
+    const prev = map.get(k);
+    if (!prev || humanOrderRank(o) >= humanOrderRank(prev)) {
+      map.set(k, prev ? { ...prev, ...o } : o);
+    }
+  }
+  return [...map.values()].sort(
+    (x, y) => (Date.parse(y.createdAt) || 0) - (Date.parse(x.createdAt) || 0)
+  );
+}
+
+function normalizeMeasureDraft(raw: unknown): LeadMeasureDraft | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Partial<LeadMeasureDraft>;
+  const tracePoints = Array.isArray(r.tracePoints)
+    ? r.tracePoints.filter(
+        (p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lng)
+      )
+    : [];
+  const draftSections = Array.isArray(r.draftSections) ? r.draftSections : [];
+  const hasWork =
+    r.showTracer ||
+    r.solarMeasuring ||
+    tracePoints.length > 0 ||
+    draftSections.length > 0 ||
+    Boolean(r.mapCenter) ||
+    Boolean(r.selectedMeasurementId);
+  if (!hasWork) return null;
+  return {
+    showTracer: Boolean(r.showTracer),
+    solarMeasuring: Boolean(r.solarMeasuring),
+    tracePoints,
+    draftSections,
+    sectionKind: r.sectionKind === 'flat' ? 'flat' : 'pitched',
+    measurePitch: r.measurePitch || '6/12',
+    measureWaste: Number(r.measureWaste) || 0.1,
+    measureWasteAuto: r.measureWasteAuto !== false,
+    measureLabel: r.measureLabel || '',
+    measurePitchAuto: r.measurePitchAuto !== false,
+    mapCenter: r.mapCenter || null,
+    selectedMeasurementId: r.selectedMeasurementId || null,
+  };
+}
+
+function mergeMeasureDraft(
+  local: LeadMeasureDraft | null | undefined,
+  cloud: LeadMeasureDraft | null | undefined,
+  keepLocal: boolean
+): LeadMeasureDraft | null {
+  const a = keepLocal ? local : cloud;
+  const b = keepLocal ? cloud : local;
+  return normalizeMeasureDraft({
+    ...(b || {}),
+    ...(a || {}),
+    solarMeasuring: keepLocal
+      ? Boolean(local?.solarMeasuring)
+      : Boolean(cloud?.solarMeasuring),
+  });
+}
+
+function leadFpKey(lead: { supabaseId?: string; id: number }): string {
+  return lead.supabaseId?.trim() || String(lead.id);
+}
+
+function leadTimeMs(lead: { updatedAt?: string }): number {
+  return Date.parse(lead.updatedAt || '') || 0;
 }
 
 /** Normalize legacy localStorage leads (e.g. clientJobNumber → jobNumber). */
@@ -4049,7 +4688,7 @@ function normalizeLead(raw: Partial<Lead> & { clientJobNumber?: string }): Lead 
     photoReports: raw.photoReports ?? [],
     documents: raw.documents ?? [],
     measurementReports: raw.measurementReports ?? [],
-    trash: Array.isArray(raw.trash) ? (raw.trash as LeadTrashItem[]) : [],
+    trash: normalizeLeadTrashItems(raw.trash),
     takeoff:
       raw.takeoff && typeof raw.takeoff === 'object'
         ? normalizeTakeoff(raw.takeoff)
@@ -4070,6 +4709,16 @@ function normalizeLead(raw: Partial<Lead> & { clientJobNumber?: string }): Lead 
       typeof raw.assignedCrew === 'string' && raw.assignedCrew.trim()
         ? raw.assignedCrew.trim()
         : undefined,
+    orderDraft: (() => {
+      const draft = normalizeOrderDraft(raw.orderDraft);
+      return orderDraftIsEmpty(draft) ? null : draft;
+    })(),
+    updatedAt:
+      typeof raw.updatedAt === 'string' && raw.updatedAt.trim()
+        ? raw.updatedAt.trim()
+        : undefined,
+    humanMeasureOrders: normalizeHumanMeasureOrders(raw.humanMeasureOrders),
+    measureDraft: normalizeMeasureDraft(raw.measureDraft),
   };
 }
 
@@ -4159,6 +4808,7 @@ function leadDocStoragePaths(lead: Lead): string[] {
     if (item.kind === 'document' || item.kind === 'measurement') {
       add(item.document?.url);
     }
+    if (item.kind === 'estimate') add(item.estimate?.pdfUrl);
   }
   return [...paths];
 }
@@ -4268,6 +4918,377 @@ async function purgeOrphanLeadPhotoFolders(
     }
   }
   return removed;
+}
+
+type ListedStorageFile = {
+  path: string;
+  name: string;
+  createdAt?: string;
+  size?: number;
+  mimeType?: string;
+};
+
+async function listStorageFiles(
+  client: SummitStorageClient,
+  bucket: LeadStorageBucket,
+  prefix: string
+): Promise<ListedStorageFile[]> {
+  const root = prefix.replace(/^\/+|\/+$/g, '');
+  if (!root) return [];
+  const out: ListedStorageFile[] = [];
+  const walk = async (dir: string) => {
+    let offset = 0;
+    for (;;) {
+      const { data, error } = await client.storage.from(bucket).list(dir, {
+        limit: 1000,
+        offset,
+      });
+      if (error) {
+        console.error(`Storage list ${bucket}/${dir} error:`, error);
+        return;
+      }
+      const rows = data || [];
+      for (const item of rows) {
+        const child = dir ? `${dir}/${item.name}` : item.name;
+        if (item.id == null) {
+          await walk(child);
+          continue;
+        }
+        const meta = (item.metadata || {}) as Record<string, unknown>;
+        const sizeRaw = meta.size;
+        const mimeRaw = meta.mimetype;
+        out.push({
+          path: child,
+          name: item.name,
+          createdAt: item.created_at || item.updated_at || undefined,
+          size: typeof sizeRaw === 'number' ? sizeRaw : undefined,
+          mimeType: typeof mimeRaw === 'string' ? mimeRaw : undefined,
+        });
+      }
+      if (rows.length < 1000) break;
+      offset += rows.length;
+    }
+  };
+  await walk(root);
+  return out;
+}
+
+async function listLeadMediaFromStorage(
+  client: SummitStorageClient,
+  lead: Lead
+): Promise<{ photos: ListedStorageFile[]; docs: ListedStorageFile[] }> {
+  const photos: ListedStorageFile[] = [];
+  const docs: ListedStorageFile[] = [];
+  const seenPhotos = new Set<string>();
+  const seenDocs = new Set<string>();
+  for (const key of leadStorageFolderKeys(lead)) {
+    for (const file of await listStorageFiles(client, 'lead-photos', key)) {
+      if (seenPhotos.has(file.path)) continue;
+      seenPhotos.add(file.path);
+      photos.push(file);
+    }
+    for (const file of await listStorageFiles(client, 'lead-docs', key)) {
+      if (seenDocs.has(file.path)) continue;
+      seenDocs.add(file.path);
+      docs.push(file);
+    }
+  }
+  return { photos, docs };
+}
+
+/** null = Estimates / Measurements own this path — not the Documents tab. */
+function docFolderFromStoragePath(path: string): LeadDocFolder | null {
+  const parts = path.split('/').filter(Boolean);
+  const sub = parts[1];
+  if (!sub) return 'documents';
+  if (sub === 'estimates' || sub === 'measurements') return null;
+  if (sub === 'reports' || sub === 'photo_reports') return 'photo_reports';
+  if (sub === 'invoices' || sub === 'sheets') return 'invoices';
+  if (sub === 'agreements' || sub === 'contracts') return 'contracts';
+  if (sub === 'takeoff') return 'takeoff';
+  if (sub === 'company') return 'company';
+  if (isLeadDocFolder(sub)) return sub;
+  return 'documents';
+}
+
+function mergeLeadPhotos(
+  a: LeadPhoto[] | undefined,
+  b: LeadPhoto[] | undefined
+): LeadPhoto[] {
+  const byPath = new Map<string, LeadPhoto>();
+  const byId = new Map<string, LeadPhoto>();
+  const add = (photo: LeadPhoto) => {
+    if (!photo?.id) return;
+    const path = storagePathFromPublicUrl(photo.url, 'lead-photos');
+    const existing = (path && byPath.get(path)) || byId.get(photo.id);
+    const merged: LeadPhoto = existing
+      ? {
+          ...existing,
+          ...photo,
+          url: photo.url || existing.url,
+          dataUrl:
+            photo.url || existing.url
+              ? undefined
+              : photo.dataUrl || existing.dataUrl,
+          name: photo.name || existing.name,
+        }
+      : photo;
+    if (path) byPath.set(path, merged);
+    byId.set(merged.id, merged);
+  };
+  for (const photo of a || []) add(photo);
+  for (const photo of b || []) add(photo);
+  const seen = new Set<string>();
+  const out: LeadPhoto[] = [];
+  for (const photo of byId.values()) {
+    const key =
+      storagePathFromPublicUrl(photo.url, 'lead-photos') || photo.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(photo);
+  }
+  return out;
+}
+
+function mergeLeadDocuments(
+  a: LeadDocument[] | undefined,
+  b: LeadDocument[] | undefined
+): LeadDocument[] {
+  const byPath = new Map<string, LeadDocument>();
+  const byId = new Map<string, LeadDocument>();
+  const add = (doc: LeadDocument) => {
+    if (!doc?.id) return;
+    const path = storagePathFromPublicUrl(doc.url, 'lead-docs');
+    const existing = (path && byPath.get(path)) || byId.get(doc.id);
+    const merged: LeadDocument = existing
+      ? {
+          ...existing,
+          ...doc,
+          url: doc.url || existing.url,
+          name: doc.name || existing.name,
+          folder: doc.folder || existing.folder,
+          size: doc.size ?? existing.size,
+          mimeType: doc.mimeType || existing.mimeType,
+          createdAtMs: doc.createdAtMs ?? existing.createdAtMs,
+        }
+      : doc;
+    if (path) byPath.set(path, merged);
+    byId.set(merged.id, merged);
+  };
+  for (const doc of a || []) add(doc);
+  for (const doc of b || []) add(doc);
+  const seen = new Set<string>();
+  const out: LeadDocument[] = [];
+  for (const doc of byId.values()) {
+    const key = storagePathFromPublicUrl(doc.url, 'lead-docs') || doc.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(doc);
+  }
+  return out;
+}
+
+function mergePhotoReports(
+  a: PhotoReport[] | undefined,
+  b: PhotoReport[] | undefined
+): PhotoReport[] {
+  const map = new Map<string, PhotoReport>();
+  for (const report of a || []) {
+    if (report?.id) map.set(report.id, report);
+  }
+  for (const report of b || []) {
+    if (!report?.id) continue;
+    const prev = map.get(report.id);
+    map.set(
+      report.id,
+      prev && (prev.items?.length || 0) >= (report.items?.length || 0)
+        ? prev
+        : report
+    );
+  }
+  return [...map.values()];
+}
+
+function leadMediaFingerprint(
+  lead: Pick<Lead, 'photos' | 'documents'>
+): string {
+  const photos = (lead.photos || [])
+    .map((p) => storagePathFromPublicUrl(p.url, 'lead-photos') || p.id)
+    .sort();
+  const documents = (lead.documents || [])
+    .map((d) => storagePathFromPublicUrl(d.url, 'lead-docs') || d.id)
+    .sort();
+  return JSON.stringify({ photos, documents });
+}
+
+function applyStorageMediaToLead(
+  lead: Lead,
+  listed: { photos: ListedStorageFile[]; docs: ListedStorageFile[] },
+  publicPhotoUrl: (path: string) => string,
+  publicDocUrl: (path: string) => string,
+  skipPhotoPaths: Set<string>,
+  skipDocPaths: Set<string>
+): Lead {
+  const folderKeys = new Set(leadStorageFolderKeys(lead));
+  const listedPhotoPaths = new Set(listed.photos.map((f) => f.path));
+  const listedDocPaths = new Set(listed.docs.map((f) => f.path));
+
+  const photoByPath = new Map<string, LeadPhoto>();
+  for (const photo of lead.photos || []) {
+    const path = storagePathFromPublicUrl(photo.url, 'lead-photos');
+    if (path) photoByPath.set(path, photo);
+  }
+  const photos: LeadPhoto[] = [];
+  const usedPhotoIds = new Set<string>();
+  for (const file of listed.photos) {
+    if (skipPhotoPaths.has(file.path)) continue;
+    const existing = photoByPath.get(file.path);
+    const id =
+      existing?.id || file.name.replace(/\.[^.]+$/, '') || file.path;
+    photos.push({
+      id,
+      name: existing?.name || file.name,
+      url: publicPhotoUrl(file.path),
+      createdAt:
+        existing?.createdAt || file.createdAt || new Date().toISOString(),
+    });
+    usedPhotoIds.add(id);
+  }
+  for (const photo of lead.photos || []) {
+    if (usedPhotoIds.has(photo.id)) continue;
+    const path = storagePathFromPublicUrl(photo.url, 'lead-photos');
+    if (!path) {
+      photos.push(photo);
+      continue;
+    }
+    if (skipPhotoPaths.has(path)) continue;
+    const root = path.split('/')[0];
+    if (folderKeys.has(root) && !listedPhotoPaths.has(path)) continue;
+    photos.push(photo);
+    usedPhotoIds.add(photo.id);
+  }
+
+  const docByPath = new Map<string, LeadDocument>();
+  for (const doc of lead.documents || []) {
+    const path = storagePathFromPublicUrl(doc.url, 'lead-docs');
+    if (path) docByPath.set(path, doc);
+  }
+  const documents: LeadDocument[] = [];
+  const usedDocIds = new Set<string>();
+  for (const file of listed.docs) {
+    if (skipDocPaths.has(file.path)) continue;
+    const folder = docFolderFromStoragePath(file.path);
+    if (!folder) continue;
+    const existing = docByPath.get(file.path);
+    const id = existing?.id || file.path;
+    documents.push({
+      id,
+      name: existing?.name || file.name,
+      url: publicDocUrl(file.path),
+      size: existing?.size ?? file.size,
+      mimeType: existing?.mimeType || file.mimeType,
+      createdAt:
+        existing?.createdAt || file.createdAt || new Date().toISOString(),
+      createdAtMs:
+        existing?.createdAtMs ??
+        (file.createdAt ? Date.parse(file.createdAt) : Date.now()),
+      folder: existing?.folder || folder,
+    });
+    usedDocIds.add(id);
+  }
+  for (const doc of lead.documents || []) {
+    if (usedDocIds.has(doc.id)) continue;
+    const path = storagePathFromPublicUrl(doc.url, 'lead-docs');
+    if (!path) {
+      documents.push(doc);
+      continue;
+    }
+    if (skipDocPaths.has(path)) continue;
+    const folder = docFolderFromStoragePath(path);
+    if (folder == null) continue;
+    const root = path.split('/')[0];
+    if (folderKeys.has(root) && !listedDocPaths.has(path)) continue;
+    documents.push(doc);
+    usedDocIds.add(doc.id);
+  }
+
+  return { ...lead, photos, documents };
+}
+
+function invoiceStubsFromLead(lead: Lead): AppInvoice[] {
+  const label =
+    [lead.clientFirstName, lead.clientLastName].filter(Boolean).join(' ') ||
+    lead.jobNumber ||
+    'Lead';
+  return (lead.documents || [])
+    .filter((doc) => inferLeadDocFolder(doc) === 'invoices' && doc.url)
+    .map((doc) => ({
+      id: doc.id,
+      createdAt: doc.createdAt || new Date().toISOString(),
+      title: doc.name.replace(/\.pdf$/i, '') || 'Invoice',
+      entity: 'prowest' as MitigationEntity,
+      rateMode: 'insurance' as const,
+      leadId: lead.id,
+      leadLabel: label,
+      job: lead.jobNumber || '',
+      claimNumber: lead.claimNumber || '',
+      total: 0,
+      fileName: doc.name,
+      url: doc.url,
+    }));
+}
+
+function mergeAppInvoicesFromLead(
+  existing: AppInvoice[],
+  lead: Lead
+): AppInvoice[] {
+  const byUrl = new Map<string, AppInvoice>();
+  const byId = new Map<string, AppInvoice>();
+  for (const inv of existing) {
+    if (inv.id) byId.set(inv.id, inv);
+    if (inv.url) byUrl.set(inv.url, inv);
+  }
+  for (const stub of invoiceStubsFromLead(lead)) {
+    if ((stub.url && byUrl.has(stub.url)) || byId.has(stub.id)) continue;
+    byId.set(stub.id, stub);
+    if (stub.url) byUrl.set(stub.url, stub);
+  }
+  return [...byId.values()];
+}
+
+function trashedMediaPaths(
+  trashItems: AppTrashItem[],
+  lead: Lead
+): { photos: Set<string>; docs: Set<string> } {
+  const photos = new Set<string>();
+  const docs = new Set<string>();
+  const addPhoto = (url?: string) => {
+    const path = storagePathFromPublicUrl(url, 'lead-photos');
+    if (path) photos.add(path);
+  };
+  const addDoc = (url?: string) => {
+    const path = storagePathFromPublicUrl(url, 'lead-docs');
+    if (path) docs.add(path);
+  };
+  for (const item of trashItems) {
+    if (item.kind === 'photo') {
+      if (item.leadId !== lead.id) continue;
+      addPhoto(item.photo?.url);
+      continue;
+    }
+    if (item.kind === 'document' || item.kind === 'measurement') {
+      if (item.leadId !== lead.id) continue;
+      addDoc(item.document?.url);
+    }
+  }
+  for (const item of lead.trash || []) {
+    if (item.kind === 'photo') addPhoto(item.photo?.url);
+    if (item.kind === 'document' || item.kind === 'measurement') {
+      addDoc(item.document?.url);
+    }
+    if (item.kind === 'estimate') addDoc(item.estimate?.pdfUrl);
+  }
+  return { photos, docs };
 }
 
 /**
@@ -4570,6 +5591,12 @@ function mapAppLeadToDb(lead: Lead) {
     // estimates live in `estimates` table; keep a denormalized copy in details if useful
     estimates: lead.estimates || [],
     assignedCrew: lead.assignedCrew || '',
+    orderDraft: (() => {
+      const draft = normalizeOrderDraft(lead.orderDraft);
+      return orderDraftIsEmpty(draft) ? null : draft;
+    })(),
+    humanMeasureOrders: lead.humanMeasureOrders || [],
+    measureDraft: lead.measureDraft || null,
   };
 
   return {
@@ -4826,7 +5853,7 @@ function mapDbLeadToApp(row: Record<string, unknown>): Lead {
     measurementReports: Array.isArray(d.measurementReports)
       ? (d.measurementReports as LeadDocument[])
       : [],
-    trash: Array.isArray(d.trash) ? (d.trash as LeadTrashItem[]) : [],
+    trash: normalizeLeadTrashItems(d.trash),
     takeoff:
       d.takeoff && typeof d.takeoff === 'object'
         ? normalizeTakeoff(d.takeoff)
@@ -4854,10 +5881,286 @@ function mapDbLeadToApp(row: Record<string, unknown>): Lead {
       typeof d.assignedCrew === 'string' && d.assignedCrew.trim()
         ? String(d.assignedCrew).trim()
         : undefined,
+    orderDraft: (() => {
+      const draft = normalizeOrderDraft(d.orderDraft);
+      return orderDraftIsEmpty(draft) ? null : draft;
+    })(),
     date: createdAt
       ? new Date(String(createdAt)).toLocaleDateString()
       : new Date().toLocaleDateString(),
     supabaseId: dbId,
+    updatedAt:
+      typeof row.updated_at === 'string' && row.updated_at
+        ? String(row.updated_at)
+        : typeof d.updatedAt === 'string'
+          ? String(d.updatedAt)
+          : undefined,
+    humanMeasureOrders: normalizeHumanMeasureOrders(d.humanMeasureOrders),
+    measureDraft: normalizeMeasureDraft(d.measureDraft),
+  });
+}
+
+/** Content fingerprint for cloud writes — excludes `updated_at` so timestamps don't loop. */
+function leadPersistFingerprint(lead: Lead): string {
+  const payload = mapAppLeadToDb(lead);
+  const { updated_at: _updatedAt, ...rest } = payload;
+  return JSON.stringify(rest);
+}
+
+function rememberLeadFingerprints(
+  map: Map<string, string>,
+  leads: Lead[]
+) {
+  for (const lead of leads) {
+    map.set(leadFpKey(lead), leadPersistFingerprint(lead));
+    if (lead.supabaseId?.trim()) {
+      map.set(String(lead.id), leadPersistFingerprint(lead));
+    }
+  }
+}
+
+/**
+ * Cloud wins unless this device has unsaved/newer content for that lead.
+ * Photos / docs / photo reports always union — a file on either device stays.
+ */
+function mergeCloudLeads(
+  prev: Lead[],
+  fromDb: Lead[],
+  lastCloudFp: Map<string, string>
+): Lead[] {
+  const prevByCloud = new Map<string, Lead>();
+  const prevById = new Map<number, Lead>();
+  for (const l of prev) {
+    prevById.set(l.id, l);
+    const cloudId = l.supabaseId?.trim();
+    if (cloudId) prevByCloud.set(cloudId, l);
+  }
+  const seen = new Set<number>();
+  const merged = fromDb.map((cloud) => {
+    const prevLead =
+      (cloud.supabaseId?.trim()
+        ? prevByCloud.get(cloud.supabaseId.trim())
+        : undefined) || prevById.get(cloud.id);
+    if (!prevLead) return cloud;
+    seen.add(prevLead.id);
+    const localFp = leadPersistFingerprint(prevLead);
+    const lastFp =
+      lastCloudFp.get(leadFpKey(cloud)) ?? lastCloudFp.get(leadFpKey(prevLead));
+    const localDirty = lastFp != null && localFp !== lastFp;
+    const keepLocal =
+      localDirty && leadTimeMs(prevLead) > leadTimeMs(cloud);
+    const base = keepLocal ? prevLead : cloud;
+    const other = keepLocal ? cloud : prevLead;
+    return {
+      ...base,
+      photos: mergeLeadPhotos(base.photos, other.photos),
+      documents: mergeLeadDocuments(base.documents, other.documents),
+      photoReports: mergePhotoReports(base.photoReports, other.photoReports),
+      humanMeasureOrders: mergeHumanMeasureOrders(
+        base.humanMeasureOrders,
+        other.humanMeasureOrders
+      ),
+      measureDraft: mergeMeasureDraft(
+        prevLead.measureDraft,
+        cloud.measureDraft,
+        keepLocal
+      ),
+      takeoff: mergeLeadTakeoff(prevLead.takeoff, cloud.takeoff, keepLocal),
+      orderDraft: mergeOrderDraft(
+        prevLead.orderDraft,
+        cloud.orderDraft,
+        keepLocal
+      ),
+    };
+  });
+  const localOnly = prev.filter((l) => !seen.has(l.id) && !l.supabaseId);
+  return sanitizeLeads([...merged, ...localOnly]);
+}
+
+function estimateFromCloudRow(
+  r: Record<string, unknown>,
+  claimed: Set<number>
+): Estimate {
+  const rawData = (r.data && typeof r.data === 'object' ? r.data : r) as Partial<Estimate> & {
+    selectedShingle?: string;
+  };
+  const fromData =
+    typeof rawData.id === 'number' && Number.isFinite(rawData.id)
+      ? rawData.id
+      : null;
+  const fromCloud = stableLeadIdFromDb(r.id);
+  let clientId =
+    fromData != null && !claimed.has(fromData) ? fromData : fromCloud;
+  if (claimed.has(clientId)) {
+    clientId = newLeadNumericId();
+    while (claimed.has(clientId)) clientId = newLeadNumericId();
+  }
+  claimed.add(clientId);
+  return {
+    id: clientId,
+    date: String(rawData.date || ''),
+    clientFirstName: String(rawData.clientFirstName || ''),
+    clientLastName: String(rawData.clientLastName || ''),
+    clientAddress: String(rawData.clientAddress || ''),
+    clientCity: String(rawData.clientCity || ''),
+    clientState: String(rawData.clientState || ''),
+    clientZip: String(rawData.clientZip || ''),
+    clientPhone: String(rawData.clientPhone || ''),
+    clientEmail: String(rawData.clientEmail || ''),
+    clientJobNumber: String(rawData.clientJobNumber || ''),
+    squares: String(rawData.squares || ''),
+    layers: String(rawData.layers || ''),
+    waste: String(rawData.waste || ''),
+    pitch: String(rawData.pitch || ''),
+    stories: String(rawData.stories || ''),
+    fasciaLF: String(rawData.fasciaLF || ''),
+    deckingSheets: String(rawData.deckingSheets || ''),
+    deckingOsbSheets: String(rawData.deckingOsbSheets || ''),
+    deckingCdxSheets: String(rawData.deckingCdxSheets || ''),
+    solarPanels: String(rawData.solarPanels || ''),
+    hvacUnits: String(rawData.hvacUnits || ''),
+    skylights: String(rawData.skylights || ''),
+    ridgeVentLF: String(rawData.ridgeVentLF || ''),
+    gutterMode:
+      rawData.gutterMode === 'dr' || rawData.gutterMode === 'rr'
+        ? rawData.gutterMode
+        : 'none',
+    gutterLF: String(rawData.gutterLF || ''),
+    selectedShingle:
+      (rawData.selectedShingle as ShingleType) ||
+      (String(r.material || '') as ShingleType) ||
+      '',
+    cambridgeColor: String(rawData.cambridgeColor || ''),
+    dynastyColor: String(rawData.dynastyColor || ''),
+    armourshakeColor: String(rawData.armourshakeColor || ''),
+    hipRidgeChoice:
+      rawData.hipRidgeChoice === 'standard' ||
+      rawData.hipRidgeChoice === 'high_profile'
+        ? rawData.hipRidgeChoice
+        : '',
+    starterChoice:
+      rawData.starterChoice === 'brand' || rawData.starterChoice === 'armour'
+        ? rawData.starterChoice
+        : '',
+    iceWaterChoice:
+      rawData.iceWaterChoice === 'topshield_defender' ||
+      rawData.iceWaterChoice === 'topshield_sg_ps_max' ||
+      rawData.iceWaterChoice === 'iko_stormshield' ||
+      rawData.iceWaterChoice === 'polyflex_sa_v'
+        ? rawData.iceWaterChoice
+        : '',
+    selectedUnderlayment:
+      (rawData.selectedUnderlayment as Underlayment) || '',
+    mbCapChoice: String(rawData.mbCapChoice || ''),
+    mbBaseChoice: String(rawData.mbBaseChoice || ''),
+    fasciaMode: (rawData.fasciaMode as FasciaMode) || '',
+    deckingMode: (rawData.deckingMode as DeckingMode) || '',
+    fasciaType: (rawData.fasciaType as FasciaType) || '',
+    modifiedBitumenSquares: String(rawData.modifiedBitumenSquares || ''),
+    modifiedBitumenColor: String(rawData.modifiedBitumenColor || ''),
+    dripEdgeColor: String(rawData.dripEdgeColor || ''),
+    notes: String(rawData.notes || ''),
+    total: Number(rawData.total) || 0,
+    negotiatedPrice: Number(rawData.negotiatedPrice) || 0,
+    originalTotalForBuffer: Number(rawData.originalTotalForBuffer) || 0,
+    measurementId: rawData.measurementId,
+    pdfDocumentId: rawData.pdfDocumentId
+      ? String(rawData.pdfDocumentId)
+      : undefined,
+    pdfUrl: rawData.pdfUrl ? String(rawData.pdfUrl) : undefined,
+    pdfName: rawData.pdfName ? String(rawData.pdfName) : undefined,
+    signerName: rawData.signerName ? String(rawData.signerName) : undefined,
+    clientSignatureDataUrl: rawData.clientSignatureDataUrl
+      ? String(rawData.clientSignatureDataUrl)
+      : null,
+    clientSignedAt: rawData.clientSignedAt
+      ? String(rawData.clientSignedAt)
+      : null,
+    supabaseId: r.id != null ? String(r.id) : undefined,
+  };
+}
+
+function attachCloudEstimatesToLeads(
+  leads: Lead[],
+  estRows: Record<string, unknown>[]
+): void {
+  if (estRows.length === 0) return;
+  const byLead: Record<string, Estimate[]> = {};
+  const claimedIdsByLead: Record<string, Set<number>> = {};
+  for (const row of estRows) {
+    const leadKey = row.lead_id != null ? String(row.lead_id) : '';
+    if (!leadKey) continue;
+    if (!claimedIdsByLead[leadKey]) claimedIdsByLead[leadKey] = new Set();
+    const est = estimateFromCloudRow(row, claimedIdsByLead[leadKey]);
+    if (!byLead[leadKey]) byLead[leadKey] = [];
+    byLead[leadKey].push(est);
+  }
+  for (const lead of leads) {
+    const key = lead.supabaseId || String(lead.id);
+    if (!byLead[key]?.length) continue;
+    const trashedIds = new Set<number>();
+    const trashedCloud = new Set<string>();
+    for (const t of lead.trash || []) {
+      if (t.kind !== 'estimate' || !t.estimate) continue;
+      if (Number.isFinite(t.estimate.id)) trashedIds.add(t.estimate.id);
+      if (t.estimate.supabaseId) trashedCloud.add(t.estimate.supabaseId);
+    }
+    const prevById = new Map((lead.estimates || []).map((e) => [e.id, e]));
+    lead.estimates = byLead[key]
+      .filter(
+        (e) =>
+          !trashedIds.has(e.id) &&
+          !(e.supabaseId && trashedCloud.has(e.supabaseId))
+      )
+      .map((e) => {
+        const prev = prevById.get(e.id);
+        return {
+          ...e,
+          pdfDocumentId: e.pdfDocumentId || prev?.pdfDocumentId,
+          pdfUrl: e.pdfUrl || prev?.pdfUrl,
+          pdfName: e.pdfName || prev?.pdfName,
+        };
+      });
+  }
+}
+
+function apiOrderToLeadOrder(o: {
+  id: string;
+  requestId?: string | null;
+  leadId: string | null;
+  status: string;
+  reportUrl: string | null;
+  address: string | null;
+  createdAt: string;
+  failureReason: string | null;
+}): LeadHumanMeasureOrder {
+  return {
+    id: o.id,
+    requestId: o.requestId ?? null,
+    leadId: o.leadId,
+    status: o.status,
+    reportUrl: o.reportUrl,
+    address: o.address,
+    createdAt: o.createdAt,
+    failureReason: o.failureReason,
+  };
+}
+
+function mergeApiOrdersOntoLeads(
+  leads: Lead[],
+  orders: LeadHumanMeasureOrder[]
+): Lead[] {
+  if (orders.length === 0) return leads;
+  return leads.map((lead) => {
+    const ids = new Set(
+      [lead.supabaseId?.trim(), String(lead.id)].filter(Boolean) as string[]
+    );
+    const mine = orders.filter(
+      (o) => o.leadId != null && ids.has(String(o.leadId))
+    );
+    if (mine.length === 0) return lead;
+    const merged = mergeHumanMeasureOrders(lead.humanMeasureOrders, mine);
+    return { ...lead, humanMeasureOrders: merged };
   });
 }
 
@@ -4894,6 +6197,19 @@ export default function SummitApp() {
     null
   );
   const leadSaveGenRef = useRef(0);
+  /** Last cloud-fetched or successfully written content fingerprint per lead. */
+  const leadCloudFpRef = useRef<Map<string, string>>(new Map());
+  const pendingApplyCloudLeadRef = useRef(false);
+  const leadsRefreshInFlightRef = useRef(false);
+  const refreshLeadsFnRef = useRef<
+    (opts?: { applyOpenLead?: boolean }) => Promise<void>
+  >(async () => {});
+  const hydrateLeadMediaFnRef = useRef<(leadId: number) => Promise<void>>(
+    async () => {}
+  );
+  const saveLeadDraftFnRef = useRef<
+    (opts?: { leadId?: number | null; silent?: boolean }) => boolean
+  >(() => false);
   const [leadSaveStatus, setLeadSaveStatus] = useState<
     'saved' | 'saving' | 'error'
   >('saved');
@@ -4980,7 +6296,11 @@ export default function SummitApp() {
   const [notes, setNotes] = useState('');
   const [leadNoteDraft, setLeadNoteDraft] = useState('');
   const [isEditingLead, setIsEditingLead] = useState(false);
+  const isEditingLeadRef = useRef(false);
+  isEditingLeadRef.current = isEditingLead;
   const [profileTab, setProfileTab] = useState<ProfileTab>('overview');
+  const profileTabRef = useRef<ProfileTab>('overview');
+  profileTabRef.current = profileTab;
   /** Where to return after estimator / mitigation / takeoff / pricing */
   const [leadToolReturnTab, setLeadToolReturnTab] =
     useState<ProfileTab>('documents');
@@ -4989,6 +6309,9 @@ export default function SummitApp() {
     null
   );
   const [takeoffForm, setTakeoffForm] = useState<TakeoffSheet>(emptyTakeoff());
+  const takeoffFormRef = useRef(takeoffForm);
+  takeoffFormRef.current = takeoffForm;
+  const takeoffBaselineRef = useRef(takeoffFingerprint(emptyTakeoff()));
   /** Labor step — job packet lead (used if Orders is opened without a fixed lead) */
   const [laborLeadId, setLaborLeadId] = useState<number | null>(null);
   const [laborLeadSearch, setLaborLeadSearch] = useState('');
@@ -5005,6 +6328,19 @@ export default function SummitApp() {
   const [profileOrderFilledFrom, setProfileOrderFilledFrom] = useState<
     string | null
   >(null);
+  const orderFormRef = useRef<LeadOrderDraft>(emptyOrderDraft());
+  const orderDraftBaselineRef = useRef(orderDraftFingerprint(emptyOrderDraft()));
+  const orderFormLeadIdRef = useRef<number | null>(null);
+  const [leadMaterialOrders, setLeadMaterialOrders] = useState<
+    SubmittedMaterialOrder[]
+  >([]);
+  orderFormRef.current = {
+    orderType: profileOrderType,
+    orderLines: profileOrderLines,
+    coverageInputs: profileOrderCoverageInputs,
+    step: profileOrdersStep,
+    filledFrom: profileOrderFilledFrom,
+  };
   /** Company Pricing workspace: Labor | Materials */
   const [companyPricingPane, setCompanyPricingPane] = useState<
     'labor' | 'materials'
@@ -5041,6 +6377,8 @@ export default function SummitApp() {
     | 'mitigation_company'
     | 'emergency'
   >(null);
+  const systemDocWorkspaceRef = useRef(systemDocWorkspace);
+  systemDocWorkspaceRef.current = systemDocWorkspace;
   const [emergencyDraft, setEmergencyDraft] =
     useState<EmergencyAgreementDraft | null>(null);
   const [emergencyPreview, setEmergencyPreview] = useState(false);
@@ -5200,7 +6538,14 @@ export default function SummitApp() {
 
   // Leads management
   const [leads, setLeads] = useState<Lead[]>([]);
+  const leadsRef = useRef<Lead[]>([]);
+  leadsRef.current = leads;
   const [trash, setTrash] = useState<AppTrashItem[]>([]);
+  const trashRef = useRef<AppTrashItem[]>([]);
+  trashRef.current = trash;
+  const deletedLeadsRef = useRef<Array<{ lead: Lead; deletedAt: string }>>(
+    []
+  );
   const [leadsView, setLeadsView] = useState<'active' | 'trash'>('active');
   /** Live sell rates from Supabase `price_sheet` (item_key → price, or item_key__region) */
   const [priceSheet, setPriceSheet] = useState<Record<string, number>>({});
@@ -5232,6 +6577,8 @@ export default function SummitApp() {
     null
   );
   const [appInvoices, setAppInvoices] = useState<AppInvoice[]>([]);
+  const appInvoicesRef = useRef<AppInvoice[]>([]);
+  appInvoicesRef.current = appInvoices;
   /** Manual override for pricing region (null = derive from job address) */
   const [pricingRegionOverride] = useState<PricingRegion | null>(null);
   /** When set, Jobs board shows only this pipeline stage (shared with Home cards). */
@@ -5239,6 +6586,8 @@ export default function SummitApp() {
     null
   );
   const [currentLeadId, setCurrentLeadId] = useState<number | null>(null);
+  const currentLeadIdRef = useRef<number | null>(null);
+  currentLeadIdRef.current = currentLeadId;
   const [leadCategory, setLeadCategory] = useState<PipelineStage>('Lead');
   const [headerSearch, setHeaderSearch] = useState('');
   const [searchPins, setSearchPins] = useState<CanvassPin[]>([]);
@@ -5286,6 +6635,8 @@ export default function SummitApp() {
   );
   /** Company logo flattened onto white for PDFs (jsPDF often paints PNG alpha as black). */
   const companyLogoPdfRef = useRef('');
+  const settingsProfilePhotoInputRef = useRef<HTMLInputElement>(null);
+  const settingsCompanyLogoInputRef = useRef<HTMLInputElement>(null);
   const [themePref, setThemePref] = useState<ThemePreference>('auto');
   const [, setThemeMode] = useState<ThemeMode>('day');
   /** Google Calendar connection (from /api/google/calendar/status) */
@@ -5383,9 +6734,25 @@ export default function SummitApp() {
   const calendarCloudSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
+  /** True after a successful cloud pull this session — Google persist may write cloud. */
+  const calendarCloudFreshRef = useRef(false);
+  const calendarCloudSaveGenRef = useRef(0);
+  const calendarDirtyIdsRef = useRef<Set<string>>(new Set());
+  const calendarDeletedIdsRef = useRef<Set<string>>(new Set());
+  const calendarHydrateInFlightRef = useRef<Promise<void> | null>(null);
   const tasksCloudSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
+  /** True after a successful cloud pull this session — Google persist may write cloud. */
+  const tasksCloudFreshRef = useRef(false);
+  const tasksCloudSaveGenRef = useRef(0);
+  const tasksDirtyIdsRef = useRef<Set<string>>(new Set());
+  const tasksDeletedIdsRef = useRef<Set<string>>(new Set());
+  const taskListsDirtyIdsRef = useRef<Set<string>>(new Set());
+  const taskListsDeletedIdsRef = useRef<Set<string>>(new Set());
+  const tasksActiveListDirtyRef = useRef(false);
+  const tasksHydrateInFlightRef = useRef<Promise<void> | null>(null);
+  const tasksGooglePullGenRef = useRef(0);
   /** Manual Summit calendar events (localStorage + optional Google sync) */
   const [calendarEvents, setCalendarEvents] = useState<SummitCalendarEvent[]>(
     []
@@ -5455,6 +6822,7 @@ export default function SummitApp() {
   const phoneNavGestureRef = useRef(false);
   const leadPagerRef = useRef<HTMLDivElement>(null);
   const pipelineBoardPagerRef = useRef<HTMLDivElement>(null);
+  const phonePagerMovedRef = useRef(false);
   const phonePagerStateRef = useRef({
     isEditingLead: false,
     currentLeadId: null as number | null,
@@ -5517,6 +6885,7 @@ export default function SummitApp() {
     pricingRegionOverride || addressPricingRegion;
 
   const persistAppInvoices = (next: AppInvoice[]) => {
+    appInvoicesRef.current = next;
     setAppInvoices(next);
     try {
       localStorage.setItem('summitAppInvoices', JSON.stringify(next));
@@ -5525,50 +6894,16 @@ export default function SummitApp() {
     }
   };
 
-  const scheduleCloudCalendarSave = (events: SummitCalendarEvent[]) => {
-    if (!supabaseEnabled || !supabase || !signedInRef.current) return;
-    if (calendarCloudSaveTimer.current) {
-      clearTimeout(calendarCloudSaveTimer.current);
-    }
-    calendarCloudSaveTimer.current = setTimeout(() => {
-      void saveCloudCalendarEvents(supabase, events).catch((err) => {
-        console.error('Calendar cloud save failed:', err);
-      });
-    }, 800);
-  };
-
-  const scheduleCloudTasksSave = (
-    nextTasks: SummitTask[],
-    nextLists: SummitTaskList[],
-    nextActiveId: string
-  ) => {
-    if (!supabaseEnabled || !supabase || !signedInRef.current) return;
-    if (tasksCloudSaveTimer.current) {
-      clearTimeout(tasksCloudSaveTimer.current);
-    }
-    tasksCloudSaveTimer.current = setTimeout(() => {
-      void saveCloudTasksBundle(supabase, {
-        tasks: nextTasks,
-        lists: nextLists,
-        activeListId: nextActiveId,
-      }).catch((err) => {
-        console.error('Tasks cloud save failed:', err);
-      });
-    }, 800);
-  };
-
-  const persistTasks = (next: SummitTask[]) => {
-    const safe = Array.isArray(next) ? next : [];
-    setTasks(safe);
+  const readCachedCalendarEvents = (): SummitCalendarEvent[] => {
     try {
-      localStorage.setItem(SUMMIT_TASKS_KEY, JSON.stringify(safe));
+      const raw = localStorage.getItem(SUMMIT_CALENDAR_EVENTS_KEY);
+      return normalizeStoredCalendarEvents(raw ? JSON.parse(raw) : []);
     } catch {
-      /* ignore */
+      return Array.isArray(calendarEvents) ? calendarEvents : [];
     }
-    scheduleCloudTasksSave(safe, taskLists, activeTaskListId);
   };
 
-  const persistCalendarEvents = (next: SummitCalendarEvent[]) => {
+  const writeCalendarEventsCache = (next: SummitCalendarEvent[]) => {
     const safe = Array.isArray(next) ? next : [];
     setCalendarEvents(safe);
     try {
@@ -5576,10 +6911,89 @@ export default function SummitApp() {
     } catch {
       /* ignore */
     }
-    scheduleCloudCalendarSave(safe);
   };
 
-  const persistTaskLists = (next: SummitTaskList[]) => {
+  const scheduleCloudCalendarSave = (events: SummitCalendarEvent[]) => {
+    if (!supabaseEnabled || !supabase || !signedInRef.current) return;
+    const gen = calendarCloudSaveGenRef.current;
+    if (calendarCloudSaveTimer.current) {
+      clearTimeout(calendarCloudSaveTimer.current);
+    }
+    calendarCloudSaveTimer.current = setTimeout(() => {
+      calendarCloudSaveTimer.current = null;
+      void saveCloudCalendarEvents(supabase, events)
+        .then(() => {
+          if (gen !== calendarCloudSaveGenRef.current) return;
+          calendarDirtyIdsRef.current.clear();
+          calendarDeletedIdsRef.current.clear();
+          calendarCloudFreshRef.current = true;
+        })
+        .catch((err) => {
+          console.error('Calendar cloud save failed:', err);
+        });
+    }, 800);
+  };
+
+  const flushPendingCalendarCloudSave = async () => {
+    if (!supabaseEnabled || !supabase || !signedInRef.current) return;
+    if (!calendarCloudSaveTimer.current) return;
+    clearTimeout(calendarCloudSaveTimer.current);
+    calendarCloudSaveTimer.current = null;
+    const gen = calendarCloudSaveGenRef.current;
+    const local = readCachedCalendarEvents();
+    try {
+      await saveCloudCalendarEvents(supabase, local);
+      if (gen !== calendarCloudSaveGenRef.current) return;
+      calendarDirtyIdsRef.current.clear();
+      calendarDeletedIdsRef.current.clear();
+      calendarCloudFreshRef.current = true;
+    } catch (err) {
+      console.error('Calendar cloud flush failed:', err);
+    }
+  };
+
+  const readCachedTasks = (): SummitTask[] => {
+    try {
+      const raw = localStorage.getItem(SUMMIT_TASKS_KEY);
+      return normalizeStoredTasks(raw ? JSON.parse(raw) : []);
+    } catch {
+      return Array.isArray(tasks) ? tasks : [];
+    }
+  };
+
+  const readCachedTaskLists = (): SummitTaskList[] => {
+    try {
+      const raw = localStorage.getItem(SUMMIT_TASK_LISTS_KEY);
+      return normalizeStoredTaskLists(raw ? JSON.parse(raw) : null);
+    } catch {
+      return Array.isArray(taskLists) && taskLists.length > 0
+        ? taskLists
+        : [createDefaultTaskList()];
+    }
+  };
+
+  const readCachedActiveTaskListId = (): string => {
+    try {
+      const saved = localStorage.getItem(SUMMIT_ACTIVE_TASK_LIST_KEY);
+      const lists = readCachedTaskLists();
+      if (saved && lists.some((l) => l.id === saved)) return saved;
+      return lists[0]?.id || DEFAULT_TASK_LIST_ID;
+    } catch {
+      return activeTaskListId || DEFAULT_TASK_LIST_ID;
+    }
+  };
+
+  const writeTasksCache = (next: SummitTask[]) => {
+    const safe = Array.isArray(next) ? next : [];
+    setTasks(safe);
+    try {
+      localStorage.setItem(SUMMIT_TASKS_KEY, JSON.stringify(safe));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const writeTaskListsCache = (next: SummitTaskList[]) => {
     const safe =
       Array.isArray(next) && next.length > 0
         ? next
@@ -5590,11 +7004,296 @@ export default function SummitApp() {
     } catch {
       /* ignore */
     }
-    scheduleCloudTasksSave(
-      Array.isArray(tasks) ? tasks : [],
-      safe,
-      activeTaskListId
-    );
+  };
+
+  const writeActiveTaskListIdCache = (listId: string) => {
+    setActiveTaskListId(listId);
+    try {
+      localStorage.setItem(SUMMIT_ACTIVE_TASK_LIST_KEY, listId);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const readTasksBundleFromCache = () => ({
+    tasks: readCachedTasks(),
+    lists: readCachedTaskLists(),
+    activeListId: readCachedActiveTaskListId(),
+  });
+
+  const scheduleCloudTasksSave = () => {
+    if (!supabaseEnabled || !supabase || !signedInRef.current) return;
+    const gen = tasksCloudSaveGenRef.current;
+    if (tasksCloudSaveTimer.current) {
+      clearTimeout(tasksCloudSaveTimer.current);
+    }
+    tasksCloudSaveTimer.current = setTimeout(() => {
+      tasksCloudSaveTimer.current = null;
+      const bundle = readTasksBundleFromCache();
+      void saveCloudTasksBundle(supabase, bundle)
+        .then(() => {
+          if (gen !== tasksCloudSaveGenRef.current) return;
+          tasksDirtyIdsRef.current.clear();
+          tasksDeletedIdsRef.current.clear();
+          taskListsDirtyIdsRef.current.clear();
+          taskListsDeletedIdsRef.current.clear();
+          tasksActiveListDirtyRef.current = false;
+          tasksCloudFreshRef.current = true;
+        })
+        .catch((err) => {
+          console.error('Tasks cloud save failed:', err);
+        });
+    }, 800);
+  };
+
+  const flushPendingTasksCloudSave = async () => {
+    if (!supabaseEnabled || !supabase || !signedInRef.current) return;
+    if (!tasksCloudSaveTimer.current) return;
+    clearTimeout(tasksCloudSaveTimer.current);
+    tasksCloudSaveTimer.current = null;
+    const gen = tasksCloudSaveGenRef.current;
+    try {
+      await saveCloudTasksBundle(supabase, readTasksBundleFromCache());
+      if (gen !== tasksCloudSaveGenRef.current) return;
+      tasksDirtyIdsRef.current.clear();
+      tasksDeletedIdsRef.current.clear();
+      taskListsDirtyIdsRef.current.clear();
+      taskListsDeletedIdsRef.current.clear();
+      tasksActiveListDirtyRef.current = false;
+      tasksCloudFreshRef.current = true;
+    } catch (err) {
+      console.error('Tasks cloud flush failed:', err);
+    }
+  };
+
+  const persistTasks = (
+    next: SummitTask[],
+    opts?: { syncCloud?: boolean }
+  ) => {
+    const safe = Array.isArray(next) ? next : [];
+    if (opts?.syncCloud !== false) {
+      tasksCloudSaveGenRef.current += 1;
+      const prev = readCachedTasks();
+      const prevById = new Map(prev.map((t) => [t.id, t]));
+      const nextIds = new Set(safe.map((t) => t.id));
+      for (const t of prev) {
+        if (!nextIds.has(t.id)) tasksDeletedIdsRef.current.add(t.id);
+      }
+      for (const t of safe) {
+        tasksDeletedIdsRef.current.delete(t.id);
+        const old = prevById.get(t.id);
+        if (!old || old.updatedAt !== t.updatedAt) {
+          tasksDirtyIdsRef.current.add(t.id);
+        }
+      }
+    }
+    writeTasksCache(safe);
+    if (opts?.syncCloud !== false) {
+      scheduleCloudTasksSave();
+    }
+  };
+
+  const persistCalendarEvents = (
+    next: SummitCalendarEvent[],
+    opts?: { syncCloud?: boolean }
+  ) => {
+    const safe = Array.isArray(next) ? next : [];
+    const prev = readCachedCalendarEvents();
+    const nextIds = new Set(safe.map((e) => e.id));
+    if (opts?.syncCloud !== false) {
+      calendarCloudSaveGenRef.current += 1;
+      for (const e of prev) {
+        if (!nextIds.has(e.id)) calendarDeletedIdsRef.current.add(e.id);
+      }
+      for (const e of safe) {
+        calendarDeletedIdsRef.current.delete(e.id);
+        calendarDirtyIdsRef.current.add(e.id);
+      }
+    }
+    writeCalendarEventsCache(safe);
+    if (opts?.syncCloud !== false) {
+      scheduleCloudCalendarSave(safe);
+    }
+  };
+
+  const hydrateCalendarFromCloud = async () => {
+    if (!supabaseEnabled || !supabase || !signedInRef.current) return;
+    if (calendarHydrateInFlightRef.current) {
+      await calendarHydrateInFlightRef.current;
+      return;
+    }
+    calendarHydrateInFlightRef.current = (async () => {
+      try {
+        await flushPendingCalendarCloudSave();
+        const snapshot = await loadCloudCalendarEvents(supabase);
+        const local = readCachedCalendarEvents();
+        let googleLinked = false;
+        try {
+          const { hasBrowserGcalToken, isBrowserGcalLinked } = await import(
+            '@/lib/gcal-browser'
+          );
+          googleLinked = hasBrowserGcalToken() || isBrowserGcalLinked();
+        } catch {
+          googleLinked = false;
+        }
+
+        const uninitialized =
+          !snapshot ||
+          (snapshot.events.length === 0 && !snapshot.updatedAt);
+
+        if (uninitialized) {
+          if (local.length) {
+            await saveCloudCalendarEvents(supabase, local);
+          }
+          calendarCloudFreshRef.current = true;
+          return;
+        }
+
+        const normalized = normalizeStoredCalendarEvents(snapshot.events);
+        calendarCloudHydrateGenRef.current += 1;
+        const merged = mergeCloudCalendarSnapshot(local, normalized, {
+          cloudUpdatedAt: snapshot.updatedAt,
+          googleLinked,
+          googlePullRan: calendarGooglePullGenRef.current > 0,
+          retainLocalIds: calendarDirtyIdsRef.current,
+          deletedIds: calendarDeletedIdsRef.current,
+        });
+        writeCalendarEventsCache(merged.events);
+        calendarCloudFreshRef.current = true;
+        if (merged.keptLocalNewer) {
+          persistCalendarEvents(merged.events);
+        }
+      } catch (err) {
+        console.error('Calendar cloud hydrate failed:', err);
+      }
+    })();
+    try {
+      await calendarHydrateInFlightRef.current;
+    } finally {
+      calendarHydrateInFlightRef.current = null;
+    }
+  };
+
+  const persistTaskLists = (
+    next: SummitTaskList[],
+    opts?: { syncCloud?: boolean }
+  ) => {
+    const safe =
+      Array.isArray(next) && next.length > 0
+        ? next
+        : [createDefaultTaskList()];
+    if (opts?.syncCloud !== false) {
+      tasksCloudSaveGenRef.current += 1;
+      const prev = readCachedTaskLists();
+      const prevById = new Map(prev.map((l) => [l.id, l]));
+      const nextIds = new Set(safe.map((l) => l.id));
+      for (const l of prev) {
+        if (!nextIds.has(l.id)) taskListsDeletedIdsRef.current.add(l.id);
+      }
+      for (const l of safe) {
+        taskListsDeletedIdsRef.current.delete(l.id);
+        const old = prevById.get(l.id);
+        if (!old || old.updatedAt !== l.updatedAt || old.title !== l.title) {
+          taskListsDirtyIdsRef.current.add(l.id);
+        }
+      }
+    }
+    writeTaskListsCache(safe);
+    if (opts?.syncCloud !== false) {
+      scheduleCloudTasksSave();
+    }
+  };
+
+  const persistActiveTaskListId = (
+    listId: string,
+    opts?: { syncCloud?: boolean }
+  ) => {
+    if (opts?.syncCloud !== false) {
+      tasksCloudSaveGenRef.current += 1;
+      tasksActiveListDirtyRef.current = true;
+    }
+    writeActiveTaskListIdCache(listId);
+    if (opts?.syncCloud !== false) {
+      scheduleCloudTasksSave();
+    }
+  };
+
+  const hydrateTasksFromCloud = async () => {
+    if (!supabaseEnabled || !supabase || !signedInRef.current) return;
+    if (tasksHydrateInFlightRef.current) {
+      await tasksHydrateInFlightRef.current;
+      return;
+    }
+    tasksHydrateInFlightRef.current = (async () => {
+      try {
+        await flushPendingTasksCloudSave();
+        const snapshot = await loadCloudTasksBundle(supabase);
+        const localTasks = readCachedTasks();
+        const localLists = readCachedTaskLists();
+        const localActive = readCachedActiveTaskListId();
+        let googleLinked = false;
+        try {
+          const { hasBrowserGcalToken, isBrowserGcalLinked } = await import(
+            '@/lib/gcal-browser'
+          );
+          googleLinked = hasBrowserGcalToken() || isBrowserGcalLinked();
+        } catch {
+          googleLinked = false;
+        }
+
+        const uninitialized =
+          !snapshot ||
+          (!snapshot.updatedAt &&
+            snapshot.tasks.length === 0 &&
+            snapshot.lists.length === 0);
+
+        if (uninitialized) {
+          if (localTasks.length || localLists.length) {
+            await saveCloudTasksBundle(supabase, {
+              tasks: localTasks,
+              lists: localLists,
+              activeListId: localActive,
+            });
+          }
+          tasksCloudFreshRef.current = true;
+          return;
+        }
+
+        const merged = mergeCloudTasksSnapshot(
+          localTasks,
+          normalizeStoredTasks(snapshot.tasks),
+          localLists,
+          normalizeStoredTaskLists(snapshot.lists),
+          {
+            cloudUpdatedAt: snapshot.updatedAt,
+            googleLinked,
+            googlePullRan: tasksGooglePullGenRef.current > 0,
+            retainLocalTaskIds: tasksDirtyIdsRef.current,
+            deletedTaskIds: tasksDeletedIdsRef.current,
+            retainLocalListIds: taskListsDirtyIdsRef.current,
+            deletedListIds: taskListsDeletedIdsRef.current,
+            localActiveListId: localActive,
+            cloudActiveListId: snapshot.activeListId,
+            retainActiveListId: tasksActiveListDirtyRef.current,
+          }
+        );
+        writeTasksCache(merged.tasks);
+        writeTaskListsCache(merged.lists);
+        writeActiveTaskListIdCache(merged.activeListId);
+        tasksCloudFreshRef.current = true;
+        if (merged.keptLocalNewer) {
+          tasksCloudSaveGenRef.current += 1;
+          scheduleCloudTasksSave();
+        }
+      } catch (err) {
+        console.error('Tasks cloud hydrate failed:', err);
+      }
+    })();
+    try {
+      await tasksHydrateInFlightRef.current;
+    } finally {
+      tasksHydrateInFlightRef.current = null;
+    }
   };
 
   /** Never let Google events state become a non-array (crashes Calendar render). */
@@ -5617,15 +7316,6 @@ export default function SummitApp() {
     setGoogleCalendarEvents(
       normalizeGoogleCalendarEventsList(next) as typeof googleCalendarEvents
     );
-  };
-
-  const persistActiveTaskListId = (listId: string) => {
-    setActiveTaskListId(listId);
-    try {
-      localStorage.setItem(SUMMIT_ACTIVE_TASK_LIST_KEY, listId);
-    } catch {
-      /* ignore */
-    }
   };
 
   const safeTaskLists =
@@ -6080,15 +7770,209 @@ export default function SummitApp() {
     }
   }, []);
 
-  // Poll Instant Roofer human orders while on Measurements (field notification path)
+  // Poll Instant Roofer + cloud lead while on Measurements so overlay / Human
+  // Certified / saved reports follow the lead onto every device.
   useEffect(() => {
     if (!isEditingLead || profileTab !== 'measurements' || !currentLeadId) return;
     void refreshHumanOrders(currentLeadId);
+    void refreshLeadsFromCloud();
     const id = window.setInterval(() => {
       void refreshHumanOrders(currentLeadId);
-    }, 30000);
+      void refreshLeadsFromCloud();
+    }, 8000);
     return () => window.clearInterval(id);
   }, [isEditingLead, profileTab, currentLeadId]);
+
+  // Photos / Documents: Storage is source of truth. Refresh cloud + files
+  // when opening the tab. App resume is handled with the global pull.
+  useEffect(() => {
+    if (!isEditingLead || currentLeadId == null) return;
+    if (profileTab !== 'photos' && profileTab !== 'documents') return;
+    void refreshLeadsFnRef.current({ applyOpenLead: true });
+    void hydrateLeadMediaFnRef.current(currentLeadId);
+  }, [isEditingLead, profileTab, currentLeadId]);
+
+  // Takeoff on a lead is one system. Cloud (`lead.takeoff`) is source of
+  // truth — refresh when opening the sheet on that lead and when the app
+  // comes back. In-progress keystrokes stay until they autosave.
+  useEffect(() => {
+    const onLeadTakeoff =
+      currentLeadId != null &&
+      (systemDocWorkspace === 'takeoff' || profileTab === 'takeoff');
+    if (!onLeadTakeoff) return;
+    if (systemDocWorkspace === 'takeoff' && systemDocOrigin === 'hub') return;
+
+    let cancelled = false;
+    const pull = async () => {
+      await refreshLeadsFnRef.current();
+      if (cancelled) return;
+      if (
+        takeoffFingerprint(takeoffFormRef.current) !==
+        takeoffBaselineRef.current
+      ) {
+        return;
+      }
+      const lead = leadsRef.current.find((l) => l.id === currentLeadId);
+      if (!lead) return;
+      skipLeadAutosaveRef.current = true;
+      const sheet = takeoffFromLead(lead);
+      setTakeoffForm(sheet);
+      takeoffFormRef.current = sheet;
+      takeoffBaselineRef.current = takeoffFingerprint(sheet);
+    };
+    void pull();
+
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void pull();
+    };
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) void pull();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('pageshow', onPageShow);
+    window.addEventListener('focus', onVis);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener('focus', onVis);
+    };
+  }, [systemDocWorkspace, systemDocOrigin, profileTab, currentLeadId]);
+
+  // After any lead refresh, paint cloud takeoff onto the open sheet.
+  useEffect(() => {
+    if (currentLeadId == null) return;
+    if (systemDocWorkspace !== 'takeoff' && profileTab !== 'takeoff') return;
+    if (systemDocWorkspace === 'takeoff' && systemDocOrigin === 'hub') return;
+    if (
+      takeoffFingerprint(takeoffFormRef.current) !== takeoffBaselineRef.current
+    ) {
+      return;
+    }
+    const lead = leads.find((l) => l.id === currentLeadId);
+    if (!lead) return;
+    const sheet = takeoffFromLead(lead);
+    if (takeoffFingerprint(sheet) === takeoffFingerprint(takeoffFormRef.current)) {
+      return;
+    }
+    skipLeadAutosaveRef.current = true;
+    setTakeoffForm(sheet);
+    takeoffFormRef.current = sheet;
+    takeoffBaselineRef.current = takeoffFingerprint(sheet);
+  }, [leads, currentLeadId, systemDocWorkspace, systemDocOrigin, profileTab]);
+
+  const paintLeadOrderDraft = (lead: Lead) => {
+    const draft = orderDraftFromLead(lead);
+    skipLeadAutosaveRef.current = true;
+    setProfileOrderType(draft.orderType);
+    setProfileOrderLines(draft.orderLines);
+    setProfileOrderCoverageInputs(draft.coverageInputs);
+    setProfileOrdersStep(
+      draft.orderType && draft.step === 'labor' ? 'labor' : 'material'
+    );
+    setProfileOrderFilledFrom(draft.filledFrom);
+    orderFormRef.current = draft;
+    orderDraftBaselineRef.current = orderDraftFingerprint(draft);
+    orderFormLeadIdRef.current = lead.id;
+  };
+
+  const loadLeadMaterialOrders = async (
+    lead: Lead | null | undefined
+  ): Promise<SubmittedMaterialOrder[]> => {
+    const cloudId = lead?.supabaseId?.trim();
+    if (!cloudId || !supabaseEnabled || !supabase) return [];
+    return fetchMaterialOrdersForLead(supabase, cloudId);
+  };
+
+  // Material + labor on a lead are one system. Cloud (`lead.orderDraft` /
+  // `material_orders`) is source of truth — refresh when opening Orders on
+  // that lead and when the app comes back. In-progress keystrokes stay until
+  // they autosave.
+  useEffect(() => {
+    if (currentLeadId == null || profileTab !== 'orders') return;
+
+    let cancelled = false;
+    const pull = async () => {
+      await refreshLeadsFnRef.current();
+      if (cancelled) return;
+      const lead = leadsRef.current.find((l) => l.id === currentLeadId);
+      if (!lead) return;
+      const dirty =
+        orderDraftFingerprint(orderFormRef.current) !==
+        orderDraftBaselineRef.current;
+      if (!dirty) {
+        paintLeadOrderDraft(lead);
+      }
+      const rows = await loadLeadMaterialOrders(lead);
+      if (cancelled || currentLeadIdRef.current !== lead.id) return;
+      setLeadMaterialOrders(rows);
+    };
+    void pull();
+
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void pull();
+    };
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) void pull();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('pageshow', onPageShow);
+    window.addEventListener('focus', onVis);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener('focus', onVis);
+    };
+    // paintLeadOrderDraft / loadLeadMaterialOrders close over current render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileTab, currentLeadId, supabase, supabaseEnabled]);
+
+  // After any lead refresh, paint cloud order draft onto the open Orders tab.
+  useEffect(() => {
+    if (currentLeadId == null || profileTab !== 'orders') return;
+    if (
+      orderDraftFingerprint(orderFormRef.current) !==
+      orderDraftBaselineRef.current
+    ) {
+      return;
+    }
+    const lead = leads.find((l) => l.id === currentLeadId);
+    if (!lead) return;
+    const incoming = orderDraftFromLead(lead);
+    if (
+      orderDraftFingerprint(incoming) ===
+      orderDraftFingerprint(orderFormRef.current)
+    ) {
+      return;
+    }
+    paintLeadOrderDraft(lead);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads, currentLeadId, profileTab]);
+
+  useEffect(() => {
+    if (!isEditingLead || currentLeadId == null) return;
+    if (!showTracer && tracePoints.length === 0 && draftSections.length === 0) {
+      return;
+    }
+    if (skipLeadAutosaveRef.current) return;
+    const t = window.setTimeout(() => {
+      saveLeadDraft({ silent: true });
+    }, 800);
+    return () => window.clearTimeout(t);
+  }, [
+    isEditingLead,
+    currentLeadId,
+    showTracer,
+    tracePoints,
+    draftSections,
+    measurePitch,
+    measureWaste,
+    measureLabel,
+    mapCenter,
+    selectedMeasurementId,
+    solarMeasuring,
+  ]);
 
   useEffect(() => {
     try {
@@ -6150,18 +8034,21 @@ export default function SummitApp() {
       }
     }
     if (id === 'takeoff') {
-      if (origin === 'hub' || opts?.blank) {
-        setTakeoffForm(emptyTakeoff());
+      skipLeadAutosaveRef.current = true;
+      if (origin === 'hub') {
+        const blank = emptyTakeoff();
+        setTakeoffForm(blank);
+        takeoffFormRef.current = blank;
+        takeoffBaselineRef.current = takeoffFingerprint(blank);
       } else {
         const lead =
           currentLeadId != null
             ? leads.find((l) => l.id === currentLeadId)
             : null;
-        setTakeoffForm(
-          lead?.takeoff && typeof lead.takeoff === 'object'
-            ? normalizeTakeoff(lead.takeoff)
-            : emptyTakeoff()
-        );
+        const sheet = opts?.blank ? emptyTakeoff() : takeoffFromLead(lead);
+        setTakeoffForm(sheet);
+        takeoffFormRef.current = sheet;
+        takeoffBaselineRef.current = takeoffFingerprint(sheet);
       }
       setTakeoffAssignOpen(false);
       setTakeoffAssignSearch('');
@@ -6976,11 +8863,15 @@ export default function SummitApp() {
         folder: agreementFolder,
       };
       nextDocs = prependLeadDocuments(nextDocs, [docEntry], agreementFolder);
-      const updated = leads.map((l) =>
-        l.id === leadIdAtSave ? { ...l, documents: nextDocs } : l
+      const updated = leadsRef.current.map((l) =>
+        l.id === leadIdAtSave
+          ? { ...l, documents: mergeLeadDocuments(nextDocs, l.documents) }
+          : l
       );
       persistLeads(updated);
-      if (invoiceIndex) persistAppInvoices([invoiceIndex, ...appInvoices]);
+      if (invoiceIndex) {
+        persistAppInvoices([invoiceIndex, ...appInvoicesRef.current]);
+      }
       if (leadIdAtSave === currentLeadId) {
         setDocFolderView(agreementFolder);
       }
@@ -7755,14 +9646,17 @@ export default function SummitApp() {
             createdAtMs: Date.now(),
             folder: saveFolder,
           };
-          const updated = leads.map((l) =>
+          const updated = leadsRef.current.map((l) =>
             l.id === leadIdAtSave
               ? {
                   ...l,
-                  documents: prependLeadDocuments(
-                    l.documents,
-                    [docEntry],
-                    saveFolder
+                  documents: mergeLeadDocuments(
+                    prependLeadDocuments(
+                      l.documents,
+                      [docEntry],
+                      saveFolder
+                    ),
+                    l.documents
                   ),
                 }
               : l
@@ -7785,7 +9679,7 @@ export default function SummitApp() {
             fileName,
             url: durableUrl,
           };
-          persistAppInvoices([inv, ...appInvoices]);
+          persistAppInvoices([inv, ...appInvoicesRef.current]);
           showToast('Saved to lead Documents + Invoices');
 
           exitLeadDocumentWorkspace({ returnTab: 'documents' });
@@ -8481,243 +10375,35 @@ export default function SummitApp() {
         const lists = normalizeStoredTaskLists(
           savedLists ? JSON.parse(savedLists) : null
         );
-        persistTaskLists(lists);
+        writeTaskListsCache(lists);
         const savedActive = localStorage.getItem(SUMMIT_ACTIVE_TASK_LIST_KEY);
         const activeId =
           savedActive && lists.some((l) => l.id === savedActive)
             ? savedActive
             : lists[0]?.id || DEFAULT_TASK_LIST_ID;
-        persistActiveTaskListId(activeId);
+        writeActiveTaskListIdCache(activeId);
         const savedTasks = localStorage.getItem(SUMMIT_TASKS_KEY);
         if (savedTasks) {
-          persistTasks(normalizeStoredTasks(JSON.parse(savedTasks)));
+          writeTasksCache(normalizeStoredTasks(JSON.parse(savedTasks)));
         }
         const savedCalEvents = localStorage.getItem(SUMMIT_CALENDAR_EVENTS_KEY);
         if (savedCalEvents) {
-          persistCalendarEvents(
+          writeCalendarEventsCache(
             normalizeStoredCalendarEvents(JSON.parse(savedCalEvents))
           );
         }
         setCalendarViewMode(readStoredCalendarView());
 
-        // Cloud backup for calendar + tasks (merge over local when present)
+        // Cloud is source of truth — never write this device's cache until after pull.
         if (supabaseEnabled && supabase) {
           void (async () => {
             await authReady;
             if (!signedInRef.current) return;
             try {
-              const [cloudEvents, cloudTasks] = await Promise.all([
-                loadCloudCalendarEvents(supabase),
-                loadCloudTasksBundle(supabase),
+              await Promise.all([
+                hydrateCalendarFromCloud(),
+                hydrateTasksFromCloud(),
               ]);
-              if (cloudEvents && cloudEvents.length) {
-                const normalized = normalizeStoredCalendarEvents(cloudEvents);
-                if (normalized.length) {
-                  calendarCloudHydrateGenRef.current += 1;
-                  let googleLinked = false;
-                  try {
-                    const { hasBrowserGcalToken } = await import(
-                      '@/lib/gcal-browser'
-                    );
-                    googleLinked = hasBrowserGcalToken();
-                  } catch {
-                    googleLinked = false;
-                  }
-                  // Never full-replace from cloud when Google is linked or a pull
-                  // already ran — that race resurrected deleted Google ghosts.
-                  setCalendarEvents((prev) => {
-                    const prevSafe = Array.isArray(prev) ? prev : [];
-                    const pullGen = calendarGooglePullGenRef.current;
-                    const prevGoogleIds = new Set(
-                      prevSafe
-                        .map((e) => e.googleEventId)
-                        .filter((id): id is string => Boolean(id))
-                    );
-                    const prevIds = new Set(prevSafe.map((e) => e.id));
-                    // Cold start, no Google: cloud is fine as seed — but never
-                    // rehydrate Google-imported events while disconnected.
-                    if (
-                      pullGen === 0 &&
-                      !googleLinked &&
-                      prevSafe.length === 0
-                    ) {
-                      const seed = normalized.filter(
-                        (e) => e?.source !== 'google'
-                      );
-                      try {
-                        localStorage.setItem(
-                          SUMMIT_CALENDAR_EVENTS_KEY,
-                          JSON.stringify(seed)
-                        );
-                      } catch {
-                        /* ignore */
-                      }
-                      return seed;
-                    }
-                    const merged = [...prevSafe];
-                    for (const ev of normalized) {
-                      if (prevIds.has(ev.id)) continue;
-                      // Disconnected: never rehydrate Google-imported events from cloud
-                      if (!googleLinked && ev.source === 'google') {
-                        continue;
-                      }
-                      // Skip cloud google-linked ghosts not in current local
-                      // (especially after delete-on-pull)
-                      if (
-                        (pullGen > 0 || googleLinked) &&
-                        ev.googleEventId &&
-                        !prevGoogleIds.has(ev.googleEventId)
-                      ) {
-                        continue;
-                      }
-                      if (ev.source === 'google' && !ev.googleEventId) {
-                        continue;
-                      }
-                      // When Google linked / pull ran, only add Summit-only cloud rows
-                      if (
-                        (pullGen > 0 || googleLinked) &&
-                        (ev.googleEventId || ev.source === 'google')
-                      ) {
-                        continue;
-                      }
-                      merged.push(ev);
-                      prevIds.add(ev.id);
-                    }
-                    try {
-                      localStorage.setItem(
-                        SUMMIT_CALENDAR_EVENTS_KEY,
-                        JSON.stringify(merged)
-                      );
-                    } catch {
-                      /* ignore */
-                    }
-                    return merged;
-                  });
-                  // After cloud hydrate, re-pull so Google delete-on-pull wins
-                  if (googleLinked) {
-                    void refreshFromGoogle({ silent: true });
-                  }
-                }
-              } else {
-                // Seed cloud from this device when backup is empty
-                try {
-                  const raw = localStorage.getItem(SUMMIT_CALENDAR_EVENTS_KEY);
-                  const local = normalizeStoredCalendarEvents(
-                    raw ? JSON.parse(raw) : []
-                  );
-                  if (local.length) {
-                    await saveCloudCalendarEvents(supabase, local);
-                  }
-                } catch {
-                  /* ignore */
-                }
-              }
-              if (cloudTasks) {
-                let googleLinkedForTasks = false;
-                try {
-                  const { hasBrowserGcalToken, isBrowserGcalLinked } =
-                    await import('@/lib/gcal-browser');
-                  googleLinkedForTasks =
-                    hasBrowserGcalToken() || isBrowserGcalLinked();
-                } catch {
-                  googleLinkedForTasks = false;
-                }
-                const lists = normalizeStoredTaskLists(cloudTasks.lists);
-                if (lists.length) {
-                  setTaskLists(lists);
-                  try {
-                    localStorage.setItem(
-                      SUMMIT_TASK_LISTS_KEY,
-                      JSON.stringify(lists)
-                    );
-                  } catch {
-                    /* ignore */
-                  }
-                }
-                let t = normalizeStoredTasks(cloudTasks.tasks);
-                // Disconnected: never rehydrate Google-imported tasks from cloud
-                if (!googleLinkedForTasks) {
-                  t = purgeGoogleSourcedTasks(t);
-                }
-                if (t.length) {
-                  setTasks(t);
-                  try {
-                    localStorage.setItem(SUMMIT_TASKS_KEY, JSON.stringify(t));
-                  } catch {
-                    /* ignore */
-                  }
-                } else if (!googleLinkedForTasks) {
-                  // Empty cloud must not wipe Summit-local tasks — only purge Google rows
-                  setTasks((prev) => {
-                    const safe = Array.isArray(prev) ? prev : [];
-                    if (!safe.some(isGoogleSourcedTask)) return prev;
-                    const next = purgeGoogleSourcedTasks(safe);
-                    try {
-                      localStorage.setItem(
-                        SUMMIT_TASKS_KEY,
-                        JSON.stringify(next)
-                      );
-                    } catch {
-                      /* ignore */
-                    }
-                    return next;
-                  });
-                }
-                if (
-                  cloudTasks.activeListId &&
-                  lists.some((l) => l.id === cloudTasks.activeListId)
-                ) {
-                  persistActiveTaskListId(cloudTasks.activeListId);
-                }
-                const cloudEmpty =
-                  !(cloudTasks.tasks && cloudTasks.tasks.length) &&
-                  !(cloudTasks.lists && cloudTasks.lists.length);
-                if (cloudEmpty) {
-                  try {
-                    const rawT = localStorage.getItem(SUMMIT_TASKS_KEY);
-                    const rawL = localStorage.getItem(SUMMIT_TASK_LISTS_KEY);
-                    const localT = normalizeStoredTasks(
-                      rawT ? JSON.parse(rawT) : []
-                    );
-                    const localL = normalizeStoredTaskLists(
-                      rawL ? JSON.parse(rawL) : null
-                    );
-                    if (localT.length || localL.length) {
-                      await saveCloudTasksBundle(supabase, {
-                        tasks: localT,
-                        lists: localL,
-                        activeListId:
-                          localStorage.getItem(SUMMIT_ACTIVE_TASK_LIST_KEY) ||
-                          DEFAULT_TASK_LIST_ID,
-                      });
-                    }
-                  } catch {
-                    /* ignore */
-                  }
-                }
-              } else {
-                try {
-                  const rawT = localStorage.getItem(SUMMIT_TASKS_KEY);
-                  const rawL = localStorage.getItem(SUMMIT_TASK_LISTS_KEY);
-                  const localT = normalizeStoredTasks(
-                    rawT ? JSON.parse(rawT) : []
-                  );
-                  const localL = normalizeStoredTaskLists(
-                    rawL ? JSON.parse(rawL) : null
-                  );
-                  if (localT.length || localL.length) {
-                    await saveCloudTasksBundle(supabase, {
-                      tasks: localT,
-                      lists: localL,
-                      activeListId:
-                        localStorage.getItem(SUMMIT_ACTIVE_TASK_LIST_KEY) ||
-                        DEFAULT_TASK_LIST_ID,
-                    });
-                  }
-                } catch {
-                  /* ignore */
-                }
-              }
             } catch (err) {
               console.error('Calendar/tasks cloud load failed:', err);
             }
@@ -8734,6 +10420,7 @@ export default function SummitApp() {
       const localLeadsCache = parseStoredLeads(savedLeads);
       if (localLeadsCache && localLeadsCache.length > 0) {
         setLeads(localLeadsCache);
+        rememberLeadFingerprints(leadCloudFpRef.current, localLeadsCache);
         try {
           localStorage.setItem(
             'summitLeads',
@@ -8755,7 +10442,7 @@ export default function SummitApp() {
         /* ignore */
       }
 
-      // App trash is always local (leads + media soft-deletes)
+      // App trash cache (scratch pad until cloud replace)
       if (savedTrash) {
         try {
           const parsed = JSON.parse(savedTrash);
@@ -8906,46 +10593,25 @@ export default function SummitApp() {
               .is('deleted_at', null)
               .order('created_at', { ascending: false });
 
-            // Soft-deleted leads in cloud → keep Trash in sync (source of truth)
+            // Soft-deleted leads in cloud (Trash). Media trash lives on each lead.
+            let cloudDeletedLeads: Array<{ lead: Lead; deletedAt: string }> =
+              [];
             try {
               const { data: trashedRows } = await supabase
                 .from('leads')
                 .select('*')
                 .not('deleted_at', 'is', null)
                 .order('deleted_at', { ascending: false });
-              if (trashedRows && trashedRows.length > 0) {
-                setTrash((prev) => {
-                  const next = [...prev];
-                  for (const row of trashedRows) {
-                    const lead = mapDbLeadToApp(row as Record<string, unknown>);
-                    const cloudId = lead.supabaseId?.trim();
-                    if (!cloudId) continue;
-                    const already = next.some(
-                      (t) =>
-                        t.kind === 'lead' &&
-                        t.lead.supabaseId?.trim() === cloudId
-                    );
-                    if (already) continue;
-                    const deletedAtRaw = (row as Record<string, unknown>)
-                      .deleted_at;
-                    next.unshift({
-                      id: `lead-cloud-${cloudId}`,
-                      kind: 'lead',
-                      deletedAt:
-                        typeof deletedAtRaw === 'string'
-                          ? new Date(deletedAtRaw).toLocaleString()
-                          : new Date().toLocaleString(),
-                      lead,
-                    });
-                  }
-                  try {
-                    localStorage.setItem('summitTrash', JSON.stringify(next));
-                  } catch {
-                    /* ignore */
-                  }
-                  return next;
-                });
-              }
+              cloudDeletedLeads = (trashedRows || []).map((row) => {
+                const r = row as Record<string, unknown>;
+                return {
+                  lead: mapDbLeadToApp(r),
+                  deletedAt:
+                    typeof r.deleted_at === 'string'
+                      ? r.deleted_at
+                      : new Date().toISOString(),
+                };
+              });
             } catch (e) {
               console.error('Supabase trashed leads fetch error:', e);
             }
@@ -9001,155 +10667,49 @@ export default function SummitApp() {
             if (estErr) {
               console.error('Supabase estimates fetch error:', estErr);
             } else if (estRows && estRows.length > 0) {
-              const byLead: Record<string, Estimate[]> = {};
-              /** Per-lead client ids already claimed while hydrating cloud rows */
-              const claimedIdsByLead: Record<string, Set<number>> = {};
-              for (const row of estRows) {
-                const r = row as Record<string, unknown>;
-                const leadKey = r.lead_id != null ? String(r.lead_id) : '';
-                if (!leadKey) continue;
-                if (!claimedIdsByLead[leadKey]) {
-                  claimedIdsByLead[leadKey] = new Set();
-                }
-                const claimed = claimedIdsByLead[leadKey];
-                const rawData = (r.data && typeof r.data === 'object'
-                  ? r.data
-                  : r) as Partial<Estimate> & { selectedShingle?: string };
-                // Never reuse a colliding data.id from another row on this lead
-                const fromData =
-                  typeof rawData.id === 'number' && Number.isFinite(rawData.id)
-                    ? rawData.id
-                    : null;
-                const fromCloud = stableLeadIdFromDb(r.id);
-                let clientId =
-                  fromData != null && !claimed.has(fromData)
-                    ? fromData
-                    : fromCloud;
-                if (claimed.has(clientId)) {
-                  clientId = newLeadNumericId();
-                  while (claimed.has(clientId)) clientId = newLeadNumericId();
-                }
-                claimed.add(clientId);
-                const est: Estimate = {
-                  id: clientId,
-                  date: String(rawData.date || ''),
-                  clientFirstName: String(rawData.clientFirstName || ''),
-                  clientLastName: String(rawData.clientLastName || ''),
-                  clientAddress: String(rawData.clientAddress || ''),
-                  clientCity: String(rawData.clientCity || ''),
-                  clientState: String(rawData.clientState || ''),
-                  clientZip: String(rawData.clientZip || ''),
-                  clientPhone: String(rawData.clientPhone || ''),
-                  clientEmail: String(rawData.clientEmail || ''),
-                  clientJobNumber: String(rawData.clientJobNumber || ''),
-                  squares: String(rawData.squares || ''),
-                  layers: String(rawData.layers || ''),
-                  waste: String(rawData.waste || ''),
-                  pitch: String(rawData.pitch || ''),
-                  stories: String(rawData.stories || ''),
-                  fasciaLF: String(rawData.fasciaLF || ''),
-                  deckingSheets: String(rawData.deckingSheets || ''),
-                  deckingOsbSheets: String(rawData.deckingOsbSheets || ''),
-                  deckingCdxSheets: String(rawData.deckingCdxSheets || ''),
-                  solarPanels: String(rawData.solarPanels || ''),
-                  hvacUnits: String(rawData.hvacUnits || ''),
-                  skylights: String(rawData.skylights || ''),
-                  ridgeVentLF: String(rawData.ridgeVentLF || ''),
-                  gutterMode:
-                    rawData.gutterMode === 'dr' || rawData.gutterMode === 'rr'
-                      ? rawData.gutterMode
-                      : 'none',
-                  gutterLF: String(rawData.gutterLF || ''),
-                  selectedShingle:
-                    (rawData.selectedShingle as ShingleType) ||
-                    (String(r.material || '') as ShingleType) ||
-                    '',
-                  cambridgeColor: String(rawData.cambridgeColor || ''),
-                  dynastyColor: String(rawData.dynastyColor || ''),
-                  armourshakeColor: String(rawData.armourshakeColor || ''),
-                  hipRidgeChoice:
-                    rawData.hipRidgeChoice === 'standard' ||
-                    rawData.hipRidgeChoice === 'high_profile'
-                      ? rawData.hipRidgeChoice
-                      : '',
-                  starterChoice:
-                    rawData.starterChoice === 'brand' ||
-                    rawData.starterChoice === 'armour'
-                      ? rawData.starterChoice
-                      : '',
-                  iceWaterChoice:
-                    rawData.iceWaterChoice === 'topshield_defender' ||
-                    rawData.iceWaterChoice === 'topshield_sg_ps_max' ||
-                    rawData.iceWaterChoice === 'iko_stormshield' ||
-                    rawData.iceWaterChoice === 'polyflex_sa_v'
-                      ? rawData.iceWaterChoice
-                      : '',
-                  selectedUnderlayment:
-                    (rawData.selectedUnderlayment as Underlayment) || '',
-                  mbCapChoice: String(rawData.mbCapChoice || ''),
-                  mbBaseChoice: String(rawData.mbBaseChoice || ''),
-                  fasciaMode: (rawData.fasciaMode as FasciaMode) || '',
-                  deckingMode: (rawData.deckingMode as DeckingMode) || '',
-                  fasciaType: (rawData.fasciaType as FasciaType) || '',
-                  modifiedBitumenSquares: String(
-                    rawData.modifiedBitumenSquares || ''
-                  ),
-                  modifiedBitumenColor: String(
-                    rawData.modifiedBitumenColor || ''
-                  ),
-                  dripEdgeColor: String(rawData.dripEdgeColor || ''),
-                  notes: String(rawData.notes || ''),
-                  total: Number(rawData.total) || 0,
-                  negotiatedPrice: Number(rawData.negotiatedPrice) || 0,
-                  originalTotalForBuffer:
-                    Number(rawData.originalTotalForBuffer) || 0,
-                  measurementId: rawData.measurementId,
-                  pdfDocumentId: rawData.pdfDocumentId
-                    ? String(rawData.pdfDocumentId)
-                    : undefined,
-                  pdfUrl: rawData.pdfUrl ? String(rawData.pdfUrl) : undefined,
-                  pdfName: rawData.pdfName
-                    ? String(rawData.pdfName)
-                    : undefined,
-                  signerName: rawData.signerName
-                    ? String(rawData.signerName)
-                    : undefined,
-                  clientSignatureDataUrl: rawData.clientSignatureDataUrl
-                    ? String(rawData.clientSignatureDataUrl)
-                    : null,
-                  clientSignedAt: rawData.clientSignedAt
-                    ? String(rawData.clientSignedAt)
-                    : null,
-                  supabaseId: r.id != null ? String(r.id) : undefined,
-                };
-                if (!byLead[leadKey]) byLead[leadKey] = [];
-                byLead[leadKey].push(est);
-              }
-              for (const lead of fromDb) {
-                const key = lead.supabaseId || String(lead.id);
-                if (byLead[key]?.length) {
-                  const prevById = new Map(
-                    (lead.estimates || []).map((e) => [e.id, e])
-                  );
-                  lead.estimates = byLead[key].map((e) => {
-                    const prev = prevById.get(e.id);
-                    return {
-                      ...e,
-                      pdfDocumentId: e.pdfDocumentId || prev?.pdfDocumentId,
-                      pdfUrl: e.pdfUrl || prev?.pdfUrl,
-                      pdfName: e.pdfName || prev?.pdfName,
-                    };
-                  });
-                }
-              }
+              attachCloudEstimatesToLeads(
+                fromDb,
+                estRows as Record<string, unknown>[]
+              );
             }
 
             const safeFromDb = sanitizeLeads(fromDb);
-            setLeads(safeFromDb);
+            const absorbed = absorbLocalTrashIntoLeads(
+              safeFromDb,
+              trashRef.current
+            );
+            const unsyncedDeleted = absorbed.deletedLeads.filter(
+              (d) => !d.lead.supabaseId
+            );
+            deletedLeadsRef.current = [
+              ...cloudDeletedLeads,
+              ...unsyncedDeleted,
+            ];
+            const nextLeads = absorbed.leads;
+            setLeads(nextLeads);
+            leadsRef.current = nextLeads;
+            rememberLeadFingerprints(leadCloudFpRef.current, safeFromDb);
+            const trashView = assembleAppTrash(
+              nextLeads,
+              deletedLeadsRef.current
+            );
+            trashRef.current = trashView;
+            setTrash(trashView);
+            cacheTrashLocally(trashView);
             try {
-              localStorage.setItem('summitLeads', JSON.stringify(safeFromDb));
+              localStorage.setItem('summitLeads', JSON.stringify(nextLeads));
             } catch {
               /* ignore quota */
+            }
+            const absorbedDirty = nextLeads.some((l) => {
+              const orig = safeFromDb.find((x) => x.id === l.id);
+              return (
+                JSON.stringify(orig?.trash || []) !==
+                JSON.stringify(l.trash || [])
+              );
+            });
+            if (absorbedDirty) {
+              void persistLeads(nextLeads);
             }
             console.log(
               'Loaded',
@@ -9673,14 +11233,18 @@ export default function SummitApp() {
       const gcal = params.get('gcal');
       if (!gcal) return;
       if (gcal === 'connected') {
-        showToast('Calendar connected');
+        showToast('Connected (Calendar + Tasks)');
         void refreshGcalStatus();
         const tab = params.get('tab');
-        if (tab === 'settings') handleTabChange('settings');
+        if (tab === 'settings' || tab === 'tasks' || tab === 'calendar') {
+          handleTabChange(tab);
+        }
       } else if (gcal === 'error') {
         const reason = params.get('reason') || 'unknown';
         showToast(
-          reason.includes('not configured') || reason.includes('access_denied')
+          reason.includes('not configured') ||
+            reason.includes('access_denied') ||
+            reason.includes('sign_in')
             ? `Calendar: ${reason}`
             : 'Calendar connection failed'
         );
@@ -9704,47 +11268,80 @@ export default function SummitApp() {
      
   }, [sessionReady, activeTab]);
 
-  // Quiet Google sync: app open / Calendar tab / month change / focus (debounced)
+  // Calendar + Tasks are one system: pull cloud on tab open + foreground.
   useEffect(() => {
-    if (!sessionReady || !gcalConnected) return;
+    if (!sessionReady) return;
 
     const runQuietSync = (opts?: { cursor?: Date }) => {
       void refreshFromGoogle({
         silent: true,
         cursor: opts?.cursor ?? calendarCursor,
       }).catch((err) => {
-        console.error('Quiet Google calendar sync failed:', err);
+        console.error('Quiet calendar sync failed:', err);
+      });
+    };
+
+    const runQuietTasksSync = () => {
+      void (async () => {
+        await hydrateTasksFromCloud();
+        if (gcalConnected) {
+          await syncTasksWithGoogle({ silent: true, pullOnly: true });
+        }
+      })().catch((err) => {
+        console.error('Quiet tasks sync failed:', err);
       });
     };
 
     if (activeTab === 'calendar') {
       runQuietSync({ cursor: calendarCursor });
     } else if (activeTab === 'tasks') {
-      void syncTasksWithGoogle({ silent: true, pullOnly: true }).catch(
-        (err) => {
-          console.error('Quiet Google tasks sync failed:', err);
-        }
-      );
+      runQuietTasksSync();
     }
 
     let focusTimer: number | undefined;
     const scheduleFocusSync = () => {
-      if (activeTab !== 'calendar') return;
       window.clearTimeout(focusTimer);
       focusTimer = window.setTimeout(() => {
-        runQuietSync({ cursor: calendarCursor });
+        if (activeTabRef.current === 'calendar') {
+          runQuietSync({ cursor: calendarCursor });
+        } else {
+          void hydrateCalendarFromCloud().catch((err) => {
+            console.error('Quiet calendar cloud hydrate failed:', err);
+          });
+        }
+        if (activeTabRef.current === 'tasks') {
+          runQuietTasksSync();
+        } else {
+          void hydrateTasksFromCloud().catch((err) => {
+            console.error('Quiet tasks cloud hydrate failed:', err);
+          });
+        }
       }, 1200);
     };
     const onFocus = () => scheduleFocusSync();
     const onVis = () => {
-      if (document.visibilityState === 'visible') scheduleFocusSync();
+      if (document.visibilityState === 'visible') {
+        scheduleFocusSync();
+      } else {
+        void flushPendingCalendarCloudSave();
+        void flushPendingTasksCloudSave();
+      }
+    };
+    const onPageShow = () => scheduleFocusSync();
+    const onPageShowFlush = () => {
+      void flushPendingCalendarCloudSave();
+      void flushPendingTasksCloudSave();
     };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('pageshow', onPageShow);
+    window.addEventListener('pagehide', onPageShowFlush);
     return () => {
       window.clearTimeout(focusTimer);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener('pagehide', onPageShowFlush);
     };
      
   }, [
@@ -11106,13 +12703,14 @@ export default function SummitApp() {
     if (lead) {
       loadLeadIntoForm(lead);
       setProfileTab('measurements');
-      setShowTracer(false);
-      clearMapSession();
-      setSelectedMeasurementId(
-        lead.measurements?.length
-          ? lead.measurements[lead.measurements.length - 1].id
-          : null
-      );
+      restoreMeasureDraft(lead);
+      if (!lead.measureDraft?.selectedMeasurementId) {
+        setSelectedMeasurementId(
+          lead.measurements?.length
+            ? lead.measurements[lead.measurements.length - 1].id
+            : null
+        );
+      }
       setActiveTab('leads');
       setIsEditingLead(true);
 
@@ -11233,6 +12831,27 @@ export default function SummitApp() {
       center,
       preferManual: !center,
     });
+    if (currentLeadId) {
+      persistLeads(
+        leads.map((lead) =>
+          lead.id === currentLeadId
+            ? {
+                ...lead,
+                ...buildLeadFormPatch(),
+                measureDraft: {
+                  showTracer: true,
+                  solarMeasuring: false,
+                  tracePoints: [],
+                  mapCenter: center,
+                  measureLabel: street || 'Roof',
+                  sectionKind: 'pitched',
+                },
+                updatedAt: new Date().toISOString(),
+              }
+            : lead
+        )
+      );
+    }
     showToast(
       center
         ? 'Map centered on property — click corners to trace'
@@ -11241,12 +12860,9 @@ export default function SummitApp() {
   };
 
   /**
-   * Auto-measure — accuracy first:
-   * 1) Instant Roofer AI (~$1–3, sandbox free credits) when INSTANT_ROOFER_API_KEY is set
-   * 2) Else Google Solar squares/pitch only (no fake outline)
-   *
-   * Free OSM / Solar bounding-box outlines were removed — they looked auto but
-   * were not roof-accurate. Trace manually, or add Instant Roofer for AI measure.
+   * Auto-measure — Instant Roofer AI first.
+   * 401 / 403 / not configured surface as toasts — no silent Solar fallback.
+   * Other IR misses may still try Google Solar (squares/pitch only, no outline).
    * Ridge/hip/rake stay blank until field entry or Human Certified.
    */
   const runSolarAutoMeasure = async () => {
@@ -11265,8 +12881,27 @@ export default function SummitApp() {
     }
 
     setSolarMeasuring(true);
+    setMeasureAddOpen(false);
     solarAreaOverrideRef.current = null;
     setAutoMeasureHint(null);
+    let followUpDraft: LeadMeasureDraft | null = {
+      ...(captureMeasureDraft() || {}),
+      solarMeasuring: true,
+      mapCenter,
+    };
+    let savedAutoMeasurement: RoofMeasurement | null = null;
+    let queuedLeads = leads;
+    let persistGate = Promise.resolve(true);
+    const pushLeadPatch = (patch: Partial<Lead>) => {
+      const now = new Date().toISOString();
+      queuedLeads = queuedLeads.map((lead) =>
+        lead.id === currentLeadId
+          ? { ...lead, ...buildLeadFormPatch(), ...patch, updatedAt: now }
+          : lead
+      );
+      persistGate = persistGate.then(() => persistLeads(queuedLeads));
+    };
+    pushLeadPatch({ measureDraft: followUpDraft });
     try {
       let center = mapCenter;
       if (!center) {
@@ -11279,6 +12914,7 @@ export default function SummitApp() {
       }
       if (!center) {
         showToast('Could not locate address for auto-measure');
+        followUpDraft = null;
         return;
       }
 
@@ -11293,6 +12929,7 @@ export default function SummitApp() {
         ok?: boolean;
         error?: string;
         message?: string;
+        status?: number;
         pitch?: string;
         waste?: number;
         squares?: number;
@@ -11346,6 +12983,18 @@ export default function SummitApp() {
             waste,
             wasteAuto: false,
           });
+          followUpDraft = {
+            solarMeasuring: false,
+            showTracer: true,
+            tracePoints: outlinePoints,
+            mapCenter: mapCenterPt,
+            measurePitch: isFlat ? 'Flat' : pitch,
+            measurePitchAuto: false,
+            measureWaste: waste,
+            measureWasteAuto: false,
+            measureLabel: `${street || 'Roof'} · Instant Roofer`,
+            sectionKind: isFlat ? 'flat' : 'pitched',
+          };
           showToast(
             `Instant Roofer · ${squares} sq · ${pitch}${
               conf ? ` · ${conf}` : ''
@@ -11381,17 +13030,11 @@ export default function SummitApp() {
         });
         if (!measurement) {
           showToast('Could not build measurement from Instant Roofer');
+          followUpDraft = null;
           return;
         }
-        const updated = leads.map((lead) =>
-          lead.id === currentLeadId
-            ? {
-                ...lead,
-                measurements: [...(lead.measurements || []), measurement],
-              }
-            : lead
-        );
-        persistLeads(updated);
+        savedAutoMeasurement = measurement;
+        followUpDraft = null;
         setSelectedMeasurementId(measurement.id);
         setMapCenter(mapCenterPt);
         showToast(
@@ -11402,8 +13045,25 @@ export default function SummitApp() {
         return;
       }
 
-      // 2) Google Solar — squares/pitch only (no OSM/box outline — those were inaccurate)
-      if (ir.error !== 'instant_roofer_not_configured' && !irRes.ok) {
+      const irStatus = ir.status ?? irRes.status;
+      const irBlocked =
+        ir.error === 'instant_roofer_not_configured' ||
+        irStatus === 401 ||
+        irStatus === 403 ||
+        irStatus === 501;
+      if (irBlocked) {
+        showToast(
+          ir.message ||
+            (ir.error === 'instant_roofer_not_configured' || irStatus === 501
+              ? 'Instant Roofer is not configured — add INSTANT_ROOFER_API_KEY to .env.local and Vercel'
+              : `Instant Roofer ${irStatus}`)
+        );
+        followUpDraft = null;
+        return;
+      }
+
+      // Other IR misses: Google Solar squares/pitch only (no OSM/box outline)
+      if (!irRes.ok) {
         console.warn('instant-roofer failed, trying Solar', ir.message);
       }
 
@@ -11429,22 +13089,12 @@ export default function SummitApp() {
         solarRes.ok && solar.ok && (Number(solar.squares) || 0) > 0;
 
       if (!solarOk) {
-        if (ir.error === 'instant_roofer_not_configured') {
-          showToast(
-            'Accurate auto-measure needs Instant Roofer (INSTANT_ROOFER_API_KEY) — or Open map to trace by hand'
-          );
-        } else if (solar.error === 'solar_not_configured') {
-          showToast(
-            ir.message ||
-              'Auto-measure unavailable — add INSTANT_ROOFER_API_KEY, or Open map to trace'
-          );
-        } else {
-          showToast(
-            ir.message ||
-              solar.message ||
-              'Auto-measure failed — Open map to trace'
-          );
-        }
+        showToast(
+          ir.message ||
+            solar.message ||
+            'Auto-measure failed — Open map to trace'
+        );
+        followUpDraft = null;
         return;
       }
 
@@ -11483,18 +13133,12 @@ export default function SummitApp() {
       });
       if (!measurement) {
         showToast('Could not build measurement from Solar data');
+        followUpDraft = null;
         return;
       }
 
-      const updated = leads.map((lead) =>
-        lead.id === currentLeadId
-          ? {
-              ...lead,
-              measurements: [...(lead.measurements || []), measurement],
-            }
-          : lead
-      );
-      persistLeads(updated);
+      savedAutoMeasurement = measurement;
+      followUpDraft = null;
       setSelectedMeasurementId(measurement.id);
       setMapCenter(mapCenterPt);
       showToast(
@@ -11503,23 +13147,48 @@ export default function SummitApp() {
     } catch (err) {
       console.error('auto-measure', err);
       showToast('Auto-measure failed');
+      followUpDraft = null;
     } finally {
       setSolarMeasuring(false);
+      const endDraft = followUpDraft
+        ? { ...followUpDraft, solarMeasuring: false }
+        : null;
+      pushLeadPatch({
+        measureDraft: endDraft,
+        ...(savedAutoMeasurement
+          ? {
+              measurements: [
+                ...(queuedLeads.find((l) => l.id === currentLeadId)
+                  ?.measurements || []),
+                savedAutoMeasurement,
+              ],
+            }
+          : {}),
+      });
+      await persistGate;
     }
   };
 
   const refreshHumanOrders = async (leadId?: number | null) => {
     try {
-      const qs =
-        leadId != null ? `?leadId=${encodeURIComponent(String(leadId))}` : '';
-      const res = await fetch(`/api/instant-roofer/human${qs}`, {
-        headers: { Accept: 'application/json' },
-        cache: 'no-store',
-      });
+      const lead =
+        leadId != null ? leads.find((l) => l.id === leadId) : undefined;
+      const params = new URLSearchParams();
+      if (lead?.supabaseId) params.append('leadId', lead.supabaseId);
+      if (leadId != null) params.append('leadId', String(leadId));
+      const qs = params.toString();
+      const res = await fetch(
+        `/api/instant-roofer/human${qs ? `?${qs}` : ''}`,
+        {
+          headers: { Accept: 'application/json' },
+          cache: 'no-store',
+        }
+      );
       const data = (await res.json()) as {
         ok?: boolean;
         orders?: Array<{
           id: string;
+          requestId?: string | null;
           leadId: string | null;
           status: string;
           reportUrl: string | null;
@@ -11530,11 +13199,30 @@ export default function SummitApp() {
       };
       if (res.ok && data.ok && Array.isArray(data.orders)) {
         setHumanOrders(data.orders);
-        // Phone-friendly: browser notification when a report completes
+        if (lead) {
+          const merged = mergeHumanMeasureOrders(
+            lead.humanMeasureOrders,
+            data.orders.map(apiOrderToLeadOrder)
+          );
+          const prevJson = JSON.stringify(lead.humanMeasureOrders || []);
+          const nextJson = JSON.stringify(merged);
+          if (prevJson !== nextJson) {
+            const updated = leads.map((l) =>
+              l.id === lead.id
+                ? {
+                    ...l,
+                    ...(l.id === currentLeadId ? buildLeadFormPatch() : {}),
+                    humanMeasureOrders: merged,
+                    updatedAt: new Date().toISOString(),
+                  }
+                : l
+            );
+            persistLeads(updated);
+          }
+        }
         for (const o of data.orders) {
           if (o.status === 'completed' && o.reportUrl && typeof Notification !== 'undefined') {
             if (Notification.permission === 'granted') {
-              // Avoid spamming: only if freshly seen via sessionStorage
               const key = `ir-notified-${o.id}`;
               if (!sessionStorage.getItem(key)) {
                 sessionStorage.setItem(key, '1');
@@ -11593,6 +13281,8 @@ export default function SummitApp() {
         .join(' ')
         .trim();
 
+      const openLead = leads.find((l) => l.id === currentLeadId);
+
       const res = await fetch('/api/instant-roofer/human', {
         method: 'POST',
         headers: {
@@ -11602,7 +13292,8 @@ export default function SummitApp() {
         body: JSON.stringify({
           lat: center.lat,
           lng: center.lng,
-          leadId: currentLeadId,
+          leadId: String(currentLeadId),
+          cloudLeadId: openLead?.supabaseId?.trim() || undefined,
           address,
           customerName: customerName || undefined,
           contractorName:
@@ -11616,14 +13307,39 @@ export default function SummitApp() {
         ok?: boolean;
         message?: string;
         error?: string;
+        order?: LeadHumanMeasureOrder & { createdAt?: string };
       };
       if (!res.ok || !data.ok) {
         showToast(data.message || 'Could not order Human Certified report');
         return;
       }
-      showToast(
-        'Human Certified ordered (~1 hr). We’ll flag it here when ready — set Instant Roofer webhook for phone alerts.'
-      );
+      if (data.order && openLead) {
+        const onLead = apiOrderToLeadOrder({
+          id: data.order.id,
+          requestId: data.order.requestId,
+          leadId: String(currentLeadId),
+          status: data.order.status || 'queued',
+          reportUrl: data.order.reportUrl || null,
+          address: data.order.address || address,
+          createdAt: data.order.createdAt || new Date().toISOString(),
+          failureReason: data.order.failureReason || null,
+        });
+        const updated = leads.map((l) =>
+          l.id === currentLeadId
+            ? {
+                ...l,
+                ...buildLeadFormPatch(),
+                humanMeasureOrders: mergeHumanMeasureOrders(
+                  l.humanMeasureOrders,
+                  [onLead]
+                ),
+                updatedAt: new Date().toISOString(),
+              }
+            : l
+        );
+        persistLeads(updated);
+      }
+      showToast('Human Certified ordered (~1 hr).');
       await refreshHumanOrders(currentLeadId);
     } catch (err) {
       console.error('human order', err);
@@ -11697,6 +13413,8 @@ export default function SummitApp() {
             clientState: clientState || lead.clientState,
             clientZip: clientZip || lead.clientZip,
             measurements: [...(lead.measurements || []), measurement],
+            measureDraft: null,
+            updatedAt: new Date().toISOString(),
           }
         : lead
     );
@@ -11766,18 +13484,25 @@ export default function SummitApp() {
           }
         : l
     );
-    persistLeads(updated);
-    persistTrash([
-      {
-        id: `${Date.now()}-roof-${measurementId}`,
-        kind: 'roofMeasurement',
-        deletedAt: new Date().toLocaleString(),
-        leadId: currentLeadId,
-        leadLabel: leadLabelFor(lead),
-        measurement,
-      },
-      ...trash,
-    ]);
+    persistLeads(
+      updated.map((l) =>
+        l.id === currentLeadId
+          ? {
+              ...l,
+              trash: [
+                ...(l.trash || []),
+                {
+                  id: measurement.id,
+                  kind: 'roofMeasurement',
+                  deletedAt: new Date().toISOString(),
+                  measurement,
+                },
+              ],
+              updatedAt: new Date().toISOString(),
+            }
+          : l
+      )
+    );
     if (selectedMeasurementId === measurementId) setSelectedMeasurementId(null);
     if (activeMeasurementId === measurementId) setActiveMeasurementId(null);
     
@@ -11812,18 +13537,27 @@ export default function SummitApp() {
       if (l.id !== currentLeadId) return l;
       return {
         ...l,
-        // Remove exactly one row (by index), never every matching id
         estimates: (l.estimates || []).filter((_, i) => i !== idx),
         documents: (l.documents || []).filter((d) => {
           if (pdfId && d.id === pdfId) return false;
           if (pdfUrl && d.url === pdfUrl) return false;
           return true;
         }),
+        trash: [
+          ...(l.trash || []),
+          {
+            id: String(estimate.id),
+            kind: 'estimate' as const,
+            deletedAt: new Date().toISOString(),
+            estimate,
+          },
+        ],
+        updatedAt: new Date().toISOString(),
       };
     });
     persistLeads(updated);
 
-    // Drop the cloud row immediately so bootstrap cannot resurrect it
+    // Drop the cloud estimate row so bootstrap cannot resurrect it; JSON stays on lead.trash
     if (supabaseEnabled && supabase && estimate.supabaseId) {
       const cloudEstId = estimate.supabaseId;
       void (async () => {
@@ -11839,17 +13573,6 @@ export default function SummitApp() {
       })();
     }
 
-    persistTrash([
-      {
-        id: `${Date.now()}-est`,
-        kind: 'estimate',
-        deletedAt: new Date().toLocaleString(),
-        leadId: currentLeadId,
-        leadLabel: leadLabelFor(lead),
-        estimate,
-      },
-      ...trash,
-    ]);
     showToast('Estimate moved to trash');
   };
 
@@ -11863,24 +13586,26 @@ export default function SummitApp() {
     if (noteIndex < 0 || noteIndex >= notes.length) return;
     const note = notes[noteIndex];
 
-    const updated = leads.map((l) =>
-      l.id === currentLeadId
-        ? { ...l, notes: notes.filter((_, i) => i !== noteIndex) }
-        : l
+    persistLeads(
+      leads.map((l) =>
+        l.id === currentLeadId
+          ? {
+              ...l,
+              notes: notes.filter((_, i) => i !== noteIndex),
+              trash: [
+                ...(l.trash || []),
+                {
+                  id: note.id || newClientId('note'),
+                  kind: 'note',
+                  deletedAt: new Date().toISOString(),
+                  note,
+                },
+              ],
+              updatedAt: new Date().toISOString(),
+            }
+          : l
+      )
     );
-    persistLeads(updated);
-
-    persistTrash([
-      {
-        id: `${Date.now()}-note`,
-        kind: 'note',
-        deletedAt: new Date().toLocaleString(),
-        leadId: currentLeadId,
-        leadLabel: leadLabelFor(lead),
-        note,
-      },
-      ...trash,
-    ]);
     showToast('Note moved to trash');
   };
 
@@ -12314,21 +14039,15 @@ export default function SummitApp() {
     };
   }, []);
 
+  const headerSearchOpen = headerSearch.trim().length > 0;
   useEffect(() => {
-    if (!headerSearch.trim() || searchPinsLoadedRef.current) return;
-    searchPinsLoadedRef.current = true;
+    if (!headerSearchOpen) {
+      searchPinsLoadedRef.current = false;
+      return;
+    }
     let cancelled = false;
     const loadPins = async () => {
       let pins: CanvassPin[] = [];
-      try {
-        const raw = localStorage.getItem(CANVASS_PINS_STORAGE_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) pins = parsed as CanvassPin[];
-        }
-      } catch {
-        /* ignore */
-      }
       try {
         if (supabaseEnabled && supabase) {
           const { data, error } = await supabase
@@ -12340,17 +14059,33 @@ export default function SummitApp() {
           if (!error && Array.isArray(data)) {
             pins = data as CanvassPin[];
           }
+        } else {
+          const raw = localStorage.getItem(CANVASS_PINS_STORAGE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) pins = parsed as CanvassPin[];
+          }
         }
       } catch {
-        /* keep local */
+        /* keep empty — cloud is source of truth on the live app */
       }
       if (!cancelled) setSearchPins(pins);
     };
-    void loadPins();
+    if (!searchPinsLoadedRef.current) {
+      searchPinsLoadedRef.current = true;
+      void loadPins();
+    }
+    const onVis = () => {
+      if (document.visibilityState !== 'visible') return;
+      searchPinsLoadedRef.current = true;
+      void loadPins();
+    };
+    document.addEventListener('visibilitychange', onVis);
     return () => {
       cancelled = true;
+      document.removeEventListener('visibilitychange', onVis);
     };
-  }, [headerSearch, supabaseEnabled, supabase]);
+  }, [headerSearchOpen, supabaseEnabled, supabase]);
 
   useEffect(() => {
     if (!searchFocusTaskId || activeTab !== 'tasks') return;
@@ -12491,6 +14226,7 @@ export default function SummitApp() {
       if (!tracking) return;
       if (e.touches.length !== 1) {
         reset();
+        unfreezePhoneChipStrips();
         return;
       }
       const t = e.touches[0];
@@ -12508,6 +14244,7 @@ export default function SummitApp() {
           tracking = false;
           return;
         }
+        freezePhoneChipStrips();
       }
       if (locked !== 'h') return;
       e.preventDefault();
@@ -12519,15 +14256,25 @@ export default function SummitApp() {
       const wasH = locked === 'h';
       reset();
       const t = e.changedTouches[0];
-      if (!t || !wasH) return;
+      if (!t || !wasH) {
+        unfreezePhoneChipStrips();
+        return;
+      }
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
-      if (Math.abs(dx) <= Math.abs(dy) * 1.2) return;
+      if (Math.abs(dx) <= Math.abs(dy) * 1.2) {
+        unfreezePhoneChipStrips();
+        return;
+      }
+      phonePagerMovedRef.current = false;
       let committed = false;
       if (backOk && dx > PHONE_NAV_COMMIT_PX) {
         committed = phoneBackRef.current();
       } else if (forwardOk && dx < -PHONE_NAV_COMMIT_PX) {
         committed = phoneForwardRef.current();
+      }
+      if (!committed || !phonePagerMovedRef.current) {
+        unfreezePhoneChipStrips();
       }
       if (committed) {
         e.preventDefault();
@@ -12542,18 +14289,22 @@ export default function SummitApp() {
       e.preventDefault();
       e.stopPropagation();
     };
+    const onCancel = () => {
+      reset();
+      unfreezePhoneChipStrips();
+    };
     const optsMove = { capture: true, passive: false } as const;
     const optsStart = { capture: true, passive: true } as const;
     document.addEventListener('touchstart', onStart, optsStart);
     document.addEventListener('touchmove', onMove, optsMove);
     document.addEventListener('touchend', onEnd, optsMove);
-    document.addEventListener('touchcancel', reset, optsStart);
+    document.addEventListener('touchcancel', onCancel, optsStart);
     document.addEventListener('click', onClick, true);
     return () => {
       document.removeEventListener('touchstart', onStart, true);
       document.removeEventListener('touchmove', onMove, true);
       document.removeEventListener('touchend', onEnd, true);
-      document.removeEventListener('touchcancel', reset, true);
+      document.removeEventListener('touchcancel', onCancel, true);
       document.removeEventListener('click', onClick, true);
     };
   }, []);
@@ -12710,8 +14461,10 @@ export default function SummitApp() {
     window.setTimeout(() => setToastMessage(null), 5000);
   };
 
-  const refreshLeadsFromCloud = async () => {
+  const refreshLeadsFromCloud = async (opts?: { applyOpenLead?: boolean }) => {
     if (!supabaseEnabled || !supabase || !signedInRef.current) return;
+    if (leadsRefreshInFlightRef.current) return;
+    leadsRefreshInFlightRef.current = true;
     try {
       const { data: leadRows, error: leadErr } = await supabase
         .from('leads')
@@ -12719,56 +14472,159 @@ export default function SummitApp() {
         .is('deleted_at', null)
         .order('created_at', { ascending: false });
       if (leadErr || !leadRows) return;
-      const fromDb = leadRows.map((row) =>
+
+      let fromDb = leadRows.map((row) =>
         mapDbLeadToApp(row as Record<string, unknown>)
       );
-      setLeads((prev) => {
-        if (fromDb.length === 0 && prev.length > 0) return prev;
-        const prevByKey = new Map(
-          prev.map((l) => [l.supabaseId?.trim() || String(l.id), l])
+
+      const { data: estRows, error: estErr } = await supabase
+        .from('estimates')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (estErr) {
+        console.error('Supabase estimates fetch error:', estErr);
+      } else if (estRows && estRows.length > 0) {
+        attachCloudEstimatesToLeads(
+          fromDb,
+          estRows as Record<string, unknown>[]
         );
-        for (const lead of fromDb) {
-          const prevLead = prevByKey.get(
-            lead.supabaseId?.trim() || String(lead.id)
+      }
+
+      try {
+        const res = await fetch('/api/instant-roofer/human', {
+          headers: { Accept: 'application/json' },
+          cache: 'no-store',
+        });
+        const data = (await res.json()) as {
+          ok?: boolean;
+          orders?: Array<{
+            id: string;
+            requestId?: string | null;
+            leadId: string | null;
+            status: string;
+            reportUrl: string | null;
+            address: string | null;
+            createdAt: string;
+            failureReason: string | null;
+          }>;
+        };
+        if (res.ok && data.ok && Array.isArray(data.orders)) {
+          fromDb = mergeApiOrdersOntoLeads(
+            fromDb,
+            data.orders.map(apiOrderToLeadOrder)
           );
-          if (!prevLead) continue;
-          if (
-            !(lead.estimates && lead.estimates.length) &&
-            prevLead.estimates?.length
-          ) {
-            lead.estimates = prevLead.estimates;
-          }
-          if (!(lead.photos && lead.photos.length) && prevLead.photos?.length) {
-            lead.photos = prevLead.photos;
-          }
-          if (
-            !(lead.documents && lead.documents.length) &&
-            prevLead.documents?.length
-          ) {
-            lead.documents = prevLead.documents;
-          }
         }
-        const safeFromDb = sanitizeLeads(fromDb);
+      } catch {
+        /* orders stay on the lead from details */
+      }
+
+      const lastFp = new Map(leadCloudFpRef.current);
+      rememberLeadFingerprints(leadCloudFpRef.current, fromDb);
+
+      const mergedBox: { current: Lead[] | null } = { current: null };
+      setLeads((prev) => {
+        if (fromDb.length === 0 && prev.length > 0) {
+          mergedBox.current = prev;
+          return prev;
+        }
+        const merged = mergeCloudLeads(prev, fromDb, lastFp);
+        mergedBox.current = merged;
+        leadsRef.current = merged;
         try {
-          localStorage.setItem('summitLeads', JSON.stringify(safeFromDb));
+          localStorage.setItem('summitLeads', JSON.stringify(merged));
         } catch {
           /* ignore */
         }
-        return safeFromDb;
+        if (opts?.applyOpenLead) pendingApplyCloudLeadRef.current = true;
+        return merged;
       });
+
+      const mergedSnapshot = mergedBox.current;
+      if (mergedSnapshot) {
+        leadsRef.current = mergedSnapshot;
+        let cloudDeletedLeads: Array<{ lead: Lead; deletedAt: string }> = [];
+        try {
+          const { data: trashedRows } = await supabase
+            .from('leads')
+            .select('*')
+            .not('deleted_at', 'is', null)
+            .order('deleted_at', { ascending: false });
+          cloudDeletedLeads = (trashedRows || []).map((row) => {
+            const r = row as Record<string, unknown>;
+            return {
+              lead: mapDbLeadToApp(r),
+              deletedAt:
+                typeof r.deleted_at === 'string'
+                  ? r.deleted_at
+                  : new Date().toISOString(),
+            };
+          });
+        } catch (e) {
+          console.error('Supabase trashed leads fetch error:', e);
+        }
+        const absorbed = absorbLocalTrashIntoLeads(
+          mergedSnapshot,
+          trashRef.current
+        );
+        const unsyncedDeleted = absorbed.deletedLeads.filter(
+          (d) => !d.lead.supabaseId
+        );
+        deletedLeadsRef.current = [...cloudDeletedLeads, ...unsyncedDeleted];
+        let withAbsorbed = absorbed.leads;
+        leadsRef.current = withAbsorbed;
+        if (withAbsorbed !== mergedSnapshot) {
+          setLeads(withAbsorbed);
+          try {
+            localStorage.setItem('summitLeads', JSON.stringify(withAbsorbed));
+          } catch {
+            /* ignore */
+          }
+        }
+        const trashView = assembleAppTrash(withAbsorbed, deletedLeadsRef.current);
+        trashRef.current = trashView;
+        setTrash(trashView);
+        cacheTrashLocally(trashView);
+
+        const openId = currentLeadIdRef.current;
+        const onMediaTab =
+          profileTabRef.current === 'photos' ||
+          profileTabRef.current === 'documents';
+        if (
+          openId != null &&
+          isEditingLeadRef.current &&
+          (opts?.applyOpenLead || onMediaTab)
+        ) {
+          await hydrateLeadMediaFnRef.current(openId);
+        }
+        const snapshot = leadsRef.current;
+        const dirty = snapshot.some((l) => {
+          const fp = leadPersistFingerprint(l);
+          const cloudFp = leadCloudFpRef.current.get(leadFpKey(l));
+          return cloudFp !== fp;
+        });
+        if (dirty) void persistLeads(snapshot);
+      }
     } catch (e) {
       console.error('Leads refresh failed:', e);
+    } finally {
+      leadsRefreshInFlightRef.current = false;
     }
   };
+  refreshLeadsFnRef.current = refreshLeadsFromCloud;
 
   const persistLeads = (updated: Lead[]): Promise<boolean> => {
     const safe = sanitizeLeads(updated);
+    leadsRef.current = safe;
     setLeads(safe);
     try {
       localStorage.setItem('summitLeads', JSON.stringify(safe));
     } catch {
       /* ignore quota */
     }
+    const trashView = assembleAppTrash(safe, deletedLeadsRef.current);
+    trashRef.current = trashView;
+    setTrash(trashView);
+    cacheTrashLocally(trashView);
 
     const db = supabase;
     if (!(supabaseEnabled && db)) {
@@ -12777,13 +14633,22 @@ export default function SummitApp() {
 
     const trackedId = currentLeadId;
 
-    // Best-effort cloud write: leads (+ new estimates only)
+    // Best-effort cloud write: only leads whose content changed vs last cloud snapshot
     return (async () => {
       let trackedOk = true;
       for (const lead of safe) {
+        const fp = leadPersistFingerprint(lead);
+        const cloudIdKey = lead.supabaseId?.trim() || '';
+        if (cloudIdKey && leadCloudFpRef.current.get(cloudIdKey) === fp) {
+          continue;
+        }
         try {
-            const payload = mapAppLeadToDb(lead);
-            let cloudLeadId = lead.supabaseId?.trim() || '';
+            const stamped = {
+              ...lead,
+              updatedAt: new Date().toISOString(),
+            };
+            const payload = mapAppLeadToDb(stamped);
+            let cloudLeadId = cloudIdKey;
 
             if (cloudLeadId) {
               const { error } = await db
@@ -12793,6 +14658,10 @@ export default function SummitApp() {
               if (error) {
                 console.error('Supabase lead update error:', error);
                 if (lead.id === trackedId) trackedOk = false;
+              } else {
+                rememberLeadFingerprints(leadCloudFpRef.current, [
+                  { ...stamped, supabaseId: cloudLeadId },
+                ]);
               }
             } else {
               const { data, error } = await db
@@ -12807,6 +14676,9 @@ export default function SummitApp() {
               }
               if (data?.id) {
                 cloudLeadId = String(data.id);
+                rememberLeadFingerprints(leadCloudFpRef.current, [
+                  { ...stamped, supabaseId: cloudLeadId },
+                ]);
                 setLeads((prev) => {
                   const next = prev.map((l) =>
                     l.id === lead.id && !l.supabaseId
@@ -12922,13 +14794,86 @@ export default function SummitApp() {
       })();
   };
 
+  const hydrateOpenLeadMedia = async (leadId: number) => {
+    if (!supabaseEnabled || !supabase || !signedInRef.current) return;
+    const lead = leadsRef.current.find((l) => l.id === leadId);
+    if (!lead) return;
+    try {
+      const listed = await listLeadMediaFromStorage(supabase, lead);
+      const skipped = trashedMediaPaths(trashRef.current, lead);
+      const nextLead = applyStorageMediaToLead(
+        lead,
+        listed,
+        (path) =>
+          supabase.storage.from('lead-photos').getPublicUrl(path).data
+            .publicUrl,
+        (path) =>
+          supabase.storage.from('lead-docs').getPublicUrl(path).data.publicUrl,
+        skipped.photos,
+        skipped.docs
+      );
+      const invoices = mergeAppInvoicesFromLead(
+        appInvoicesRef.current,
+        nextLead
+      );
+      const invoiceChanged =
+        invoices
+          .map((i) => i.url)
+          .sort()
+          .join('|') !==
+        appInvoicesRef.current
+          .map((i) => i.url)
+          .sort()
+          .join('|');
+      if (invoiceChanged) persistAppInvoices(invoices);
+      if (leadMediaFingerprint(lead) === leadMediaFingerprint(nextLead)) {
+        return;
+      }
+      persistLeads(
+        leadsRef.current.map((l) =>
+          l.id === leadId
+            ? { ...l, photos: nextLead.photos, documents: nextLead.documents }
+            : l
+        )
+      );
+    } catch (e) {
+      console.error('Lead media hydrate failed:', e);
+    }
+  };
+  hydrateLeadMediaFnRef.current = hydrateOpenLeadMedia;
+
+  useEffect(() => {
+    if (!sessionReady) return;
+    let timer: number | undefined;
+    const pull = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        void (async () => {
+          await refreshLeadsFnRef.current({ applyOpenLead: true });
+          saveLeadDraftFnRef.current({ silent: true });
+        })();
+      }, 400);
+    };
+    const onVis = () => {
+      if (document.visibilityState === 'visible') pull();
+    };
+    const onPageShow = () => pull();
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('pageshow', onPageShow);
+    window.addEventListener('focus', onVis);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener('focus', onVis);
+    };
+  }, [sessionReady]);
+
   const refreshGcalStatus = async () => {
     const epochAtStart = gcalAuthEpochRef.current;
-    // Prefer browser GIS session (Client ID only — no secret required)
     try {
       const {
         isBrowserGcalConfigured,
-        readBrowserGcalSession,
         readBrowserGcalEmail,
         hasBrowserGcalToken,
         isBrowserGcalLinked,
@@ -12937,35 +14882,159 @@ export default function SummitApp() {
         browserSessionHasTasksScope,
         probeGoogleTasksAccess,
         getBrowserGcalAuthEpoch,
+        shouldUseServerGcalOAuth,
+        markGcalServerLink,
       } = await import('@/lib/gcal-browser');
       setGcalConfigured(isBrowserGcalConfigured());
       void loadGoogleIdentityScript().catch(() => undefined);
-      let session = readBrowserGcalSession();
-      if (!session && isBrowserGcalLinked()) {
-        // Survives browser restart: silent-refresh expired localStorage token
-        session = await ensureBrowserGcalSession();
+
+      type GcalStatusPayload = {
+        configured?: boolean;
+        serverOAuth?: boolean;
+        connected?: boolean;
+        email?: string | null;
+        name?: string | null;
+        scopes?: string | null;
+        signedIn?: boolean;
+      };
+      let status: GcalStatusPayload | null = null;
+      try {
+        const res = await fetch('/api/google/calendar/status', {
+          cache: 'no-store',
+        });
+        if (res.ok) {
+          status = (await res.json()) as GcalStatusPayload;
+        }
+      } catch {
+        status = null;
       }
+
+      if (status) {
+        setGcalConfigured((c) => c || Boolean(status?.configured));
+        markGcalServerLink({
+          linked: Boolean(status.connected),
+          serverOAuth: Boolean(status.serverOAuth),
+        });
+      }
+
+      const serverIsTruth = shouldUseServerGcalOAuth(
+        Boolean(status?.serverOAuth)
+      );
+
+      if (serverIsTruth || status?.connected) {
+        if (
+          epochAtStart !== gcalAuthEpochRef.current ||
+          epochAtStart !== getBrowserGcalAuthEpoch()
+        ) {
+          setGcalConnected(false);
+          setGcalEmail(null);
+          setGcalName(null);
+          return;
+        }
+        if (!status?.connected) {
+          setGcalConnected(false);
+          setGcalEmail(null);
+          setGcalName(null);
+          setGtasksNeedsReconnect(false);
+          setGtasksLastError(null);
+          setGtasksErrorKind(null);
+          setCalendarEvents((prev) => {
+            const safe = Array.isArray(prev) ? prev : [];
+            if (!safe.some((e) => e?.source === 'google')) return prev;
+            const next = safe.filter((e) => e?.source !== 'google');
+            try {
+              localStorage.setItem(
+                SUMMIT_CALENDAR_EVENTS_KEY,
+                JSON.stringify(next)
+              );
+            } catch {
+              /* ignore */
+            }
+            return next;
+          });
+          setGoogleEventsSafe([]);
+          setTasks((prev) => {
+            const safe = Array.isArray(prev) ? prev : [];
+            if (!safe.some(isGoogleSourcedTask)) return prev;
+            const next = purgeGoogleSourcedTasks(safe);
+            try {
+              localStorage.setItem(SUMMIT_TASKS_KEY, JSON.stringify(next));
+            } catch {
+              /* ignore */
+            }
+            return next;
+          });
+          return;
+        }
+
+        const session = await ensureBrowserGcalSession();
+        if (
+          epochAtStart !== gcalAuthEpochRef.current ||
+          epochAtStart !== getBrowserGcalAuthEpoch()
+        ) {
+          setGcalConnected(false);
+          setGcalEmail(null);
+          setGcalName(null);
+          return;
+        }
+        setGcalConnected(true);
+        setGcalEmail(session?.email ?? status.email ?? readBrowserGcalEmail());
+        setGcalName(status.name ?? null);
+        if (session?.accessToken) {
+          if (!browserSessionHasTasksScope(session)) {
+            setGtasksNeedsReconnect(true);
+            setGtasksErrorKind('scope');
+            setGtasksLastError(
+              'Google Tasks permission missing — tap Reconnect for Tasks and allow Tasks on the consent screen.'
+            );
+          } else {
+            const probe = await probeGoogleTasksAccess(session.accessToken);
+            if (
+              epochAtStart !== gcalAuthEpochRef.current ||
+              epochAtStart !== getBrowserGcalAuthEpoch()
+            ) {
+              setGcalConnected(false);
+              setGcalEmail(null);
+              setGcalName(null);
+              return;
+            }
+            setGtasksNeedsReconnect(!probe.ok);
+            if (probe.ok) {
+              setGtasksLastError(null);
+              setGtasksErrorKind(null);
+            } else {
+              setGtasksLastError(probe.error);
+              setGtasksErrorKind(probe.kind);
+            }
+          }
+        } else {
+          setGtasksNeedsReconnect(true);
+          setGtasksErrorKind('auth');
+          setGtasksLastError(
+            'Google session expired — tap Reconnect to refresh access.'
+          );
+        }
+        return;
+      }
+
+      // GIS local fallback when server OAuth is not configured
+      let session = await ensureBrowserGcalSession();
       if (
         epochAtStart !== gcalAuthEpochRef.current ||
         epochAtStart !== getBrowserGcalAuthEpoch()
       ) {
-        // Disconnect won the race — do not resurrect Connected
         setGcalConnected(false);
         setGcalEmail(null);
         setGcalName(null);
         return;
       }
-      // Connected = linked on this device (token and/or prior email/scopes).
-      // Profile + Calendar must share this — do not drop to "Connect" on expiry.
       const linked =
         isBrowserGcalLinked() ||
         hasBrowserGcalToken() ||
         Boolean(session?.accessToken);
       if (linked) {
         setGcalConnected(true);
-        setGcalEmail(
-          session?.email ?? readBrowserGcalEmail() ?? null
-        );
+        setGcalEmail(session?.email ?? readBrowserGcalEmail() ?? null);
         setGcalName(null);
         if (session) {
           if (!browserSessionHasTasksScope(session)) {
@@ -12975,7 +15044,6 @@ export default function SummitApp() {
               'Google Tasks permission missing — tap Reconnect for Tasks and allow Tasks on the consent screen.'
             );
           } else {
-            // Scope claims Tasks — verify live (catches API-disabled / stale scope)
             const probe = await probeGoogleTasksAccess(session.accessToken);
             if (
               epochAtStart !== gcalAuthEpochRef.current ||
@@ -12996,7 +15064,6 @@ export default function SummitApp() {
             }
           }
         } else if (isBrowserGcalLinked() && !session) {
-          // Linked but silent refresh failed — still Connected; needs Reconnect
           setGtasksNeedsReconnect(true);
           setGtasksErrorKind('other');
           setGtasksLastError(
@@ -13006,12 +15073,10 @@ export default function SummitApp() {
         return;
       }
 
-      // Browser GIS configured but not linked → disconnected (don't lie via cookie)
       if (isBrowserGcalConfigured()) {
         setGcalConnected(false);
         setGcalEmail(null);
         setGcalName(null);
-        // Drop Google-imported locals so cloud hydrate / prior pulls can't look linked
         setCalendarEvents((prev) => {
           const safe = Array.isArray(prev) ? prev : [];
           if (!safe.some((e) => e?.source === 'google')) return prev;
@@ -13044,56 +15109,6 @@ export default function SummitApp() {
       }
     } catch {
       /* ignore */
-    }
-
-    // Fallback: server OAuth cookie session (legacy — only when browser GIS unused)
-    try {
-      const {
-        isBrowserGcalConfigured,
-        isBrowserGcalLinked,
-        getBrowserGcalAuthEpoch,
-      } = await import('@/lib/gcal-browser');
-      if (
-        epochAtStart !== gcalAuthEpochRef.current ||
-        epochAtStart !== getBrowserGcalAuthEpoch()
-      ) {
-        setGcalConnected(false);
-        setGcalEmail(null);
-        setGcalName(null);
-        return;
-      }
-      // Browser GIS is source of truth when configured — never resurrect from cookie
-      if (isBrowserGcalConfigured() || isBrowserGcalLinked()) {
-        if (isBrowserGcalLinked()) {
-          setGcalConnected(true);
-        }
-        return;
-      }
-      const res = await fetch('/api/google/calendar/status', {
-        cache: 'no-store',
-      });
-      if (!res.ok) return;
-      const data = (await res.json()) as {
-        configured?: boolean;
-        connected?: boolean;
-        email?: string | null;
-        name?: string | null;
-      };
-      setGcalConfigured((c) => c || Boolean(data.configured));
-      if (
-        epochAtStart !== gcalAuthEpochRef.current ||
-        epochAtStart !== getBrowserGcalAuthEpoch()
-      ) {
-        setGcalConnected(false);
-        return;
-      }
-      setGcalConnected(Boolean(data.connected));
-      setGcalEmail(data.email ?? null);
-      setGcalName(data.name ?? null);
-      // Server cookie path has Tasks scope in consent URL; browser GIS is primary
-      if (data.connected) setGtasksNeedsReconnect(false);
-    } catch {
-      /* offline / unconfigured */
     }
   };
 
@@ -13372,8 +15387,11 @@ export default function SummitApp() {
         return;
       }
       calendarGooglePullGenRef.current += 1;
-      // Authoritative Summit store — single render path for all Google + local events
-      persistCalendarEvents(recolored);
+      // Authoritative Summit store — single render path for all Google + local events.
+      // Only write cloud after this session has pulled cloud (never a stale phone copy).
+      persistCalendarEvents(recolored, {
+        syncCloud: calendarCloudFreshRef.current,
+      });
 
       // Mirror of last pull only (debug / status). UI paints calendarEvents, not this.
       setGoogleEventsSafe(coloredItems);
@@ -13524,10 +15542,11 @@ export default function SummitApp() {
     }
   };
 
-  /** Pull Calendar + Tasks from Google and push unsynced Summit events. Soft-fail always. */
+  /** Pull Summit cloud (always) then Google when linked. Soft-fail always. */
   const refreshFromGoogle = async (opts?: { silent?: boolean; cursor?: Date }) => {
     const epochAtStart = gcalAuthEpochRef.current;
     try {
+      await hydrateCalendarFromCloud();
       const {
         hasBrowserGcalToken,
         isBrowserGcalLinked,
@@ -14037,7 +16056,55 @@ export default function SummitApp() {
         connectGoogleCalendarBrowser,
         browserSessionHasTasksScope,
         probeGoogleTasksAccess,
+        shouldUseServerGcalOAuth,
+        gisPopupAllowed,
       } = await import('@/lib/gcal-browser');
+
+      let serverOAuth = false;
+      let signedIn = true;
+      try {
+        const res = await fetch('/api/google/calendar/status', {
+          cache: 'no-store',
+        });
+        const data = (await res.json()) as {
+          serverOAuth?: boolean;
+          signedIn?: boolean;
+          encryption?: boolean;
+        };
+        serverOAuth = Boolean(data.serverOAuth);
+        signedIn = data.signedIn !== false;
+        if (serverOAuth && data.encryption === false) {
+          showToast(
+            'Set GOOGLE_TOKEN_ENCRYPTION_KEY (openssl rand -hex 32) then Connect again.'
+          );
+          return;
+        }
+      } catch {
+        /* status optional */
+      }
+
+      if (shouldUseServerGcalOAuth(serverOAuth)) {
+        if (!signedIn) {
+          showToast('Sign in first');
+          return;
+        }
+        const tab =
+          activeTab === 'settings' || activeTab === 'tasks'
+            ? activeTab
+            : 'calendar';
+        const qs = new URLSearchParams({ tab });
+        if (opts?.forceConsent) qs.set('force', '1');
+        window.location.href = `/api/google/calendar/auth?${qs.toString()}`;
+        return;
+      }
+
+      if (!gisPopupAllowed()) {
+        showToast(
+          'Phone, iPad, Safari, and production need the server flow. Set GOOGLE_CLIENT_SECRET and GOOGLE_TOKEN_ENCRYPTION_KEY, add the HTTPS redirect URI in Google Cloud Console, then Connect again.'
+        );
+        return;
+      }
+
       // First connect keeps the click as a user gesture (no revoke delay).
       // Reconnect for Tasks still passes forceConsent so Google re-prompts.
       const session = await connectGoogleCalendarBrowser({
@@ -14198,16 +16265,7 @@ export default function SummitApp() {
 
       // Same epoch barrier for Tasks: purge Google-imported tasks + clear chips.
       // Keep Summit-local tasks (source local / no Google provenance).
-      setTasks((prev) => {
-        const next = purgeGoogleSourcedTasks(Array.isArray(prev) ? prev : []);
-        try {
-          localStorage.setItem(SUMMIT_TASKS_KEY, JSON.stringify(next));
-        } catch {
-          /* ignore */
-        }
-        scheduleCloudTasksSave(next, taskLists, activeTaskListId);
-        return next;
-      });
+      persistTasks(purgeGoogleSourcedTasks(readCachedTasks()));
 
       // Final truth check — storage must be empty after disconnect
       if (hasBrowserGcalToken() || isBrowserGcalLinked()) {
@@ -14235,15 +16293,7 @@ export default function SummitApp() {
       setGcalEmail(null);
       setGcalName(null);
       setGoogleEventsSafe([]);
-      setTasks((prev) => {
-        const next = purgeGoogleSourcedTasks(Array.isArray(prev) ? prev : []);
-        try {
-          localStorage.setItem(SUMMIT_TASKS_KEY, JSON.stringify(next));
-        } catch {
-          /* ignore */
-        }
-        return next;
-      });
+      persistTasks(purgeGoogleSourcedTasks(readCachedTasks()));
       showToast('Disconnected');
     } finally {
       setGcalBusy(false);
@@ -14286,7 +16336,7 @@ export default function SummitApp() {
       setGtasksNeedsReconnect(true);
       return task;
     }
-    const lists = listsOverride || taskLists;
+    const lists = listsOverride || readCachedTaskLists();
     const list =
       lists.find((l) => l.id === task.listId) ||
       lists.find((l) => l.id === activeTaskListId) ||
@@ -14399,18 +16449,20 @@ export default function SummitApp() {
       setGtasksLastError(null);
       setGtasksErrorKind(null);
       const listsMerged = mergeGoogleListsIntoLocal(
-        Array.isArray(taskLists) ? taskLists : [],
+        readCachedTaskLists(),
         Array.isArray(remoteLists) ? remoteLists : []
       );
       const nextLists = Array.isArray(listsMerged.lists)
         ? listsMerged.lists
         : [createDefaultTaskList()];
-      persistTaskLists(nextLists);
-      if (!nextLists.some((l) => l.id === activeTaskListId)) {
-        persistActiveTaskListId(nextLists[0]?.id || DEFAULT_TASK_LIST_ID);
+      persistTaskLists(nextLists, { syncCloud: false });
+      if (!nextLists.some((l) => l.id === readCachedActiveTaskListId())) {
+        persistActiveTaskListId(nextLists[0]?.id || DEFAULT_TASK_LIST_ID, {
+          syncCloud: false,
+        });
       }
 
-      let nextTasks = Array.isArray(tasks) ? tasks : [];
+      let nextTasks = readCachedTasks();
       let imported = 0;
       let updated = 0;
       let removed = 0;
@@ -14472,7 +16524,8 @@ export default function SummitApp() {
         setGcalConnected(false);
         return;
       }
-      persistTasks(nextTasks);
+      tasksGooglePullGenRef.current += 1;
+      persistTasks(nextTasks, { syncCloud: tasksCloudFreshRef.current });
       if (!opts?.silent) {
         const parts = [
           listsMerged.imported
@@ -14581,7 +16634,7 @@ export default function SummitApp() {
         );
       }
     }
-    persistTaskLists([...taskLists, list]);
+    persistTaskLists([...readCachedTaskLists(), list]);
     persistActiveTaskListId(list.id);
     setTaskListDraftTitle('');
     showToast(
@@ -14595,7 +16648,7 @@ export default function SummitApp() {
       showToast('Enter a list name');
       return;
     }
-    const target = taskLists.find((l) => l.id === listId);
+    const target = readCachedTaskLists().find((l) => l.id === listId);
     if (!target) return;
     let next: SummitTaskList = {
       ...target,
@@ -14632,7 +16685,9 @@ export default function SummitApp() {
         );
       }
     }
-    persistTaskLists(taskLists.map((l) => (l.id === listId ? next : l)));
+    persistTaskLists(
+      readCachedTaskLists().map((l) => (l.id === listId ? next : l))
+    );
     setRenamingTaskListId(null);
     setRenameTaskListTitle('');
     showToast('List renamed');
@@ -14672,7 +16727,7 @@ export default function SummitApp() {
         );
       }
     }
-    persistTasks([task, ...tasks]);
+    persistTasks([task, ...readCachedTasks()]);
     setNewTaskTitle('');
     setNewTaskDue('');
     setNewTaskNotes('');
@@ -14686,12 +16741,13 @@ export default function SummitApp() {
     patch: Partial<Pick<SummitTask, 'title' | 'notes' | 'dueDate' | 'completed'>>,
     opts?: { syncGoogle?: boolean }
   ) => {
-    const existing = tasks.find((t) => t.id === taskId);
+    const current = readCachedTasks();
+    const existing = current.find((t) => t.id === taskId);
     if (!existing || existing.deletedAt) return;
     const now = new Date().toISOString();
     const syncGoogle = opts?.syncGoogle !== false;
     const epochAtStart = gcalAuthEpochRef.current;
-    let next = tasks.map((t) => {
+    let next = current.map((t) => {
       if (t.id !== taskId) return t;
       const completed =
         patch.completed !== undefined ? patch.completed : t.completed;
@@ -14777,12 +16833,13 @@ export default function SummitApp() {
 
   /** Soft-delete → Tasks Trash (local). Google delete happens on permanent purge. */
   const deleteTask = async (taskId: string) => {
-    const target = tasks.find((t) => t.id === taskId);
+    const current = readCachedTasks();
+    const target = current.find((t) => t.id === taskId);
     if (!target || target.deletedAt) return;
     const now = new Date().toISOString();
     // Keep googleTaskId so pull won't re-import; merge skips soft-deleted
     persistTasks(
-      tasks.map((t) =>
+      current.map((t) =>
         t.id === taskId ? { ...t, deletedAt: now, updatedAt: now } : t
       )
     );
@@ -14790,7 +16847,8 @@ export default function SummitApp() {
   };
 
   const restoreTaskFromTrash = (taskId: string) => {
-    const target = tasks.find((t) => t.id === taskId);
+    const current = readCachedTasks();
+    const target = current.find((t) => t.id === taskId);
     if (!target?.deletedAt) return;
     const now = new Date().toISOString();
     const restored: SummitTask = {
@@ -14799,23 +16857,16 @@ export default function SummitApp() {
       updatedAt: now,
       source: target.source === 'google' ? 'google' : 'local',
     };
-    persistTasks(tasks.map((t) => (t.id === taskId ? restored : t)));
+    persistTasks(current.map((t) => (t.id === taskId ? restored : t)));
     if (gcalConnected && !gtasksNeedsReconnect) {
       void (async () => {
         try {
           const pushed = await pushTaskToGoogle(restored);
-          setTasks((prev) => {
-            const next = (Array.isArray(prev) ? prev : []).map((t) =>
+          persistTasks(
+            readCachedTasks().map((t) =>
               t.id === taskId ? { ...pushed, deletedAt: undefined } : t
-            );
-            try {
-              localStorage.setItem(SUMMIT_TASKS_KEY, JSON.stringify(next));
-            } catch {
-              /* ignore */
-            }
-            scheduleCloudTasksSave(next, taskLists, activeTaskListId);
-            return next;
-          });
+            )
+          );
         } catch {
           /* local restore already applied */
         }
@@ -14825,7 +16876,7 @@ export default function SummitApp() {
   };
 
   const permanentlyDeleteTask = async (taskId: string) => {
-    const target = tasks.find((t) => t.id === taskId);
+    const target = readCachedTasks().find((t) => t.id === taskId);
     if (!target) return;
     if (target.googleTaskId && gcalConnected && !gtasksNeedsReconnect) {
       try {
@@ -14834,7 +16885,7 @@ export default function SummitApp() {
         const { deleteGoogleTask } = await import('@/lib/google-tasks');
         const epochAtStart = gcalAuthEpochRef.current;
         const session = await ensureBrowserGcalSession();
-        const list = taskLists.find((l) => l.id === target.listId);
+        const list = readCachedTaskLists().find((l) => l.id === target.listId);
         const gListId = googleListIdFor(list);
         if (
           session?.accessToken &&
@@ -14852,12 +16903,13 @@ export default function SummitApp() {
         /* still drop locally */
       }
     }
-    persistTasks(tasks.filter((t) => t.id !== taskId));
+    persistTasks(readCachedTasks().filter((t) => t.id !== taskId));
     showToast('Task permanently deleted');
   };
 
   const emptyTasksTrash = () => {
-    const trashed = tasks.filter((t) => t.deletedAt);
+    const current = readCachedTasks();
+    const trashed = current.filter((t) => t.deletedAt);
     if (trashed.length === 0) return;
     if (
       !confirm(
@@ -14884,7 +16936,7 @@ export default function SummitApp() {
           }
           for (const t of trashed) {
             if (!t.googleTaskId) continue;
-            const list = taskLists.find((l) => l.id === t.listId);
+            const list = readCachedTaskLists().find((l) => l.id === t.listId);
             const gListId = googleListIdFor(list);
             if (!gListId) continue;
             try {
@@ -14902,9 +16954,63 @@ export default function SummitApp() {
         }
       })();
     }
-    persistTasks(tasks.filter((t) => !t.deletedAt));
+    persistTasks(readCachedTasks().filter((t) => !t.deletedAt));
     setTasksTrashOpen(false);
     showToast('Tasks trash emptied');
+  };
+
+  const captureMeasureDraft = (): LeadMeasureDraft | null => {
+    const hasWork =
+      showTracer ||
+      solarMeasuring ||
+      tracePoints.length > 0 ||
+      draftSections.length > 0;
+    if (!hasWork) return null;
+    return {
+      showTracer,
+      solarMeasuring,
+      tracePoints,
+      draftSections,
+      sectionKind: sectionKindRef.current,
+      measurePitch,
+      measureWaste,
+      measureWasteAuto,
+      measureLabel,
+      measurePitchAuto,
+      mapCenter,
+      selectedMeasurementId,
+    };
+  };
+
+  const restoreMeasureDraft = (lead: Lead) => {
+    const localBusy = showTracer && (tracePoints.length > 0 || draftSections.length > 0);
+    if (localBusy) return;
+    const draft = lead.measureDraft;
+    if (!draft) {
+      setSolarMeasuring(false);
+      if (showTracer || tracePoints.length > 0 || draftSections.length > 0) {
+        setShowTracer(false);
+        setTracePoints([]);
+        setDraftSections([]);
+      }
+      return;
+    }
+    setShowTracer(Boolean(draft.showTracer));
+    setTracePoints(draft.tracePoints || []);
+    setDraftSections(draft.draftSections || []);
+    const kind = draft.sectionKind === 'flat' ? 'flat' : 'pitched';
+    sectionKindRef.current = kind;
+    setSectionKind(kind);
+    if (draft.measurePitch) setMeasurePitch(draft.measurePitch);
+    if (draft.measureWaste != null) setMeasureWaste(draft.measureWaste);
+    if (draft.measureWasteAuto != null) setMeasureWasteAuto(draft.measureWasteAuto);
+    if (draft.measureLabel != null) setMeasureLabel(draft.measureLabel);
+    if (draft.measurePitchAuto != null) setMeasurePitchAuto(draft.measurePitchAuto);
+    if (draft.mapCenter) setMapCenter(draft.mapCenter);
+    if (draft.selectedMeasurementId) {
+      setSelectedMeasurementId(draft.selectedMeasurementId);
+    }
+    setSolarMeasuring(Boolean(draft.solarMeasuring));
   };
 
   const applyLeadFields = (lead: Lead) => {
@@ -14950,14 +17056,44 @@ export default function SummitApp() {
     setAdjustmentDate(lead.adjustmentDate || '');
     setAdjustmentTime(lead.adjustmentTime || '');
     setLeadCategory(normalizePipelineStage(lead.category));
-    setTakeoffForm(
-      lead.takeoff && typeof lead.takeoff === 'object'
-        ? normalizeTakeoff(lead.takeoff)
-        : emptyTakeoff()
-    );
+    const incomingTakeoff = takeoffFromLead(lead);
+    const sameLead = currentLeadIdRef.current === lead.id;
+    const onTakeoff =
+      systemDocWorkspaceRef.current === 'takeoff' ||
+      profileTabRef.current === 'takeoff';
+    const takeoffDirty =
+      takeoffFingerprint(takeoffFormRef.current) !== takeoffBaselineRef.current;
+    if (!(sameLead && onTakeoff && takeoffDirty)) {
+      setTakeoffForm(incomingTakeoff);
+      takeoffFormRef.current = incomingTakeoff;
+      takeoffBaselineRef.current = takeoffFingerprint(incomingTakeoff);
+    }
+    const incomingOrder = orderDraftFromLead(lead);
+    const onOrders = profileTabRef.current === 'orders';
+    const orderDirty =
+      orderDraftFingerprint(orderFormRef.current) !==
+      orderDraftBaselineRef.current;
+    if (currentLeadIdRef.current !== lead.id) {
+      setLeadMaterialOrders([]);
+    }
+    if (!(sameLead && onOrders && orderDirty)) {
+      setProfileOrderType(incomingOrder.orderType);
+      setProfileOrderLines(incomingOrder.orderLines);
+      setProfileOrderCoverageInputs(incomingOrder.coverageInputs);
+      setProfileOrdersStep(
+        incomingOrder.orderType && incomingOrder.step === 'labor'
+          ? 'labor'
+          : 'material'
+      );
+      setProfileOrderFilledFrom(incomingOrder.filledFrom);
+      orderFormRef.current = incomingOrder;
+      orderDraftBaselineRef.current = orderDraftFingerprint(incomingOrder);
+      orderFormLeadIdRef.current = lead.id;
+    }
     setLeadNoteDraft('');
     setCurrentLeadId(lead.id);
     setLightboxPhoto(null);
+    restoreMeasureDraft(lead);
   };
 
   const loadLeadIntoForm = (lead: Lead) => {
@@ -14971,11 +17107,21 @@ export default function SummitApp() {
     const lead = leadOverride ?? leads.find((l) => l.id === leadId);
     if (!lead) return;
     loadLeadIntoForm(lead);
+    void refreshLeadsFromCloud({ applyOpenLead: true });
   };
 
   // After refresh: rehydrate open lead profile fields once leads load
   const profileRestoredRef = useRef(false);
   useEffect(() => {
+    if (pendingApplyCloudLeadRef.current && isEditingLead && currentLeadId != null) {
+      pendingApplyCloudLeadRef.current = false;
+      const fresh = leads.find((l) => l.id === currentLeadId);
+      if (fresh) {
+        skipUnsavedMarkRef.current = true;
+        applyLeadFields(fresh);
+      }
+      return;
+    }
     if (profileRestoredRef.current) return;
     if (leads.length === 0) return;
     profileRestoredRef.current = true;
@@ -15200,14 +17346,14 @@ export default function SummitApp() {
   };
 
   const persistTrash = (next: AppTrashItem[]) => {
-    // Never accidentally wipe on bad data
     const safe = Array.isArray(next) ? next.filter(Boolean) : [];
+    trashRef.current = safe;
     setTrash(safe);
-    try {
-      localStorage.setItem('summitTrash', JSON.stringify(safe));
-    } catch (e) {
-      console.error('persistTrash failed', e);
-    }
+    cacheTrashLocally(safe);
+  };
+
+  const rebuildTrashView = (activeLeads: Lead[] = leadsRef.current) => {
+    persistTrash(assembleAppTrash(activeLeads, deletedLeadsRef.current));
   };
 
   const moveToTrash = (leadId: number) => {
@@ -15221,20 +17367,23 @@ export default function SummitApp() {
       return;
     }
     const newLeads = leads.filter((l) => l.id !== leadId);
-    const item: AppTrashItem = {
-      id: `lead-${leadId}-${Date.now()}`,
-      kind: 'lead',
-      deletedAt: new Date().toLocaleString(),
-      lead: leadToMove,
-    };
-    const newTrash = [item, ...trash];
+    const deletedAt = new Date().toISOString();
+    deletedLeadsRef.current = [
+      { lead: leadToMove, deletedAt },
+      ...deletedLeadsRef.current.filter(
+        (d) =>
+          d.lead.id !== leadId &&
+          d.lead.supabaseId !== leadToMove.supabaseId
+      ),
+    ];
     setLeads(newLeads);
-    persistTrash(newTrash);
+    leadsRef.current = newLeads;
     try {
       localStorage.setItem('summitLeads', JSON.stringify(newLeads));
     } catch {
       /* ignore */
     }
+    rebuildTrashView(newLeads);
     if (currentLeadId === leadId) {
       setIsEditingLead(false);
       setCurrentLeadId(null);
@@ -15246,10 +17395,9 @@ export default function SummitApp() {
       if (cloudId) {
         void (async () => {
           try {
-            // Soft-delete in cloud (matches Trash UI). Estimates stay linked.
             const { error } = await supabase
               .from('leads')
-              .update({ deleted_at: new Date().toISOString() })
+              .update({ deleted_at: deletedAt })
               .eq('id', cloudId);
             if (error) console.error('Supabase soft-delete error:', error);
           } catch (err) {
@@ -15265,24 +17413,21 @@ export default function SummitApp() {
   const restoreFromTrash = (trashId: string) => {
     const item = trash.find((t) => t.id === trashId);
     if (!item) return;
-    const newTrash = trash.filter((t) => t.id !== trashId);
 
     if (item.kind === 'lead') {
       const leadId = item.lead.id;
       const cloudId = item.lead.supabaseId?.trim();
-      // Keep the same cloud id — restore clears deleted_at (no duplicate insert)
       const restored: Lead = {
         ...item.lead,
         estimates: item.lead.estimates || [],
       };
+      deletedLeadsRef.current = deletedLeadsRef.current.filter(
+        (d) =>
+          d.lead.id !== leadId &&
+          !(cloudId && d.lead.supabaseId?.trim() === cloudId)
+      );
       const newLeads = sanitizeLeads([...leads, restored]);
-      persistTrash(newTrash);
-      setLeads(newLeads);
-      try {
-        localStorage.setItem('summitLeads', JSON.stringify(newLeads));
-      } catch {
-        /* ignore */
-      }
+      persistLeads(newLeads);
 
       if (supabaseEnabled && supabase && cloudId) {
         void (async () => {
@@ -15301,7 +17446,6 @@ export default function SummitApp() {
           }
         })();
       } else if (supabaseEnabled && supabase && !cloudId) {
-        // Never synced before trash — insert as new cloud lead
         void (async () => {
           try {
             const payload = mapAppLeadToDb(restored);
@@ -15320,6 +17464,7 @@ export default function SummitApp() {
               const next = prev.map((l) =>
                 l.id === leadId ? { ...l, supabaseId: newCloudId } : l
               );
+              leadsRef.current = next;
               try {
                 localStorage.setItem('summitLeads', JSON.stringify(next));
               } catch {
@@ -15336,44 +17481,46 @@ export default function SummitApp() {
       return;
     }
 
-    // Media / map measurement restore onto lead
     const leadId = item.leadId;
     const lead = leads.find((l) => l.id === leadId);
     if (!lead) {
       showToast('Original lead not found — restore failed');
       return;
     }
-    let nextLead: Lead = lead;
+    let nextLead: Lead = {
+      ...lead,
+      trash: (lead.trash || []).filter((t) => !leadTrashMatchesApp(t, item)),
+      updatedAt: new Date().toISOString(),
+    };
     if (item.kind === 'photo') {
       nextLead = {
-        ...lead,
-        photos: [...(lead.photos || []), item.photo],
+        ...nextLead,
+        photos: [...(nextLead.photos || []), item.photo],
       };
     } else if (item.kind === 'roofMeasurement') {
       nextLead = {
-        ...lead,
-        measurements: [...(lead.measurements || []), item.measurement],
+        ...nextLead,
+        measurements: [...(nextLead.measurements || []), item.measurement],
       };
     } else if (item.kind === 'estimate') {
-      // Cloud row was removed on trash — clear supabaseId so persist re-inserts once
       const restoredEst: Estimate = {
         ...item.estimate,
         supabaseId: undefined,
       };
       nextLead = {
-        ...lead,
-        estimates: [...(lead.estimates || []), restoredEst],
+        ...nextLead,
+        estimates: [...(nextLead.estimates || []), restoredEst],
       };
       dirtyEstimateKeysRef.current.add(`${leadId}:${restoredEst.id}`);
     } else if (item.kind === 'note') {
       nextLead = {
-        ...lead,
-        notes: [...(lead.notes || []), item.note],
+        ...nextLead,
+        notes: [...(nextLead.notes || []), item.note],
       };
     } else {
       nextLead = {
-        ...lead,
-        documents: [...(lead.documents || []), item.document],
+        ...nextLead,
+        documents: [...(nextLead.documents || []), item.document],
       };
       if (item.kind === 'measurement') {
         nextLead = {
@@ -15385,32 +17532,24 @@ export default function SummitApp() {
         };
       }
     }
-    const newLeads = leads.map((l) => (l.id === leadId ? nextLead : l));
-    persistTrash(newTrash);
-    // Estimates (and other lead fields) need persistLeads so cloud sync runs
-    if (item.kind === 'estimate') {
-      persistLeads(newLeads);
-    } else {
-      setLeads(newLeads);
-      try {
-        localStorage.setItem('summitLeads', JSON.stringify(newLeads));
-      } catch {
-        /* ignore */
-      }
-    }
+    persistLeads(leads.map((l) => (l.id === leadId ? nextLead : l)));
     showToast('Restored');
   };
 
   const permanentlyDelete = (trashId: string) => {
     if (!confirm('Permanently delete? This cannot be undone.')) return;
     const doomed = trash.find((t) => t.id === trashId);
-    const newTrash = trash.filter((t) => t.id !== trashId);
-    persistTrash(newTrash);
+    if (!doomed) return;
 
-    if (doomed?.kind === 'lead') {
+    if (doomed.kind === 'lead') {
       const leadId = doomed.lead.id;
       const cloudId = doomed.lead.supabaseId?.trim();
-      // Purge this lead's invoices from the Invoices index + Storage
+      deletedLeadsRef.current = deletedLeadsRef.current.filter(
+        (d) =>
+          d.lead.id !== leadId &&
+          !(cloudId && d.lead.supabaseId?.trim() === cloudId)
+      );
+      rebuildTrashView();
       const doomedInvoices = appInvoices.filter((i) => i.leadId === leadId);
       if (doomedInvoices.length > 0) {
         persistAppInvoices(
@@ -15440,7 +17579,26 @@ export default function SummitApp() {
       return;
     }
 
-    if (supabaseEnabled && supabase && doomed) {
+    const lead = leads.find((l) => l.id === doomed.leadId);
+    if (lead) {
+      persistLeads(
+        leads.map((l) =>
+          l.id === lead.id
+            ? {
+                ...l,
+                trash: (l.trash || []).filter(
+                  (t) => !leadTrashMatchesApp(t, doomed)
+                ),
+                updatedAt: new Date().toISOString(),
+              }
+            : l
+        )
+      );
+    } else {
+      persistTrash(trash.filter((t) => t.id !== trashId));
+    }
+
+    if (supabaseEnabled && supabase) {
       void (async () => {
         try {
           if (doomed.kind === 'photo') {
@@ -15486,9 +17644,14 @@ export default function SummitApp() {
 
   const emptyTrash = () => {
     if (trash.length === 0) return;
-    // Confirm is handled by the Trash UI call site
     const doomed = [...trash];
-    persistTrash([]);
+    deletedLeadsRef.current = [];
+    const cleared = leads.map((l) =>
+      (l.trash || []).length
+        ? { ...l, trash: [], updatedAt: new Date().toISOString() }
+        : l
+    );
+    persistLeads(cleared);
 
     const purgedLeadIds = new Set(
       doomed.filter((t) => t.kind === 'lead').map((t) => t.lead.id)
@@ -15784,9 +17947,9 @@ export default function SummitApp() {
         return;
       }
 
-      const updatedLeads = leads.map((lead) =>
+      const updatedLeads = leadsRef.current.map((lead) =>
         lead.id === currentLeadId
-          ? { ...lead, photos: [...(lead.photos || []), ...newPhotos] }
+          ? { ...lead, photos: mergeLeadPhotos(lead.photos, newPhotos) }
           : lead
       );
       persistLeads(updatedLeads);
@@ -15833,7 +17996,7 @@ export default function SummitApp() {
     setDocAddMenuOpen(false);
     docAddSaveFolderRef.current = folder;
     if (id === 'takeoff') {
-      openSystemDoc('takeoff', 'lead', { blank: true });
+      openSystemDoc('takeoff', 'lead');
       return;
     }
     if (id === 'mitigation') {
@@ -15917,7 +18080,7 @@ export default function SummitApp() {
       const loadImg = (src: string) =>
         new Promise<{ data: string; w: number; h: number }>((resolve, reject) => {
           const img = new Image();
-          img.crossOrigin = 'anonymous';
+          if (!src.startsWith('data:')) img.crossOrigin = 'anonymous';
           img.onload = () => {
             try {
               const canvas = document.createElement('canvas');
@@ -16031,10 +18194,11 @@ export default function SummitApp() {
         align: 'center',
       });
 
-      // Photo pages — 2 per page
+      // Photo pages — 2 per page. addPage + setPage so Safari keeps every page.
       const slotH = (pageH - 36) / 2;
       for (let i = 0; i < chosen.length; i += 2) {
-        doc.addPage();
+        doc.addPage('letter', 'portrait');
+        doc.setPage(doc.getNumberOfPages());
         const pair = [chosen[i], chosen[i + 1]].filter(Boolean) as LeadPhoto[];
         for (let s = 0; s < pair.length; s++) {
           const photo = pair[s];
@@ -16080,10 +18244,19 @@ export default function SummitApp() {
         );
       }
 
-      const blob = doc.output('blob');
+      const expectedPages = 1 + Math.ceil(chosen.length / 2);
+      if (doc.getNumberOfPages() !== expectedPages) {
+        throw new Error(
+          `photo report page count ${doc.getNumberOfPages()} !== ${expectedPages}`
+        );
+      }
+
+      const pdfBytes = new Uint8Array(doc.output('arraybuffer'));
+      const blob = new Blob([pdfBytes.slice()], { type: 'application/pdf' });
       const safe = title.replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 40) || 'Photo_Report';
       const job = String(lead.jobNumber || currentLeadId).replace(/[^a-zA-Z0-9-]+/g, '_');
       const fileName = `${safe}_${job}.pdf`;
+      const file = new File([blob], fileName, { type: 'application/pdf' });
 
       // Save to lead documents (Storage)
       if (supabaseEnabled && supabase) {
@@ -16100,7 +18273,15 @@ export default function SummitApp() {
         if (upErr) {
           console.error('Report upload error', upErr);
           showToast('PDF built but cloud save failed — downloading');
-          doc.save(fileName);
+          const href = URL.createObjectURL(file);
+          const a = document.createElement('a');
+          a.href = href;
+          a.download = fileName;
+          a.rel = 'noreferrer';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          window.setTimeout(() => URL.revokeObjectURL(href), 4000);
         } else {
           const { data: pub } = supabase.storage
             .from('lead-docs')
@@ -16125,16 +18306,19 @@ export default function SummitApp() {
               caption: photoReportCaptions[p.id] || '',
             })),
           };
-          const updated = leads.map((l) =>
+          const updated = leadsRef.current.map((l) =>
             l.id === currentLeadId
               ? {
                   ...l,
-                  documents: prependLeadDocuments(
-                    l.documents,
-                    [newDoc],
-                    'photo_reports'
+                  documents: mergeLeadDocuments(
+                    prependLeadDocuments(
+                      l.documents,
+                      [newDoc],
+                      'photo_reports'
+                    ),
+                    l.documents
                   ),
-                  photoReports: [...(l.photoReports || []), report],
+                  photoReports: mergePhotoReports(l.photoReports, [report]),
                 }
               : l
           );
@@ -16142,10 +18326,26 @@ export default function SummitApp() {
           showToast('Report saved to Documents');
         }
       } else {
-        doc.save(fileName);
+        const href = URL.createObjectURL(file);
+        const a = document.createElement('a');
+        a.href = href;
+        a.download = fileName;
+        a.rel = 'noreferrer';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.setTimeout(() => URL.revokeObjectURL(href), 4000);
         showToast('Report downloaded (cloud off)');
       }
       setPhotoReportOpen(false);
+      if (pdfPreviewRevokeRef.current) {
+        URL.revokeObjectURL(pdfPreviewRevokeRef.current);
+      }
+      const previewUrl = URL.createObjectURL(file);
+      pdfPreviewRevokeRef.current = previewUrl;
+      pdfPreviewFileRef.current = file;
+      setMeasurementPdfName(fileName);
+      setMeasurementPdfUrl(previewUrl);
     } catch (err) {
       console.error(err);
       showToast('Could not build photo report');
@@ -16159,7 +18359,7 @@ export default function SummitApp() {
     lead.jobNumber ||
     'Lead';
 
-  /** Soft-delete photo → app trash, and remove the Storage object. */
+  /** Soft-delete photo → app trash (file stays until permanent delete). */
   const removeLeadPhoto = (photoId: string) => {
     if (!currentLeadId) return;
     setPendingTrashPhotoId(photoId);
@@ -16169,30 +18369,29 @@ export default function SummitApp() {
     const photoId = pendingTrashPhotoId;
     setPendingTrashPhotoId(null);
     if (!photoId || !currentLeadId) return;
-    const lead = leads.find((l) => l.id === currentLeadId);
+    const lead = leadsRef.current.find((l) => l.id === currentLeadId);
     const photo = lead?.photos?.find((p) => p.id === photoId);
     if (!photo || !lead) return;
-    const updated = leads.map((l) =>
-      l.id === currentLeadId
-        ? { ...l, photos: (l.photos || []).filter((p) => p.id !== photoId) }
-        : l
+    persistLeads(
+      leadsRef.current.map((l) =>
+        l.id === currentLeadId
+          ? {
+              ...l,
+              photos: (l.photos || []).filter((p) => p.id !== photoId),
+              trash: [
+                ...(l.trash || []),
+                {
+                  id: photo.id,
+                  kind: 'photo',
+                  deletedAt: new Date().toISOString(),
+                  photo,
+                },
+              ],
+              updatedAt: new Date().toISOString(),
+            }
+          : l
+      )
     );
-    persistLeads(updated);
-    persistTrash([
-      {
-        id: `${Date.now()}-photo`,
-        kind: 'photo',
-        deletedAt: new Date().toLocaleString(),
-        leadId: currentLeadId,
-        leadLabel: leadLabelFor(lead),
-        photo,
-      },
-      ...trash,
-    ]);
-    const path = storagePathFromPublicUrl(photo.url, 'lead-photos');
-    if (supabaseEnabled && supabase && path) {
-      void removeStoragePaths(supabase, 'lead-photos', [path]);
-    }
     if (lightboxPhoto?.id === photoId) setLightboxPhoto(null);
     showToast('Moved to trash');
   };
@@ -16206,29 +18405,29 @@ export default function SummitApp() {
       lead?.measurementReports?.find((d) => d.id === docId) ||
       lead?.documents?.find((d) => d.id === docId);
     if (!doc || !lead) return;
-    const updated = leads.map((l) =>
-      l.id === currentLeadId
-        ? {
-            ...l,
-            measurementReports: (l.measurementReports || []).filter(
-              (d) => d.id !== docId
-            ),
-            documents: (l.documents || []).filter((d) => d.id !== docId),
-          }
-        : l
+    persistLeads(
+      leads.map((l) =>
+        l.id === currentLeadId
+          ? {
+              ...l,
+              measurementReports: (l.measurementReports || []).filter(
+                (d) => d.id !== docId
+              ),
+              documents: (l.documents || []).filter((d) => d.id !== docId),
+              trash: [
+                ...(l.trash || []),
+                {
+                  id: doc.id,
+                  kind: 'measurement',
+                  deletedAt: new Date().toISOString(),
+                  document: doc,
+                },
+              ],
+              updatedAt: new Date().toISOString(),
+            }
+          : l
+      )
     );
-    persistLeads(updated);
-    persistTrash([
-      {
-        id: `${Date.now()}-meas`,
-        kind: 'measurement',
-        deletedAt: new Date().toLocaleString(),
-        leadId: currentLeadId,
-        leadLabel: leadLabelFor(lead),
-        document: doc,
-      },
-      ...trash,
-    ]);
     if (measurementPdfUrl && doc.url === measurementPdfUrl) {
       closePdfPreview();
     }
@@ -16550,14 +18749,13 @@ export default function SummitApp() {
         return;
       }
 
-      const updatedLeads = leads.map((lead) =>
+      const updatedLeads = leadsRef.current.map((lead) =>
         lead.id === leadId
           ? {
               ...lead,
-              documents: prependLeadDocuments(
-                lead.documents,
-                newDocs,
-                folder
+              documents: mergeLeadDocuments(
+                prependLeadDocuments(lead.documents, newDocs, folder),
+                lead.documents
               ),
             }
           : lead
@@ -16581,25 +18779,35 @@ export default function SummitApp() {
   const removeLeadDocument = (docId: string) => {
     if (!currentLeadId) return;
     if (!confirm('Move this document to trash?')) return;
-    const lead = leads.find((l) => l.id === currentLeadId);
+    const lead = leadsRef.current.find((l) => l.id === currentLeadId);
     const doc = lead?.documents?.find((d) => d.id === docId);
     if (!doc || !lead) return;
     const wasMeasurement = (lead.measurementReports || []).some(
       (d) => d.id === docId
     );
-    const updated = leads.map((l) =>
-      l.id === currentLeadId
-        ? {
-            ...l,
-            documents: (l.documents || []).filter((d) => d.id !== docId),
-            measurementReports: (l.measurementReports || []).filter(
-              (d) => d.id !== docId
-            ),
-          }
-        : l
+    persistLeads(
+      leadsRef.current.map((l) =>
+        l.id === currentLeadId
+          ? {
+              ...l,
+              documents: (l.documents || []).filter((d) => d.id !== docId),
+              measurementReports: (l.measurementReports || []).filter(
+                (d) => d.id !== docId
+              ),
+              trash: [
+                ...(l.trash || []),
+                {
+                  id: doc.id,
+                  kind: wasMeasurement ? 'measurement' : 'document',
+                  deletedAt: new Date().toISOString(),
+                  document: doc,
+                },
+              ],
+              updatedAt: new Date().toISOString(),
+            }
+          : l
+      )
     );
-    persistLeads(updated);
-    // Keep Invoices index in sync when an invoice PDF is trashed from Documents
     const stillInInvoices = appInvoices.some(
       (i) => i.id === docId || i.url === doc.url
     );
@@ -16608,23 +18816,12 @@ export default function SummitApp() {
         appInvoices.filter((i) => i.id !== docId && i.url !== doc.url)
       );
     }
-    persistTrash([
-      {
-        id: `${Date.now()}-doc`,
-        kind: wasMeasurement ? 'measurement' : 'document',
-        deletedAt: new Date().toLocaleString(),
-        leadId: currentLeadId,
-        leadLabel: leadLabelFor(lead),
-        document: doc,
-      },
-      ...trash,
-    ]);
     if (measurementPdfUrl && doc.url === measurementPdfUrl) {
       closePdfPreview();
     }
-    const remaining = (updated.find((l) => l.id === currentLeadId)?.documents ||
-      []
-    ).filter((d) => inferLeadDocFolder(d) === docFolderView);
+    const remaining = (lead.documents || []).filter(
+      (d) => d.id !== docId && inferLeadDocFolder(d) === docFolderView
+    );
     if (docFolderView && remaining.length === 0) setDocFolderView(null);
     showToast('Moved to trash');
   };
@@ -16699,7 +18896,20 @@ export default function SummitApp() {
     category: leadCategory,
     adjustmentDate: adjustmentDate || '',
     adjustmentTime: adjustmentTime || '',
-    takeoff: normalizeTakeoff(takeoffForm),
+    takeoff: mergeTakeoffForSave(
+      currentLeadId != null
+        ? leadsRef.current.find((l) => l.id === currentLeadId)?.takeoff
+        : undefined,
+      takeoffForm
+    ),
+    orderDraft: mergeOrderDraftForSave(
+      currentLeadId != null
+        ? leadsRef.current.find((l) => l.id === currentLeadId)?.orderDraft
+        : undefined,
+      orderFormRef.current,
+      orderDraftFingerprint(orderFormRef.current) !==
+        orderDraftBaselineRef.current
+    ),
   });
 
   /**
@@ -16712,9 +18922,33 @@ export default function SummitApp() {
   }): boolean => {
     const id = opts?.leadId ?? currentLeadId;
     if (!id) return false;
-    const updatedLeads = leads.map((lead) =>
-      lead.id === id ? { ...lead, ...buildLeadFormPatch() } : lead
+    const now = new Date().toISOString();
+    const updatedLeads = leadsRef.current.map((lead) =>
+      lead.id === id
+        ? {
+            ...lead,
+            ...buildLeadFormPatch(),
+            measureDraft: captureMeasureDraft(),
+            updatedAt: now,
+          }
+        : lead
     );
+    const written = updatedLeads.find((l) => l.id === id)?.takeoff;
+    if (
+      written &&
+      takeoffFingerprint(written) === takeoffFingerprint(takeoffFormRef.current)
+    ) {
+      takeoffBaselineRef.current = takeoffFingerprint(takeoffFormRef.current);
+    }
+    const writtenOrder = updatedLeads.find((l) => l.id === id)?.orderDraft;
+    if (
+      orderDraftFingerprint(writtenOrder) ===
+      orderDraftFingerprint(orderFormRef.current)
+    ) {
+      orderDraftBaselineRef.current = orderDraftFingerprint(
+        orderFormRef.current
+      );
+    }
     const gen = ++leadSaveGenRef.current;
     setLeadSaveStatus('saving');
     void persistLeads(updatedLeads).then(
@@ -16730,6 +18964,7 @@ export default function SummitApp() {
     if (!opts?.silent) showToast('Lead draft saved');
     return true;
   };
+  saveLeadDraftFnRef.current = saveLeadDraft;
 
   useEffect(() => {
     if (!isEditingLead || currentLeadId == null || profileTab === 'estimator') {
@@ -16795,6 +19030,11 @@ export default function SummitApp() {
     adjustmentDate,
     adjustmentTime,
     takeoffForm,
+    profileOrderType,
+    profileOrderLines,
+    profileOrderCoverageInputs,
+    profileOrdersStep,
+    profileOrderFilledFrom,
   ]);
 
   // Approved job value always follows worksheet line grand total
@@ -16843,8 +19083,10 @@ export default function SummitApp() {
   const pageLeadProfile = (dir: 1 | -1): boolean => {
     const s = phonePagerStateRef.current;
     if (!(s.isEditingLead && s.currentLeadId != null)) return false;
+    if (phonePagerGlideLocked()) return true;
     const step = leadProfilePagerStep(s.profileTab, dir);
     if (step.kind === 'exit') {
+      markPhonePagerGlide();
       s.isEditingLead = false;
       s.pipelineFilter = null;
       s.leadsView = 'active';
@@ -16857,6 +19099,9 @@ export default function SummitApp() {
       pulsePhonePagerRubber(leadPagerRef.current, dir);
       return true;
     }
+    markPhonePagerGlide();
+    freezePhoneChipStrips();
+    phonePagerMovedRef.current = true;
     s.profileTab = step.id;
     saveLeadDraft({ silent: true });
     setProfileTab(step.id as ProfileTab);
@@ -16866,8 +19111,10 @@ export default function SummitApp() {
   const pagePipelineBoard = (dir: 1 | -1): boolean => {
     const s = phonePagerStateRef.current;
     if (s.isEditingLead || s.activeTab !== 'leads') return false;
+    if (phonePagerGlideLocked()) return true;
     if (s.leadsView !== 'active') {
       if (dir < 0) {
+        markPhonePagerGlide();
         s.activeTab = 'home';
         handleTabChange('home');
         return true;
@@ -16876,6 +19123,7 @@ export default function SummitApp() {
     }
     const step = pipelineBoardPagerStep(s.pipelineFilter, dir);
     if (step.kind === 'exit') {
+      markPhonePagerGlide();
       s.activeTab = 'home';
       handleTabChange('home');
       return true;
@@ -16884,6 +19132,9 @@ export default function SummitApp() {
       pulsePhonePagerRubber(pipelineBoardPagerRef.current, dir);
       return true;
     }
+    markPhonePagerGlide();
+    freezePhoneChipStrips();
+    phonePagerMovedRef.current = true;
     s.pipelineFilter = step.filter;
     setPipelineFilter(step.filter);
     return true;
@@ -17525,6 +19776,8 @@ export default function SummitApp() {
     if (!currentLeadId) return;
     const snapshot = normalizeTakeoff(takeoffForm);
     setTakeoffForm(snapshot);
+    takeoffFormRef.current = snapshot;
+    takeoffBaselineRef.current = takeoffFingerprint(snapshot);
     const updatedLeads = leads.map((lead) =>
       lead.id === currentLeadId ? { ...lead, takeoff: snapshot } : lead
     );
@@ -17546,6 +19799,8 @@ export default function SummitApp() {
   const assignTakeoffToLead = (leadId: number) => {
     const snapshot = normalizeTakeoff(takeoffForm);
     setTakeoffForm(snapshot);
+    takeoffFormRef.current = snapshot;
+    takeoffBaselineRef.current = takeoffFingerprint(snapshot);
     const updatedLeads = leads.map((lead) =>
       lead.id === leadId ? { ...lead, takeoff: snapshot } : lead
     );
@@ -18626,9 +20881,25 @@ export default function SummitApp() {
   };
 
   const downloadOpenPdf = async () => {
-    const file = pdfPreviewFileRef.current;
+    let file = pdfPreviewFileRef.current;
     const url = measurementPdfUrl;
     const name = measurementPdfName || 'document.pdf';
+    if (!file && url) {
+      try {
+        const res = await fetch(url);
+        if (res.ok) {
+          const bytes = await res.blob();
+          file = new File(
+            [bytes],
+            name.toLowerCase().endsWith('.pdf') ? name : `${name}.pdf`,
+            { type: 'application/pdf' }
+          );
+          pdfPreviewFileRef.current = file;
+        }
+      } catch {
+        /* fall through to url download */
+      }
+    }
     if (
       file &&
       typeof navigator.canShare === 'function' &&
@@ -18641,14 +20912,16 @@ export default function SummitApp() {
         if (err instanceof Error && err.name === 'AbortError') return;
       }
     }
-    if (!url) return;
+    const href = file ? URL.createObjectURL(file) : url;
+    if (!href) return;
     const a = document.createElement('a');
-    a.href = url;
+    a.href = href;
     a.download = name.toLowerCase().endsWith('.pdf') ? name : `${name}.pdf`;
     a.rel = 'noreferrer';
     document.body.appendChild(a);
     a.click();
     a.remove();
+    if (file) window.setTimeout(() => URL.revokeObjectURL(href), 4000);
   };
 
   const openHubLibraryDoc = async (id: SystemDocId) => {
@@ -20584,6 +22857,57 @@ export default function SummitApp() {
                 Material Order
               </h2>
             </div>
+            {leadMaterialOrders.length > 0 ? (
+              <div className="space-y-2 mb-6">
+                {leadMaterialOrders.map((order) => {
+                  const submittedAt = Date.parse(order.createdAt);
+                  const dateLabel = Number.isFinite(submittedAt)
+                    ? new Date(submittedAt).toLocaleDateString(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                      })
+                    : '';
+                  const totalLabel =
+                    order.totalCost != null
+                      ? `$${order.totalCost.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}`
+                      : '';
+                  const meta = [
+                    dateLabel,
+                    order.crewName,
+                    order.status && order.status !== 'submitted'
+                      ? order.status
+                      : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ');
+                  return (
+                    <div
+                      key={order.id}
+                      className="flex items-center justify-between gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-3"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-semibold text-zinc-900 truncate">
+                          {submittedOrderTypeLabel(order.orderType)}
+                        </div>
+                        {meta ? (
+                          <div className="text-sm text-zinc-500 truncate mt-0.5">
+                            {meta}
+                          </div>
+                        ) : null}
+                      </div>
+                      {totalLabel ? (
+                        <div className="text-lg font-semibold tabular-nums text-zinc-900 shrink-0">
+                          {totalLabel}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
             <RoofSystemPicker
               variant="order"
               onSelect={(sys) => {
@@ -21303,6 +23627,38 @@ export default function SummitApp() {
             return;
           }
           showToast('Order submitted');
+          if (leadAutosaveTimerRef.current) {
+            clearTimeout(leadAutosaveTimerRef.current);
+            leadAutosaveTimerRef.current = null;
+          }
+          const empty = emptyOrderDraft();
+          skipLeadAutosaveRef.current = true;
+          setProfileOrderType(null);
+          setProfileOrderLines({});
+          setProfileOrderCoverageInputs({});
+          setProfileOrdersStep('material');
+          setProfileOrderFilledFrom(null);
+          orderFormRef.current = empty;
+          orderDraftBaselineRef.current = orderDraftFingerprint(empty);
+          const leadId = fixedLead?.id ?? currentLeadIdRef.current;
+          if (leadId != null) {
+            const now = new Date().toISOString();
+            persistLeads(
+              leadsRef.current.map((l) =>
+                l.id === leadId
+                  ? { ...l, orderDraft: null, updatedAt: now }
+                  : l
+              )
+            );
+          }
+          const lead =
+            (leadId != null
+              ? leadsRef.current.find((l) => l.id === leadId)
+              : null) ?? null;
+          const rows = await loadLeadMaterialOrders(lead);
+          if (currentLeadIdRef.current === leadId) {
+            setLeadMaterialOrders(rows);
+          }
         } catch (err) {
           console.error('Order submit error:', err);
           showToast('Order submission failed — check connection');
@@ -23500,7 +25856,10 @@ export default function SummitApp() {
         </div>
       )}
       {measurementPdfUrl && (
-        <div className="fixed inset-0 z-[90] flex flex-col bg-zinc-900">
+        <div
+          data-pdf-preview
+          className="fixed inset-0 z-[90] flex flex-col bg-zinc-900"
+        >
           <div className="flex flex-col gap-3 px-4 py-3 bg-white border-b border-zinc-200 pt-[max(0.75rem,env(safe-area-inset-top))] sm:flex-row sm:items-center sm:justify-between">
             <div className="font-semibold text-zinc-900 truncate min-w-0">
               {measurementPdfName || 'Document'}
@@ -23530,10 +25889,9 @@ export default function SummitApp() {
               </button>
             </div>
           </div>
-          <iframe
-            title={measurementPdfName || 'Document'}
+          <PdfFitViewer
             src={measurementPdfUrl}
-            className="flex-1 w-full bg-zinc-100 pb-[env(safe-area-inset-bottom,0px)]"
+            title={measurementPdfName || 'Document'}
           />
         </div>
       )}
@@ -25530,27 +27888,10 @@ export default function SummitApp() {
                     <h1 className="page-title">
                       Calendar
                     </h1>
-                    <button
-                      type="button"
-                      onClick={() => openCreateCalendarEvent(selectedIso)}
-                      className="inline-flex md:hidden items-center justify-center w-11 h-11 p-0 border border-[var(--chrome)] rounded-full bg-transparent text-[var(--graphite)]"
+                    <CircledPlus
                       aria-label="Create event"
-                    >
-                      <svg
-                        width="18"
-                        height="18"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        aria-hidden
-                      >
-                        <path
-                          d="M12 5v14M5 12h14"
-                          stroke="currentColor"
-                          strokeWidth="1.75"
-                          strokeLinecap="round"
-                        />
-                      </svg>
-                    </button>
+                      onClick={() => openCreateCalendarEvent(selectedIso)}
+                    />
                   </div>
                   {gcalEmail ? (
                     <p className="text-zinc-500 mt-1 text-sm">{gcalEmail}</p>
@@ -25643,13 +27984,6 @@ export default function SummitApp() {
                       Reconnect
                     </button>
                   ) : null}
-                  <button
-                    type="button"
-                    onClick={() => openCreateCalendarEvent(selectedIso)}
-                    className="btn-primary hidden md:inline-flex px-5 py-2.5 rounded-2xl text-sm font-semibold"
-                  >
-                    Create event
-                  </button>
                 </div>
               </div>
 
@@ -26325,12 +28659,13 @@ export default function SummitApp() {
           const trashTasks = listTasks.filter((t) => Boolean(t.deletedAt));
           return (
             <PhonePullToRefresh
-              onRefresh={() =>
-                syncTasksWithGoogle({
+              onRefresh={async () => {
+                await hydrateTasksFromCloud();
+                await syncTasksWithGoogle({
                   silent: true,
                   pullOnly: true,
-                })
-              }
+                });
+              }}
               className="page-shell page-fade space-y-6"
             >
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -26338,8 +28673,8 @@ export default function SummitApp() {
                   <h1 className="page-title">
                     Tasks
                   </h1>
-                  <button
-                    type="button"
+                  <CircledPlus
+                    aria-label="Add task"
                     onClick={() => {
                       if (!newTaskTitle.trim()) {
                         newTaskTitleRef.current?.focus();
@@ -26347,18 +28682,7 @@ export default function SummitApp() {
                       }
                       void addTask();
                     }}
-                    className="inline-flex md:hidden items-center justify-center w-11 h-11 p-0 border border-[var(--chrome)] rounded-full bg-transparent text-[var(--graphite)]"
-                    aria-label="Add task"
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
-                      <path
-                        d="M12 5v14M5 12h14"
-                        stroke="currentColor"
-                        strokeWidth="1.75"
-                        strokeLinecap="round"
-                      />
-                    </svg>
-                  </button>
+                  />
                 </div>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                   {!gcalConnected ? (
@@ -26563,13 +28887,6 @@ export default function SummitApp() {
                   rows={2}
                   className="w-full rounded-2xl border border-zinc-200 px-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:border-zinc-400 focus:ring-2 focus:ring-zinc-300/50 resize-none"
                 />
-                <button
-                  type="button"
-                  onClick={() => void addTask()}
-                  className="btn-primary hidden md:inline-flex px-5 py-2.5 rounded-2xl text-sm font-semibold"
-                >
-                  Add task
-                </button>
               </div>
 
               <div className="space-y-3">
@@ -27160,7 +29477,7 @@ export default function SummitApp() {
                   <div className="text-xs font-medium uppercase tracking-wide text-[var(--steel)] mb-1.5">
                     Photo
                   </div>
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-start gap-3">
                     <div className="flex flex-col items-start gap-1.5">
                       {renderUserAvatar({ size: 'lg' })}
                       {userPhotoDataUrl ? (
@@ -27176,20 +29493,23 @@ export default function SummitApp() {
                         </button>
                       ) : null}
                     </div>
-                    <label className="inline-flex items-center justify-center btn-primary px-8 py-3 rounded-full text-sm font-semibold cursor-pointer">
-                      Upload +
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
+                    <div className="flex items-center h-14 shrink-0">
+                      <CircledPlus
                         aria-label="Upload profile photo"
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          if (f) void handleUserPhotoFile(f);
-                          e.target.value = '';
-                        }}
+                        onClick={() => settingsProfilePhotoInputRef.current?.click()}
                       />
-                    </label>
+                    </div>
+                    <input
+                      ref={settingsProfilePhotoInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void handleUserPhotoFile(f);
+                        e.target.value = '';
+                      }}
+                    />
                   </div>
                 </div>
                 <div>
@@ -27259,7 +29579,7 @@ export default function SummitApp() {
                   <div className="text-xs font-medium uppercase tracking-wide text-[var(--steel)] mb-1.5">
                     Logo
                   </div>
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-start gap-3">
                     <div className="flex flex-col items-start gap-1.5">
                       {renderAppMark({ size: 'lg' })}
                       {appLogoDataUrl() ? (
@@ -27278,19 +29598,23 @@ export default function SummitApp() {
                         </button>
                       ) : null}
                     </div>
-                    <label className="inline-flex items-center justify-center btn-primary px-8 py-3 rounded-full text-sm font-semibold cursor-pointer">
-                      Upload +
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          if (f) void handleCompanyLogoFile(f);
-                          e.target.value = '';
-                        }}
+                    <div className="flex items-center h-14 shrink-0">
+                      <CircledPlus
+                        aria-label="Upload company logo"
+                        onClick={() => settingsCompanyLogoInputRef.current?.click()}
                       />
-                    </label>
+                    </div>
+                    <input
+                      ref={settingsCompanyLogoInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void handleCompanyLogoFile(f);
+                        e.target.value = '';
+                      }}
+                    />
                   </div>
                 </div>
                 <div>
@@ -29335,7 +31659,10 @@ export default function SummitApp() {
 
                   {/* Tab content — same content width as estimator */}
                   <div className="flex-1">
-                    <div className="page-shell page-shell--flush-top">
+                    <div
+                      key={profileTab}
+                      className="page-shell page-shell--flush-top phone-pager-page"
+                    >
                       {profileTab === 'overview' && (
                         <div className="space-y-6">
                           <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
@@ -29859,8 +32186,33 @@ export default function SummitApp() {
                           clientZip.trim()
                         );
 
+                        const profileLead = leads.find((l) => l.id === currentLeadId);
+                        const showMeasuringOverlay =
+                          solarMeasuring ||
+                          Boolean(profileLead?.measureDraft?.solarMeasuring);
+
                         return (
-                        <section className="bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6">
+                        <PhonePullToRefresh
+                          onRefresh={() =>
+                            refreshLeadsFromCloud({ applyOpenLead: true })
+                          }
+                          className="flex flex-col min-h-[calc(100dvh-var(--header-h)-10rem)]"
+                        >
+                        <section
+                          className="relative bg-white border border-zinc-200 rounded-3xl p-5 sm:p-6"
+                          aria-busy={showMeasuringOverlay || undefined}
+                        >
+                          {showMeasuringOverlay && (
+                            <div
+                              role="status"
+                              aria-live="polite"
+                              className="absolute inset-0 z-20 flex items-center justify-center rounded-3xl bg-white/90"
+                            >
+                              <p className="text-base font-semibold text-zinc-900">
+                                Measuring…
+                              </p>
+                            </div>
+                          )}
                           <div className="flex items-center justify-between gap-3 mb-3">
                             <h2 className="text-lg font-semibold text-zinc-900 mb-4">
                               Measurements
@@ -29940,10 +32292,10 @@ export default function SummitApp() {
                               },
                               {
                                 id: 'auto',
-                                label: solarMeasuring
+                                label: showMeasuringOverlay
                                   ? 'Measuring…'
                                   : 'Auto-measure',
-                                disabled: solarMeasuring || !hasProfileAddress,
+                                disabled: showMeasuringOverlay || !hasProfileAddress,
                                 onSelect: () => {
                                   void runSolarAutoMeasure();
                                 },
@@ -29975,12 +32327,19 @@ export default function SummitApp() {
                             ]}
                           />
 
-                          {humanOrders.length > 0 && (
+                          {(() => {
+                            const lead = leads.find((l) => l.id === currentLeadId);
+                            const orders = mergeHumanMeasureOrders(
+                              lead?.humanMeasureOrders,
+                              humanOrders.map(apiOrderToLeadOrder)
+                            );
+                            if (orders.length === 0) return null;
+                            return (
                             <div className="rounded-2xl border border-zinc-200 bg-white p-4 space-y-2">
                               <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                                 Instant Roofer human orders
                               </div>
-                              {humanOrders.slice(0, 5).map((o) => (
+                              {orders.slice(0, 5).map((o) => (
                                 <div
                                   key={o.id}
                                   className="flex items-center gap-2 rounded-xl border border-zinc-100 px-3 py-2.5"
@@ -30011,7 +32370,8 @@ export default function SummitApp() {
                                 </div>
                               ))}
                             </div>
-                          )}
+                            );
+                          })()}
 
                           {(() => {
                             const lead = leads.find((l) => l.id === currentLeadId);
@@ -30513,7 +32873,9 @@ export default function SummitApp() {
                           )}
                         </div>
                         
-                        </section>);
+                        </section>
+                        </PhonePullToRefresh>
+                        );
                       })()}
 
                       {profileTab === 'financial' && (
@@ -31008,13 +33370,10 @@ export default function SummitApp() {
                               placeholder="Add a message about this lead..."
                               className={`${fieldClass} flex-1`}
                             />
-                            <button
-                              type="button"
+                            <CircledPlus
+                              aria-label="Add message"
                               onClick={addLeadNote}
-                              className="btn-primary px-8 py-3 rounded-full text-sm font-semibold shrink-0"
-                            >
-                              Add message
-                            </button>
+                            />
                           </div>
                           <div className="space-y-3">
                             {profileNotes.length > 0 ? (
@@ -31278,7 +33637,9 @@ export default function SummitApp() {
 
                           {profilePhotos.length > 0 ? (
                             <PhonePullToRefresh
-                              onRefresh={() => refreshLeadsFromCloud()}
+                              onRefresh={() =>
+                                refreshLeadsFromCloud({ applyOpenLead: true })
+                              }
                               scrollParent="self"
                               className="mt-6 max-h-[min(70vh,720px)] overflow-y-auto overscroll-contain p-0.5 rounded-2xl"
                             >
@@ -31323,7 +33684,9 @@ export default function SummitApp() {
 
                       {profileTab === 'documents' && (
                         <PhonePullToRefresh
-                          onRefresh={() => refreshLeadsFromCloud()}
+                          onRefresh={() =>
+                            refreshLeadsFromCloud({ applyOpenLead: true })
+                          }
                           className="flex flex-col min-h-[calc(100dvh-var(--header-h)-10rem)]"
                         >
                         <section className="flex flex-col min-h-[calc(100dvh-var(--header-h)-10rem)]">
@@ -31661,10 +34024,7 @@ export default function SummitApp() {
           <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-6">
             <div className="bg-white w-full sm:max-w-2xl max-h-[92vh] overflow-hidden rounded-t-3xl sm:rounded-3xl shadow-xl flex flex-col">
               <div className="sticky top-0 bg-white border-b border-zinc-100 px-5 py-4 flex items-center justify-between gap-3">
-                <div>
-                  <div className="font-semibold text-lg text-zinc-900">Photo report</div>
-                  <div className="text-xs text-zinc-500">Select photos, add captions, download PDF</div>
-                </div>
+                <div className="font-semibold text-lg text-zinc-900">Photo report</div>
                 <button
                   type="button"
                   onClick={() => setPhotoReportOpen(false)}

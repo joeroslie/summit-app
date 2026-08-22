@@ -16,7 +16,7 @@ alwaysApply: false
 - `components/PipelineSwipeRow.tsx` — phone job card: tap to open (stage changes on the lead Pipeline tab; desktop kanban drag unchanged)
 - `lib/pipeline.ts` — `PipelineStage`, `PIPELINE_STAGES`, `PIPELINE_VALUE_STAGES`, `PIPELINE_STAGE_STYLES`, `normalizePipelineStage`, `adjacentPipelineStage`
 - `lib/phone-nav.ts` — `PIPELINE_BOARD_PAGER` / `pipelineBoardPagerStep` (finger pager; Phone chat)
-- `app/page.tsx` — `activeTab === 'leads'` wires `PipelineBoard` (stats + Home-twin stage chips above the board); lead CRUD + lead profile tabs still live here
+- `app/page.tsx` — `activeTab === 'leads'` wires `PipelineBoard` (stats + Home-twin stage chips above the board); lead CRUD + lead profile tabs still live here. Cloud is source of truth for the lead (device cache is a scratch pad). Refresh on open, app resume, and Pipeline / Measurements pull-to-refresh. Persist only dirty leads so a stale phone copy cannot overwrite a newer save. Trash is one system: whole-lead `deleted_at` plus media/note/estimate items on `lead.trash` — not per-device `summitTrash`.
 - `components/AddressAutocomplete.tsx` — shared (see App Shell)
 - `components/PhoneInput.tsx` — shared (see App Shell)
 - `lib/phone.ts` — shared

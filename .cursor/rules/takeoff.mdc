@@ -9,6 +9,12 @@ alwaysApply: false
 **Sidebar label:** none — Documents → Take off sheet, or lead profile → takeoff tab  
 **Agent starter:** `.cursor/agents/takeoff.md`
 
+## Sync
+
+- Takeoff on a lead is one system (`lead.takeoff` in cloud `details`).
+- Cloud is source of truth. Device cache is a scratch pad.
+- Refresh when opening takeoff on that lead and when the app comes back.
+
 ## Files
 
 - `app/page.tsx` — `systemDocWorkspace === 'takeoff'`; takeoff sheet types, `renderTakeoffFields`, feeds estimate pitch/stories/layers

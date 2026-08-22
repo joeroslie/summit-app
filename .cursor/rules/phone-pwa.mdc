@@ -27,13 +27,15 @@ Handle on the tab bar opens the More sheet (same as swipe up). Swipe down or tap
 
 Finger pagers (iPhone **and** iPad): gate on `TouchEvent` / `pointerType === 'touch'`, **not** `max-width: 767px`. Mouse / trackpad / keyboard case: click and kanban drag only — no pagers. iPad keeps the sidebar; do not put the phone tab bar on iPad.
 
+Chip-row centering and the page change share a ~200ms ease-out glide (`PHONE_PAGER_GLIDE_MS` in `lib/phone-nav.ts`). Do not use `scrollIntoView({ behavior: 'smooth' })`. One finger swipe = one adjacent chip; rubber-band at ends stays.
+
 Full-width swipe (edges **and** center, including bezels): finger right = previous, finger left = next. Horizontal page swipe wins on form fields and chip rows unless the finger is clearly scrolling vertically or pinching. Pinch-zoom stays on. Maps keep a leftover edge yield so pan/pin-drag still work — do not turn the whole map into a pager.
 
 Inside a lead this is a **linear chip pager** (Overview → Pipeline → Measurements → Financial → Insurance → Messages → Estimates → Orders → Photos → Documents) — not visit history. Tapping a chip and swiping to that chip are the same place. Body **and** chip-row swipe walk that order. On Overview, one more previous-swipe leaves the job (silent save) to the Pipeline board (All). Last chip (Documents) rubber-bands.
 
 Pipeline jump chips: All → Lead → Prospect → Approved → Completed → Invoiced → Closed. Swipe = tap. On All, one more previous-swipe is Home. Next-swipe from Home does nothing. Pipeline list cards are tap-to-open only (no swipe-to-stage). Job stage inside a lead is tap only. Bottom tabs are tap only. Maps keep a small edge yield so pan/pin-drag still work.
 
-Pull-to-refresh (finger, scroll top): Home, Pipeline, Tasks, Calendar, Weather, lead Documents, lead Photos. Not Documents hub, lead Messages, or forms. Spinner lives in the pull gap under the header. Skip pull when the touch starts on `.weather-map` / `.leaflet-container`.
+Pull-to-refresh (finger, scroll top): Home, Pipeline, Tasks, Calendar, Weather, lead Documents, lead Photos, lead Measurements. Not Documents hub, lead Messages, or forms. Spinner lives in the pull gap under the header. Skip pull when the touch starts on `.weather-map` / `.leaflet-container`.
 
 `phoneTabBar` / `phoneTabSheet` in `app/page.tsx` (`renderPhoneTabBar`).
 

@@ -11,11 +11,99 @@ export const PHONE_EDGE_NAV_PX = 48;
 export const PHONE_NAV_COMMIT_PX = 64;
 /** Start locking the gesture (prevent scroll) after this much horizontal move. */
 export const PHONE_NAV_LOCK_PX = 12;
+/** Chip-row centering + page change share this glide. Not scrollIntoView. */
+export const PHONE_PAGER_GLIDE_MS = 200;
 
 /** Bottom tab bar is tap / swipe-up only — never a horizontal pager. */
-export const PHONE_NAV_SKIP_SEL = '[data-phone-tab-bar], .weather-day-cal';
+export const PHONE_NAV_SKIP_SEL =
+  '[data-phone-tab-bar], [data-pdf-preview], .weather-day-cal';
 export const PHONE_NAV_MAP_SEL =
   '.leaflet-container, .canvass-map, .weather-map, .roof-tracer-map';
+export const PHONE_CHIP_STRIP_SEL = '[data-phone-chip-strip]';
+
+let pagerGlideUntil = 0;
+
+function easeOutQuad(t: number) {
+  return 1 - (1 - t) * (1 - t);
+}
+
+/** True while a pager glide is in flight — ignore extra commits from the same flick. */
+export function phonePagerGlideLocked() {
+  return typeof performance !== 'undefined' && performance.now() < pagerGlideUntil;
+}
+
+export function markPhonePagerGlide() {
+  if (typeof performance === 'undefined') return;
+  pagerGlideUntil = performance.now() + PHONE_PAGER_GLIDE_MS;
+}
+
+/** Kill iOS overflow momentum so a fast swipe cannot coast past the adjacent chip. */
+export function freezePhoneChipStrips() {
+  if (typeof document === 'undefined') return;
+  document.querySelectorAll<HTMLElement>(PHONE_CHIP_STRIP_SEL).forEach((el) => {
+    el.style.overflowX = 'hidden';
+  });
+}
+
+export function unfreezePhoneChipStrips() {
+  if (typeof document === 'undefined') return;
+  document.querySelectorAll<HTMLElement>(PHONE_CHIP_STRIP_SEL).forEach((el) => {
+    el.style.overflowX = '';
+  });
+}
+
+export function cancelChipGlide(
+  strip: HTMLElement | null,
+  rafRef: { current: number | null }
+) {
+  if (rafRef.current != null) {
+    cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
+  }
+  if (strip) strip.style.overflowX = '';
+}
+
+/** Center a chip with the same 200ms ease-out Pipeline uses. Never scrollIntoView. */
+export function glideChipCenter(
+  strip: HTMLElement,
+  chip: HTMLElement,
+  rafRef: { current: number | null }
+) {
+  const stripRect = strip.getBoundingClientRect();
+  const chipRect = chip.getBoundingClientRect();
+  const to =
+    strip.scrollLeft +
+    (chipRect.left + chipRect.width / 2) -
+    (stripRect.left + stripRect.width / 2);
+  const max = Math.max(0, strip.scrollWidth - strip.clientWidth);
+  const target = Math.max(0, Math.min(to, max));
+  const from = strip.scrollLeft;
+  if (rafRef.current != null) {
+    cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
+  }
+  strip.style.overflowX = 'hidden';
+  const finish = () => {
+    strip.scrollLeft = target;
+    strip.style.overflowX = '';
+    rafRef.current = null;
+  };
+  const reduce =
+    typeof window !== 'undefined' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce || Math.abs(target - from) < 1) {
+    finish();
+    return;
+  }
+  const start = performance.now();
+  const tick = (now: number) => {
+    const t = Math.min(1, (now - start) / PHONE_PAGER_GLIDE_MS);
+    strip.scrollLeft = from + (target - from) * easeOutQuad(t);
+    if (t < 1) rafRef.current = requestAnimationFrame(tick);
+    else finish();
+  };
+  rafRef.current = requestAnimationFrame(tick);
+}
 
 /** Lead profile chips — swipe order. Tapping a chip and swiping here are the same place. */
 export const LEAD_PROFILE_PAGER = [

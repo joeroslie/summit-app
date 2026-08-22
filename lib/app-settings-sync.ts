@@ -18,6 +18,7 @@ export type SummitTasksCloudBundle = {
   tasks: unknown[];
   lists: unknown[];
   activeListId?: string;
+  updatedAt?: string;
 };
 
 export type UserProfileSettings = {
@@ -343,16 +344,27 @@ export async function saveCloudCompanySettings(
   return payload;
 }
 
-/** Load Summit calendar events array from app_settings (or null if empty). */
+export type CloudCalendarSnapshot = {
+  events: unknown[];
+  updatedAt?: string;
+};
+
+/**
+ * Load Summit calendar events from app_settings.
+ * null = never backed up. Empty events + updatedAt = other device cleared the calendar.
+ */
 export async function loadCloudCalendarEvents(
   supabase: SupabaseClient
-): Promise<unknown[] | null> {
+): Promise<CloudCalendarSnapshot | null> {
   const raw = await fetchAppSetting(supabase, APP_SETTINGS_CALENDAR_EVENTS_KEY);
   const parsed = parseAppSettingValue(raw);
-  if (Array.isArray(parsed)) return parsed;
+  if (Array.isArray(parsed)) return { events: parsed };
   const rec = asRecord(parsed);
-  if (rec && Array.isArray(rec.events)) return rec.events;
-  return null;
+  if (!rec || !Array.isArray(rec.events)) return null;
+  return {
+    events: rec.events,
+    updatedAt: typeof rec.updatedAt === 'string' ? rec.updatedAt : undefined,
+  };
 }
 
 export async function saveCloudCalendarEvents(
@@ -365,7 +377,10 @@ export async function saveCloudCalendarEvents(
   });
 }
 
-/** Load tasks + lists bundle from app_settings. */
+/**
+ * Load tasks + lists bundle from app_settings.
+ * null = never backed up. Empty tasks/lists + updatedAt = other device cleared Tasks.
+ */
 export async function loadCloudTasksBundle(
   supabase: SupabaseClient
 ): Promise<SummitTasksCloudBundle | null> {
@@ -379,6 +394,8 @@ export async function loadCloudTasksBundle(
       typeof parsed.activeListId === 'string'
         ? parsed.activeListId
         : undefined,
+    updatedAt:
+      typeof parsed.updatedAt === 'string' ? parsed.updatedAt : undefined,
   };
 }
 

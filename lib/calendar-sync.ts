@@ -428,6 +428,123 @@ export function mergeGoogleCalendarEventsIntoLocal(
   };
 }
 
+/** Parse updatedAt for last-write-wins (0 if missing / invalid). */
+export function calendarEventUpdatedMs(
+  ev: Pick<SummitCalendarEvent, 'updatedAt'> | undefined
+): number {
+  if (!ev?.updatedAt) return 0;
+  const t = Date.parse(ev.updatedAt);
+  return Number.isFinite(t) ? t : 0;
+}
+
+export type MergeCloudCalendarSnapshotResult = {
+  events: SummitCalendarEvent[];
+  /** True when this device kept a newer local row or an unsaved create/delete */
+  keptLocalNewer: boolean;
+};
+
+/**
+ * Cloud is source of truth for Summit-only events. Device cache is a scratch pad.
+ *
+ * - Same id: newer updatedAt wins (stale phone copy cannot hide a newer save).
+ * - Cloud-only Summit row: take it (created on another device).
+ * - Local-only Summit row: keep only if dirty/unsaved or newer than the cloud bundle.
+ * - Google-linked: Google pull owns them. Cloud may seed before the first pull;
+ *   never resurrect Google rows after a pull or while disconnected.
+ */
+export function mergeCloudCalendarSnapshot(
+  local: SummitCalendarEvent[],
+  cloud: SummitCalendarEvent[],
+  opts: {
+    cloudUpdatedAt?: string | null;
+    googleLinked: boolean;
+    googlePullRan: boolean;
+    /** Unsaved edits on this device — keep even if cloud is missing/older */
+    retainLocalIds?: Set<string>;
+    /** Unsaved deletes on this device — do not restore from cloud */
+    deletedIds?: Set<string>;
+  }
+): MergeCloudCalendarSnapshotResult {
+  const localSafe = Array.isArray(local) ? local : [];
+  const cloudSafe = Array.isArray(cloud) ? cloud : [];
+  const retain = opts.retainLocalIds || new Set<string>();
+  const deleted = opts.deletedIds || new Set<string>();
+  const googleLinked = Boolean(opts.googleLinked);
+  const googlePullRan = Boolean(opts.googlePullRan);
+  const cloudBundleMs = opts.cloudUpdatedAt
+    ? Date.parse(opts.cloudUpdatedAt) || 0
+    : 0;
+
+  const localById = new Map<string, SummitCalendarEvent>();
+  const localGoogleIds = new Set<string>();
+  for (const e of localSafe) {
+    if (!e?.id) continue;
+    localById.set(e.id, e);
+    if (e.googleEventId) localGoogleIds.add(e.googleEventId);
+  }
+
+  const next = new Map<string, SummitCalendarEvent>();
+  let keptLocalNewer = false;
+
+  // Keep local Google-linked rows (scratch until the next Google pull).
+  // Disconnected UI hides them; dropping them here would wipe the cloud backup.
+  for (const e of localSafe) {
+    if (!isGoogleLinkedCalendarEvent(e)) continue;
+    next.set(e.id, e);
+  }
+
+  for (const ev of cloudSafe) {
+    if (!ev?.id || deleted.has(ev.id)) continue;
+
+    if (isGoogleLinkedCalendarEvent(ev)) {
+      if (!googleLinked) continue;
+      if (googlePullRan) continue;
+      const gid = (ev.googleEventId || '').trim();
+      if (gid && localGoogleIds.has(gid)) continue;
+      if (next.has(ev.id)) continue;
+      next.set(ev.id, ev);
+      continue;
+    }
+
+    const loc = localById.get(ev.id);
+    if (loc && !isGoogleLinkedCalendarEvent(loc)) {
+      const locMs = calendarEventUpdatedMs(loc);
+      const cloudMs = calendarEventUpdatedMs(ev);
+      if (locMs > cloudMs) {
+        next.set(loc.id, loc);
+        keptLocalNewer = true;
+        continue;
+      }
+    }
+    next.set(ev.id, ev);
+  }
+
+  for (const ev of localSafe) {
+    if (!ev?.id || next.has(ev.id)) continue;
+    if (isGoogleLinkedCalendarEvent(ev)) continue;
+    if (deleted.has(ev.id)) continue;
+    // Unsaved create on this device. Stale leftovers older than the cloud bundle drop.
+    const newerThanBundle =
+      calendarEventUpdatedMs(ev) >= cloudBundleMs && cloudBundleMs > 0;
+    if (retain.has(ev.id) || newerThanBundle) {
+      next.set(ev.id, ev);
+      keptLocalNewer = true;
+    }
+  }
+
+  if (deleted.size > 0) keptLocalNewer = true;
+
+  const events = Array.from(next.values()).sort((a, b) => {
+    if (a.startDate !== b.startDate) return a.startDate.localeCompare(b.startDate);
+    const at = a.allDay ? '00:00' : a.startTime || '00:00';
+    const bt = b.allDay ? '00:00' : b.startTime || '00:00';
+    if (at !== bt) return at.localeCompare(bt);
+    return a.title.localeCompare(b.title);
+  });
+
+  return { events, keptLocalNewer };
+}
+
 /**
  * Soft-fail wrapper — never throws; returns locals unchanged on error.
  */

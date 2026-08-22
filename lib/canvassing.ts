@@ -1,5 +1,6 @@
 /** Shared types + constants for the Canvassing / door-knocking tracker. */
 
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { PinStormLookup } from '@/lib/weather';
 
 export const CANVASS_PINS_STORAGE_KEY = 'summitCanvassPins';
@@ -147,12 +148,118 @@ export function localDateKey(input: string | number | Date = new Date()): string
 
 /**
  * True when a Supabase/PostgREST error means the table hasn't been created
- * yet (setup SQL not run) — used to fall back to local storage instead of
- * repeatedly failing writes against a table that doesn't exist.
+ * yet (setup SQL not run). Used for error copy — not a cue to switch to
+ * this-device storage. Cloud (`canvass_pins` / `canvass_tallies`) is the
+ * source of truth on the live app.
  */
 export function isMissingTableError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const e = error as { code?: string; message?: string };
   if (e.code === 'PGRST205' || e.code === '42P01') return true;
   return /schema cache|does not exist/i.test(e.message || '');
+}
+
+export function canvassCloudErrorMessage(
+  error: unknown,
+  action: 'load' | 'save'
+): string {
+  if (isMissingTableError(error)) return 'Canvassing tables not set up';
+  return action === 'load'
+    ? 'Could not load canvassing — check connection'
+    : 'Could not save — check connection';
+}
+
+export type CanvassCloudLoad = {
+  pins: CanvassPin[] | null;
+  tallies: TallyEntry[] | null;
+  pinsError: unknown;
+  talliesError: unknown;
+};
+
+/** Cloud read for pins + tallies. Null list means that table failed. */
+export async function fetchCanvassCloud(
+  supabase: SupabaseClient
+): Promise<CanvassCloudLoad> {
+  const [pinsRes, talliesRes] = await Promise.all([
+    supabase
+      .from('canvass_pins')
+      .select('*')
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('canvass_tallies')
+      .select('*')
+      .order('created_at', { ascending: false }),
+  ]);
+  return {
+    pins: pinsRes.error ? null : ((pinsRes.data || []) as CanvassPin[]),
+    tallies: talliesRes.error
+      ? null
+      : ((talliesRes.data || []) as TallyEntry[]),
+    pinsError: pinsRes.error ?? null,
+    talliesError: talliesRes.error ?? null,
+  };
+}
+
+/** Keep in-memory storm lookups (not a cloud column) across a cloud reload. */
+export function mergePinStormData(
+  prev: CanvassPin[],
+  next: CanvassPin[]
+): CanvassPin[] {
+  if (prev.length === 0) return next;
+  const storms = new Map<number, CanvassPin['storm_data']>();
+  for (const pin of prev) {
+    if (pin.storm_data && Object.keys(pin.storm_data).length > 0) {
+      storms.set(pin.id, pin.storm_data);
+    }
+  }
+  if (storms.size === 0) return next;
+  return next.map((pin) => {
+    const storm = storms.get(pin.id);
+    return storm != null ? { ...pin, storm_data: storm } : pin;
+  });
+}
+
+export type CanvassDayBreakdown = Record<
+  TallyType,
+  { auto: number; manual: number }
+>;
+
+/** Same daily math the map cards and the Home canvass card use. */
+export function todayCanvassBreakdown(
+  pins: CanvassPin[],
+  tallies: TallyEntry[],
+  day: string = localDateKey()
+): CanvassDayBreakdown {
+  const doorsAuto = pins.filter((p) => localDateKey(p.created_at) === day).length;
+  const conversationsAuto = pins.filter(
+    (p) =>
+      localDateKey(p.status_changed_at) === day &&
+      p.disposition !== 'not_contacted' &&
+      p.disposition !== 'not_home'
+  ).length;
+  const signedAuto = pins.filter(
+    (p) =>
+      localDateKey(p.status_changed_at) === day && p.disposition === 'signed'
+  ).length;
+  const manualCount = (type: TallyType) =>
+    tallies.filter((t) => t.type === type && localDateKey(t.created_at) === day)
+      .length;
+  return {
+    door: { auto: doorsAuto, manual: manualCount('door') },
+    conversation: { auto: conversationsAuto, manual: manualCount('conversation') },
+    signed: { auto: signedAuto, manual: manualCount('signed') },
+  };
+}
+
+export function todayCanvassTotals(
+  pins: CanvassPin[],
+  tallies: TallyEntry[],
+  day: string = localDateKey()
+): Record<TallyType, number> {
+  const b = todayCanvassBreakdown(pins, tallies, day);
+  return {
+    door: b.door.auto + b.door.manual,
+    conversation: b.conversation.auto + b.conversation.manual,
+    signed: b.signed.auto + b.signed.manual,
+  };
 }

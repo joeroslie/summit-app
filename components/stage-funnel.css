@@ -114,18 +114,6 @@
   .pl-toolbar-stats {
     display: none;
   }
-  .pl-add {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 2.75rem;
-    height: 2.75rem;
-    padding: 0;
-    border: 1px solid var(--chrome);
-    border-radius: 9999px;
-    background: transparent;
-    color: var(--graphite);
-  }
 }
 
 /* Tall stage columns — Storm Watch / Jump Back In glass lift. */
@@ -149,7 +137,36 @@
   transform: translateY(-2px);
 }
 
-/* Phone mail list — Pipeline. Desktop/iPad keep the kanban. */
+/* Phone + iPad portrait: list. iPad landscape + desktop: kanban.
+   Orientation, not md:768 — iPad Pro portrait is ~1024px and still the list. */
+.pl-orient-list {
+  display: block;
+}
+.pl-orient-desk {
+  display: none;
+}
+.pl-orient-list-flex {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.pl-orient-desk-inline {
+  display: none;
+}
+@media (orientation: landscape) and (min-width: 768px) {
+  .pl-orient-list,
+  .pl-orient-list-flex {
+    display: none;
+  }
+  .pl-orient-desk {
+    display: block;
+  }
+  .pl-orient-desk-inline {
+    display: inline;
+  }
+}
+
+/* Phone mail list — Pipeline. iPad portrait uses this; landscape keeps kanban. */
 @media (max-width: 767px) {
   .pl-chips {
     flex-wrap: nowrap;
@@ -178,8 +195,8 @@
   overflow-x: auto;
   overscroll-behavior-x: none;
   touch-action: pan-y pinch-zoom;
-  -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
+  scroll-behavior: auto;
   margin-inline: calc(-1 * var(--page-pad-x));
   margin-bottom: 1.5rem;
   padding: 0 var(--page-pad-x);
@@ -211,6 +228,9 @@
 [data-phone-pager] [contenteditable="true"] {
   touch-action: pan-y pinch-zoom;
 }
+[data-phone-chip-strip] {
+  scroll-behavior: auto;
+}
 .pl-jump-chip.is-active {
   background: var(--accent-blue-soft);
   color: var(--graphite);
@@ -218,6 +238,25 @@
 .pl-jump-count {
   font-weight: 700;
   color: var(--graphite);
+}
+
+.pl-mail-stage,
+.phone-pager-page {
+  animation: pl-stage-glide 200ms ease-out;
+}
+@keyframes pl-stage-glide {
+  from {
+    opacity: 0.45;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pl-mail-stage,
+  .phone-pager-page {
+    animation: none;
+  }
 }
 
 .pl-swipe-card {

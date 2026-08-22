@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { callInstantRooferV2 } from '@/lib/instant-roofer';
 import {
+  attachHumanOrderToLead,
   readHumanOrders,
   upsertHumanOrder,
   type HumanMeasureOrder,
@@ -21,6 +22,7 @@ export async function POST(req: NextRequest) {
       lat?: number;
       lng?: number;
       leadId?: number | string;
+      cloudLeadId?: string;
       address?: string;
       customerName?: string;
       contractorName?: string;
@@ -48,7 +50,19 @@ export async function POST(req: NextRequest) {
 
     const result = await callInstantRooferV2(payload);
     if (!result.ok) {
-      return NextResponse.json(result.json, {
+      const json = { ...result.json } as Record<string, unknown>;
+      if (result.status === 402) {
+        json.message =
+          'Human Certified usage limit reached — check the Instant Roofer dashboard.';
+      } else if (result.status === 403) {
+        json.message =
+          'This Instant Roofer key does not have Human Certified reports enabled — check the API dashboard or email cs@instantroofer.com.';
+      } else if (result.status === 409) {
+        json.message =
+          (typeof json.message === 'string' && json.message) ||
+          'A Human Certified report was already ordered for this location recently.';
+      }
+      return NextResponse.json(json, {
         status:
           result.status >= 400 && result.status < 600 ? result.status : 502,
       });
@@ -64,11 +78,16 @@ export async function POST(req: NextRequest) {
       companyName?: string;
     };
 
+    const leadKey =
+      body.leadId != null
+        ? String(body.leadId)
+        : body.cloudLeadId?.trim() || null;
+
     const order: HumanMeasureOrder = {
       id: raw.humanReportId || raw.requestId || `human-${Date.now()}`,
       requestId: raw.requestId || null,
       humanReportId: raw.humanReportId || null,
-      leadId: body.leadId != null ? String(body.leadId) : null,
+      leadId: leadKey,
       lat,
       lng,
       address: body.address || null,
@@ -82,7 +101,8 @@ export async function POST(req: NextRequest) {
       rawQueued: raw,
     };
 
-    await upsertHumanOrder(order);
+    const saved = await upsertHumanOrder(order);
+    await attachHumanOrderToLead(saved, body.cloudLeadId || leadKey);
 
     return NextResponse.json({
       ok: true,
@@ -90,7 +110,7 @@ export async function POST(req: NextRequest) {
       message:
         raw.message ||
         'Human Certified report queued (~1 hour). We’ll notify when ready.',
-      order,
+      order: saved,
     });
   } catch (err) {
     console.error('instant-roofer human', err);
@@ -103,10 +123,10 @@ export async function POST(req: NextRequest) {
 
 /** List pending/completed human orders (optional ?leadId=). */
 export async function GET(req: NextRequest) {
-  const leadId = req.nextUrl.searchParams.get('leadId');
+  const ids = req.nextUrl.searchParams.getAll('leadId').map(String);
   const orders = await readHumanOrders();
-  const filtered = leadId
-    ? orders.filter((o) => o.leadId === String(leadId))
+  const filtered = ids.length
+    ? orders.filter((o) => o.leadId != null && ids.includes(String(o.leadId)))
     : orders;
   return NextResponse.json({ ok: true, orders: filtered });
 }

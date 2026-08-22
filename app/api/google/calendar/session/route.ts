@@ -12,43 +12,42 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const { configured, serverOAuth } = getGoogleClientConfig();
   const encryption = isTokenEncryptionConfigured();
-  if (!configured) {
-    return NextResponse.json({
-      configured: false,
-      serverOAuth: false,
-      encryption,
-      signedIn: false,
-      connected: false,
-      email: null,
-      name: null,
-      scopes: null,
-    });
-  }
-
   const auth = await requireSignedInSummitUser();
   if ('error' in auth) {
-    return NextResponse.json({
-      configured: true,
-      serverOAuth,
-      encryption,
-      signedIn: false,
-      connected: false,
-      email: null,
-      name: null,
-      scopes: null,
-    });
+    return NextResponse.json(
+      {
+        configured,
+        serverOAuth,
+        encryption,
+        signedIn: false,
+        connected: false,
+        email: null,
+        name: null,
+        scopes: null,
+        accessToken: null,
+        expiresAt: null,
+      },
+      { status: 401 }
+    );
   }
 
   const tokens =
-    serverOAuth && encryption ? await getValidUserGcalTokens(auth) : null;
+    configured && serverOAuth && encryption
+      ? await getValidUserGcalTokens(auth)
+      : null;
+  const connected = Boolean(tokens?.refresh_token);
+  const accessOk = Boolean(tokens?.access_token);
+
   return NextResponse.json({
-    configured: true,
+    configured,
     serverOAuth,
     encryption,
     signedIn: true,
-    connected: Boolean(tokens?.refresh_token),
+    connected,
     email: tokens?.email ?? null,
     name: tokens?.name ?? null,
     scopes: tokens?.scopes ?? null,
+    accessToken: accessOk ? tokens!.access_token : null,
+    expiresAt: tokens?.expiry_date ?? null,
   });
 }

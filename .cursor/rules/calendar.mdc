@@ -10,6 +10,13 @@ alwaysApply: false
 **Sidebar label:** Calendar  
 **Agent starter:** `.cursor/agents/calendar.md`
 
+## Sync contract
+
+- Cloud (`app_settings.summit_calendar_events`) is source of truth. Device localStorage is a scratch pad.
+- Never write the cache to cloud on boot. Last-write-wins by event `updatedAt` — a stale phone copy must not hide a newer save or resurrect a delete.
+- Pull cloud when opening Calendar and when the app returns to the foreground. Pull-to-refresh is backup, not the only sync.
+- Google pull stays authoritative for Google-linked events. Connect-once / disconnect-all-devices (`user_google_oauth`). UI label stays **Connected**.
+
 ## Files
 
 - `app/page.tsx` — `activeTab === 'calendar'` (~L22515); month/week/day views, Google sync UI
@@ -18,13 +25,17 @@ alwaysApply: false
 - `lib/calendar-recurrence.ts`
 - `lib/calendar-sync.ts`
 - `lib/google-calendar.ts`
-- `lib/gcal-browser.ts`
-- `lib/gcal-cookie.ts`
 - `lib/app-settings-sync.ts` — shared; `summit_calendar_events` cloud backup
+- `lib/gcal-browser.ts`
+- `lib/gcal-cookie.ts` — leftover cookie clear only
+- `lib/gcal-crypto.ts` — AES-256-GCM for refresh tokens
+- `lib/gcal-user-store.ts` — `user_google_oauth` row for the signed-in user
 - `app/api/google/calendar/auth/route.ts`
 - `app/api/google/calendar/callback/route.ts`
 - `app/api/google/calendar/status/route.ts`
+- `app/api/google/calendar/session/route.ts`
 - `app/api/google/calendar/sync/route.ts`
 - `app/api/google/calendar/disconnect/route.ts`
+- `supabase/migrations/20260821152200_user_google_oauth.sql`
 - `supabase/calendar_tasks_settings_sync.sql`
 - `supabase/company_user_settings_sync.sql` — shared
